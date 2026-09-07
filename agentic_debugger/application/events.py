@@ -862,6 +862,22 @@ def _payload_model_configured(payload: Mapping[str, Any]) -> dict[str, Any]:
     (``direct_api``/``legacy_cli``) and ``api_protocol`` (the provider
     protocol family) distinguish how a subscription provider served a
     session without changing historical payloads.
+
+    Task-28 additive repair: the strict schema also accepts and preserves
+    the SAFE ``ModelBinding`` runtime provenance emitted by
+    ``ModelBinding.model_configured_payload()`` — ``model_binding_fingerprint``,
+    ``effective_protocol``, ``endpoint_contract``, ``transport_profile``,
+    and ``provider_runtime_identity``.  These fields are OPTIONAL so that
+    historical ``session-event-v1`` journals and routes without
+    provider-runtime authority (configured command-profile, offline, ladder)
+    remain valid.  The overall session-event schema version is unchanged:
+    optional ``model.configured`` fields are additive by convention.
+
+    Alias coherence: ``api_protocol``/``effective_protocol`` and
+    ``endpoint_contract``/``transport_profile`` originate from one
+    ``ModelBinding``.  When both members of a pair are present they must
+    agree; contradictory aliases fail closed rather than journaling
+    ambiguous runtime provenance.
     """
     if not isinstance(payload, Mapping):
         raise SchemaValidationError("model.configured payload must be a mapping")
@@ -882,6 +898,11 @@ def _payload_model_configured(payload: Mapping[str, Any]) -> dict[str, Any]:
         "auth_mode",
         "provider_model_id",
         "endpoint",
+        "model_binding_fingerprint",
+        "effective_protocol",
+        "endpoint_contract",
+        "transport_profile",
+        "provider_runtime_identity",
     }
     _check_required(payload, required, "model.configured payload")
     _check_no_unknown(payload, required | optional, "model.configured payload")
@@ -920,6 +941,36 @@ def _payload_model_configured(payload: Mapping[str, Any]) -> dict[str, Any]:
         result["provider_model_id"] = _bounded_text(payload["provider_model_id"], "provider_model_id", MAX_SHORT_TEXT_CHARS)
     if "endpoint" in payload:
         result["endpoint"] = _bounded_text(payload["endpoint"], "endpoint", MAX_SHORT_TEXT_CHARS)
+    if "model_binding_fingerprint" in payload:
+        result["model_binding_fingerprint"] = _sha256_hex(
+            payload["model_binding_fingerprint"], "model_binding_fingerprint"
+        )
+    if "provider_runtime_identity" in payload:
+        result["provider_runtime_identity"] = _sha256_hex(
+            payload["provider_runtime_identity"], "provider_runtime_identity"
+        )
+    if "effective_protocol" in payload:
+        result["effective_protocol"] = _bounded_text(
+            payload["effective_protocol"], "effective_protocol", MAX_SHORT_TEXT_CHARS
+        )
+    if "endpoint_contract" in payload:
+        result["endpoint_contract"] = _bounded_text(
+            payload["endpoint_contract"], "endpoint_contract", MAX_SHORT_TEXT_CHARS
+        )
+    if "transport_profile" in payload:
+        result["transport_profile"] = _bounded_text(
+            payload["transport_profile"], "transport_profile", MAX_SHORT_TEXT_CHARS
+        )
+    if "api_protocol" in result and "effective_protocol" in result:
+        if result["api_protocol"] != result["effective_protocol"]:
+            raise SchemaValidationError(
+                "model.configured api_protocol and effective_protocol must agree"
+            )
+    if "endpoint_contract" in result and "transport_profile" in result:
+        if result["endpoint_contract"] != result["transport_profile"]:
+            raise SchemaValidationError(
+                "model.configured endpoint_contract and transport_profile must agree"
+            )
     return result
 
 

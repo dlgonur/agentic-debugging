@@ -118,16 +118,16 @@ def _params(tmp_path: Path, iso: Path) -> dict:
 def _install_source_harness(
     monkeypatch: pytest.MonkeyPatch, captured: dict
 ) -> None:
-    """No-op the source's observability/inventory, accommodate the KNOWN
-    deferred follow-up #2 event-schema mismatch (test-scoped only), and
-    deterministically stop the run right after the controller limits are
-    constructed, recording the limits the source handed to the live
-    adapter and the controller.  No model/transport execution happens."""
+    """No-op the source's observability/inventory and deterministically
+    stop the run right after the controller limits are constructed,
+    recording the limits the source handed to the live adapter and the
+    controller.  No model/transport execution happens.
+
+    The Task-26 flow runs through the normal strict event validator: the
+    complete ``ModelBinding.model_configured_payload()`` (including the
+    Task-28 safe runtime provenance) is emitted through the real
+    ``SessionEventEmitter``/``SessionEvent`` validation path."""
     from agentic_debugger.application import local_project_source
-    from agentic_debugger.application.events import (
-        SchemaValidationError,
-        SessionEventKind,
-    )
 
     class _NoopObservability:
         def diagnosis_recorded(self, **_kwargs):
@@ -145,35 +145,6 @@ def _install_source_harness(
         local_project_source,
         "_inventory_tracked_python_files",
         lambda _isolated, **_kwargs: ["sample.py"],
-    )
-
-    # KNOWN deferred follow-up #2 (out of scope for Task-26): the strict
-    # journal schema for model.configured rejects the fields
-    # ModelBinding.model_configured_payload() adds on registry routes
-    # (effective_protocol / endpoint_contract / model_binding_fingerprint /
-    # provider_runtime_identity / transport_profile), so NO registry-route
-    # session can emit the event through a strict SessionEvent today.
-    # Accommodate exactly that validator for this harness (fields my
-    # assertions rely on stay validated) so the Task-26 invariant is
-    # observable through the real source/emitter flow past emission.
-    def _task26_payload_accommodation(payload):  # type: ignore[no-untyped-def]
-        import re as _re
-
-        if not isinstance(payload, dict):
-            raise SchemaValidationError(
-                "model.configured payload must be a mapping"
-            )
-        for _key in ("profile_id", "display_name", "protocol_version", "tool_version"):
-            if not isinstance(payload.get(_key), str) or not payload[_key]:
-                raise SchemaValidationError(f"model.configured {_key} invalid")
-        if _re.fullmatch(r"[0-9a-f]{64}", str(payload.get("config_fingerprint"))) is None:
-            raise SchemaValidationError("model.configured config_fingerprint invalid")
-        return dict(payload)
-
-    monkeypatch.setitem(
-        events_module_payload_validators(),
-        SessionEventKind.MODEL_CONFIGURED,
-        _task26_payload_accommodation,
     )
 
     real_limits = local_project_source.LiveRunLimits
@@ -197,24 +168,14 @@ def _install_source_harness(
     )
 
 
-def events_module_payload_validators() -> dict:  # type: ignore[type-arg]
-    from agentic_debugger.application import events as events_module
-
-    return events_module._PAYLOAD_VALIDATORS
-
-
 class _RecordingSink:
-    """Minimal event sink: records appended SessionEvents without the
-    durable journal's payload-schema gate.
+    """Minimal event sink: records SessionEvents validated by the real
+    ``SessionEventEmitter``/``SessionEvent`` strict schema path.
 
-    The strict journal schema currently rejects registry-route
-    ``model.configured`` payloads (``effective_protocol`` /
-    ``endpoint_contract`` / ``model_binding_fingerprint`` /
-    ``provider_runtime_identity`` / ``transport_profile``) — the KNOWN
-    deferred follow-up "`model.configured` ModelBinding payload vs journal
-    schema mismatch", explicitly OUT OF SCOPE for Task-26.  This harness
-    deliberately does not exercise that gate; it proves the Task-26
-    model-call ceiling invariant through the real emitter/flow instead.
+    The emitter constructs each ``SessionEvent`` through the strict
+    payload validators before appending, so reaching the controller-config
+    stop proves the complete ``model.configured`` provenance (including
+    the safe ``ModelBinding`` runtime fields) passed the durable schema.
     """
 
     def __init__(self) -> None:

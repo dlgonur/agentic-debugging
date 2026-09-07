@@ -207,35 +207,35 @@ def test_vault_credential_reaches_provider_child_and_not_project_child(
         sink=journal,
     )
     emitter.bind_run_id("run-v204")
-    # The journal schema's known model.configured fields (the accepted
-    # provenance subset).  NOTE: ModelBinding.model_configured_payload()
-    # additionally emits fields the current event schema rejects -- a
-    # pre-existing V2-03 inconsistency on the baseline (reported, not
-    # widened into V2-04).
-    configured_payload = {
-        key: value
-        for key, value in binding.model_configured_payload().items()
-        if key
-        in {
-            "profile_id",
-            "config_fingerprint",
-            "display_name",
-            "protocol_version",
-            "tool_version",
-            "provider",
-            "route",
-            "api_protocol",
-            "auth_mode",
-            "provider_model_id",
-            "endpoint",
-        }
-    }
+    # The complete real ModelBinding provenance is emitted through the
+    # strict emitter/journal path (Task-28: the durable schema accepts
+    # and preserves the safe ModelBinding runtime provenance).
+    configured_payload = dict(binding.model_configured_payload())
     emitter.emit(SessionEventKind.MODEL_CONFIGURED, configured_payload)
     emitter.emit(SessionEventKind.SESSION_STATUS_CHANGED, {"status": "running", "phase": "executing_tool"})
     journal_text = journal_path.read_text(encoding="utf-8")
     assert SECRET_A not in journal_text
     assert SECRET_B not in journal_text
     assert channel not in journal_text
+    # The durable journal retains the safe ModelBinding identity: the
+    # runtime-history consumers (e.g. inspect_last_runtime_success with a
+    # target binding) read these fields back from model.configured.
+    from agentic_debugger.application.journal import read_session_journal as _read_journal
+
+    stored = [
+        event
+        for event in _read_journal(journal_path).events
+        if event.event_kind is SessionEventKind.MODEL_CONFIGURED
+    ]
+    assert len(stored) == 1
+    durable = dict(stored[0].payload)
+    for _key, _value in configured_payload.items():
+        assert durable[_key] == _value
+    assert durable["model_binding_fingerprint"] == binding.fingerprint()
+    assert durable["provider_runtime_identity"] == binding.provider_runtime_identity
+    assert durable["effective_protocol"] == binding.effective_protocol
+    assert durable["endpoint_contract"] == binding.endpoint_contract
+    assert durable["transport_profile"] == binding.endpoint_contract
 
 def test_session_credential_authority_fixed_at_launch_survives_slot_overwrite(
     tmp_path: Path,

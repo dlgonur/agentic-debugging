@@ -1587,8 +1587,39 @@ authority-boundary change:
    credential-free; generic providers stay direct; no secret material
    enters budgets, bindings, provenance, events, or errors.
 
+### 22.7 Candidate 28 post-review repair (model.configured journal schema)
+
+Second explicitly deferred post-V2-04 follow-up, repaired with no V2
+authority-boundary change:
+
+1. **Safe `ModelBinding` runtime provenance is accepted and durably
+   preserved by the strict `model.configured` event schema**: the five
+   SAFE fields emitted by `ModelBinding.model_configured_payload()`
+   (`model_binding_fingerprint`, `effective_protocol`,
+   `endpoint_contract`, `transport_profile`,
+   `provider_runtime_identity`) are ADDITIVE / OPTIONAL at the
+   event-schema level (`session-event-v1` unchanged), so historical
+   journals and routes without provider-runtime authority (configured
+   command-profile, offline, ladder) remain valid.  Fingerprint fields
+   validate as SHA-256 hex; protocol/contract fields validate as bounded
+   safe text; contradictory alias pairs (`api_protocol` vs
+   `effective_protocol`, `endpoint_contract` vs `transport_profile`)
+   fail closed.  No executable, environment, credential, or secret
+   material enters the event.
+2. **Durable history now carries what the runtime-authority consumers
+   already expect**: `ModelGateway.inspect_last_runtime_success()` reads
+   `model_binding_fingerprint` / `provider_runtime_identity` /
+   `endpoint_contract` / `transport_profile` from `model.configured`
+   history (including the `target_binding` fingerprint match) — the
+   authority rules are unchanged; the event finally contains the safe
+   fields they understand.  The Task-26 validator monkeypatch and the
+   V2-04 product-path payload filtering are removed: the real Local
+   Project flow emits the complete `ModelBinding` payload through the
+   normal strict emitter/journal path, and journal emission failure
+   still fails closed before model requests execute.
+
 Deferred post-V2-04 follow-ups: (1) Local Project launch-vs-transport
 logical-call ceiling 64 vs 32 — **RESOLVED in 26**; (2) `model.configured`
-ModelBinding payload vs journal schema mismatch — still deferred;
+ModelBinding payload vs journal schema mismatch — **RESOLVED in 28**;
 (3) `ModelGateway.default()` config_root singleton pollution — still
 deferred.  V2-05 not started.
