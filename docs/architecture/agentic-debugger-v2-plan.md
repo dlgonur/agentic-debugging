@@ -1,7 +1,7 @@
 # Agentic Debugger V2 — Control/Execution Plane Separation Architecture Plan
 
 **Document type:** Architecture analysis and migration plan (decision record)
-**Status:** Plan — owner/FirstMate reviews 02, 03, and 04 applied (see lineage). Revision 04 is the implementation-readiness reconciliation before V2-01. **Implementation status: V2-01 execution-environment authority + control/provider secret isolation is implemented (see `agentic_debugger/application/execution_environment.py`, `BRIDGE_COMPATIBILITY_IDENTITY = legacy-project-ambient/v1`); V2-02 session/runtime contracts are implemented (`application/session_runtime.py`: `SessionLaunch`/`AgentDefinition`/`EffectiveSessionCapabilities`/`ProjectRuntimeEnvironmentSpec`; `application/executor.py`: `ProductExecutor`; declarative `ExecutionEnvironment.for_local_project`; the bridge is retired from the normal product path — see §15); V2-03 ModelGateway + ModelBinding + truthful status semantics + vocabulary repair is implemented (`application/model_gateway.py`, `application/provider_connections.py`, `ui/screens.py` — see §21); V2-04 CredentialVault + CredentialBinding + CredentialLease provider-secret authority is implemented (`application/credential_vault.py` — see §22); V2-05 remains an optional, trigger-gated evaluation. **
+**Status:** Plan — owner/FirstMate reviews 02, 03, and 04 applied (see lineage). Revision 04 is the implementation-readiness reconciliation before V2-01. **Implementation status: V2-01 execution-environment authority + control/provider secret isolation is IMPLEMENTED (see `agentic_debugger/application/execution_environment.py`, `BRIDGE_COMPATIBILITY_IDENTITY = legacy-project-ambient/v1`); V2-02 session/runtime contracts are IMPLEMENTED (`application/session_runtime.py`: `SessionLaunch`/`AgentDefinition`/`EffectiveSessionCapabilities`/`ProjectRuntimeEnvironmentSpec`; `application/executor.py`: `ProductExecutor`; declarative `ExecutionEnvironment.for_local_project`; the bridge is retired from the normal product path — see §15); V2-03 ModelGateway + ModelBinding + truthful status semantics + vocabulary repair is IMPLEMENTED (`application/model_gateway.py`, `application/provider_connections.py`, `ui/screens.py` — see §21); V2-04 CredentialVault + CredentialBinding + CredentialLease provider-secret authority is IMPLEMENTED (`application/credential_vault.py` — see §22); all three post-V2-04 deferred follow-ups are RESOLVED (Candidates 26–29); V2-05 verifier process-isolation evaluation is EVALUATED — NOT JUSTIFIED / DEFERRED (no §5.6 trigger evidenced; see §11 and §23); V2 architecture implementation campaign CLOSED.**
 **Lineage:** `01` `3481b58` defined V2 boundaries (Alternative B accepted in direction). `02` `3d414c6` tightened the execution and trust boundaries (security-first ordering, role-scoped environments, deferred verifier isolation, credential binding/materialization, truthful status semantics). `03` `ff81f44` finalized the authority rules (secret trust classes, positive/declarative environment target, capability intersection, `ModelBinding` ownership, credential sequencing, scientific fence, history-derived runtime metadata, verifier re-run deferral). `04` (this revision) reconciles two repository facts the prior revisions missed: the repository **already contains a typed verified execution authority** (`runtime/execution.py`) that V2 must not replace, and the positive `ProjectRuntimeEnvironment` target **has no current product ingress**, so V2-01 must use an explicit transitional compatibility bridge with documented residual risk, retired by a V2-02 ingress.
 **Baseline:** `4606933` (fix(providers): harden provider runtime and Windows harness), clean tree
 **Scope:** Determine whether the application runtime should adopt an explicit CONTROL / EXECUTION plane separation, and define the smallest coherent target architecture and incremental migration path
@@ -621,9 +621,13 @@ Each stage leaves the repository runnable, is testable, has one compatibility se
 - **Rollback/exit:** backend extraction is internal; exit when the adapter no longer imports `resolve_runtime_credential` and all credential tests pass.
 
 ### V2-05 — OPTIONAL verifier process-isolation evaluation (not a committed migration requirement)
-- **Outcome:** evaluate the §5.6 triggers against field evidence. By this stage the logical `VerifierService` seam and the verifier role environment already exist, so extraction would be a transport adapter — but it happens **only if a trigger is evidenced**. Otherwise the stage is recorded as **NOT JUSTIFIED / DEFERRED** and no implementation work is created merely to complete the numbered list.
-- **Validation (if triggered):** verifier integration + kill/hang tests for the child, offline demo; exit criteria defined at that time.
-- **Rollback/exit:** not triggered ⇒ no work, stage closed as deferred with the evidence review attached.
+- **Outcome:** EVALUATED — NOT JUSTIFIED / DEFERRED (Candidate 30 closeout). The §5.6 triggers were formally evaluated against current repository truth; no trigger is evidenced. No verifier subprocess, IPC, serialization contracts, process supervision, or kill/hang machinery was created. Physical verifier process isolation remains deliberately deferred, preserving the §5.6 trigger definitions for future reconsideration if concrete evidence emerges.
+- **Evaluation by trigger:**
+  1. *Trigger 1 — Lifecycle (verifier crash/hang materially threatens worker lifecycle):* **NOT TRIGGERED.** Verifier failures remain honest bounded terminal outcomes under the established outcome taxonomy. Verifier workspaces have owned cleanup paths, execution is bounded by timeout semantics and cancellation tokens, and no field/incident evidence shows in-process verification wedging or crashing the worker process.
+  2. *Trigger 2 — Environment isolation (in-process isolation cannot be guaranteed):* **NOT TRIGGERED.** Accepted V2 architecture already provides a first-class `VerifierService` logical seam, dedicated verifier role environment, control/provider-secret exclusion, explicitly authorized `ProjectRuntimeEnvironment` parity, and independent verifier-owned workspaces executing commands in dedicated child processes via `CommandRunner`. No dependency or import conflict requiring a separate interpreter or process is evidenced.
+  3. *Trigger 3 — Security (concrete boundary requiring untrusted code not share address space with control state):* **NOT TRIGGERED.** V2-01 already removed Agentic Debugger control, model, and provider secrets from verifier-role child environments. Untrusted project verification commands execute in subprocess isolation via `CommandRunner` rather than in-process in the worker interpreter. No new concrete untrusted-code address-space requirement or incident exists.
+  4. *Trigger 4 — Operations (measured evidence that isolation pays for Windows lifecycle/serialization cost):* **NOT TRIGGERED.** No measured repository or field evidence demonstrates that a verifier subprocess improves reliability or performance sufficiently to justify Windows process lifecycle management, serialization/transport overhead, child kill/hang handling, and event-ordering complexity.
+- **Stage disposition:** CLOSED as DEFERRED (no implementation created; future reopening strictly trigger-gated per §5.6).
 
 **Sequencing rationale:** V2-01 lands first because the credential exposure is active and evidenced — with a minimal coherent surface so the first build stays buildable, and with the bridge honestly labeled transitional; V2-02 provides the seam vocabulary, the capability intersection, and the ingress whose existence retires the bridge; V2-03/V2-04 are pure interface seams ordered by user-visible value (status truthfulness) then portability; V2-05 stays optional and trigger-gated. Each stage states which credential authority exists at that stage (existing forwarding through V2-03; Vault from V2-04) and which environment authority governs each call site (verified context for scientific callers; product role profiles for product callers).
 
@@ -1624,4 +1628,56 @@ ModelBinding payload vs journal schema mismatch — **RESOLVED in 28**;
 (3) `ModelGateway.default()` `config_root` singleton pollution — **RESOLVED in 29**:
 `ModelGateway.default()` owns canonical process-level gateway state; context/session
 `config_root` is isolated and cannot mutate canonical or sibling gateway contexts.
-V2-05 not started.
+
+## 23. V2-05 trigger evaluation closeout and campaign closure (Candidate 30)
+
+Candidate 30 formally executes the §5.6 / §11 V2-05 trigger evaluation and
+closes the V2 architecture implementation campaign.
+
+### 23.1 Evaluation outcome: NOT JUSTIFIED / DEFERRED
+
+In accordance with the plan contract (§5.6, §11), V2-05 was evaluated against
+current repository implementation truth:
+
+1. **Trigger 1 — Lifecycle (verifier crash/hang threatens worker lifecycle): NOT TRIGGERED.**
+   Verifier execution is bounded by timeout semantics and cancellation tokens.
+   Verifier failures are classified honestly as bounded terminal outcomes under
+   the outcome taxonomy. Disposable workspaces have owned cleanup paths, and no
+   incident or test failure indicates that in-process verifier execution wedges
+   or crashes the worker lifecycle.
+2. **Trigger 2 — Environment isolation (in-process isolation cannot be guaranteed): NOT TRIGGERED.**
+   The accepted V2 architecture provides a first-class `VerifierService` logical seam,
+   a dedicated verifier role environment, control/provider-secret exclusion,
+   explicit `ProjectRuntimeEnvironment` parity, and independent verifier-owned
+   workspaces executing commands in dedicated child processes via `CommandRunner`.
+   No repository evidence demonstrates an import or dependency conflict requiring a
+   separate verifier process.
+3. **Trigger 3 — Security (untrusted code must not share address space with control state): NOT TRIGGERED.**
+   V2-01 structurally eliminated Agentic Debugger control and provider credentials
+   from verifier child environments. Untrusted project verification commands execute in
+   subprocess isolation via `CommandRunner` rather than in-process in the worker
+   interpreter. No new concrete security requirement or incident mandates process
+   isolation for verification logic itself.
+4. **Trigger 4 — Operations (measured evidence that isolation pays for Windows lifecycle/serialization complexity): NOT TRIGGERED.**
+   No measured field or benchmark evidence demonstrates that verifier process isolation
+   pays for the added Windows process supervision, serialization transport, and
+   kill/hang handling complexity.
+
+### 23.2 Campaign closeout disposition
+
+- **V2-05 disposition:** EVALUATED — NOT JUSTIFIED / DEFERRED. No verifier
+  subprocess, IPC, serialization contracts, process supervision, or kill/hang
+  machinery was implemented.
+- **Post-V2-04 follow-ups:** all three follow-ups are confirmed **RESOLVED**
+  (follow-up #1 in Candidates 26–27; follow-up #2 in Candidate 28; follow-up #3 in Candidate 29).
+- **Campaign state:** V2 architecture implementation campaign is **CLOSED**.
+  All numbered stages V2-01 through V2-04 are implemented; V2-05 trigger evaluation
+  is completed and resolved to NOT JUSTIFIED / DEFERRED.
+- **Future trigger-gated possibilities (explicitly not campaign debt):**
+  checkpoint/resume (§7), same-session re-verification (§13), physical verifier
+  process isolation (if a §5.6 trigger fires), project-secret storage/sync,
+  macOS/Linux credential backends, UI redesign, scientific-path changes, and
+  ExecutionEnvironment / VerifiedExecutionContext authority unification remain
+  valid future product/architecture possibilities, gated on their respective
+  triggers. None of them constitutes remaining V2 implementation campaign work.
+
