@@ -3,15 +3,18 @@
 ## Status
 
 **V2 ARCHITECTURE CAMPAIGN COMPLETE & CLOSED (2026-09-07).**
+**REPOSITORY-STATE HYGIENE CLOSEOUT COMPLETE (2026-09-07).**
 
 Release tag `v0.1.0` exists at `d01f7a5`; cycle 1 closed at
 `docs/project-closeout.md`. The V2 architecture campaign (Candidates 06–30)
 established logical control/execution plane separation, role-scoped execution
 environments, session runtime contracts, ModelGateway, CredentialVault,
 and closed the V2-05 verifier process-isolation evaluation as NOT JUSTIFIED / DEFERRED.
+V2 implementation baseline: `e86ac2d`.
 
-Currently active: Task 31 repository-wide documentation, project-state, and
-hygiene pass. No next implementation priority has been chosen yet.
+The post-V2 repository-wide documentation and project-state hygiene closeout
+(Task 31) is complete. No next implementation priority has been selected by
+repository authority. No V3 or new architecture campaign has been opened.
 
 ## V2 architecture outcomes (completed 2026-09-07)
 
@@ -96,11 +99,16 @@ failure visibility, and retry.
   resolves Claude-family (`claude*`, `anthropic/*`) CommandCode models
   to the Anthropic Messages protocol deterministically.
 
-## Active near-term work
+## Completed closeout work (2026-09-07)
 
 - [x] Task 31 repository-wide documentation, project-state, and hygiene
-  pass after V2 closeout.
-- No next implementation priority has been chosen yet by repository authority.
+  pass after V2 closeout (reconciled current authorities, historical retentions,
+  security model, and stale references).
+
+## Active work
+
+No next implementation priority has been selected yet by repository authority.
+No V3 or new architecture campaign has been opened.
 
 ## Product backlog
 

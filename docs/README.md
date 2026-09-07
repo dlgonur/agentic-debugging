@@ -14,7 +14,7 @@ historical statements.
 | `release-closeout-2026-08-28.md` | Concise release, validation, and negative-boundary record |
 | `pre-release-hardening-2026-08-27.md` | Durable PRE-RELEASE-HARDENING-01 closeout record (feature-freeze ready at `8fbea88`; PRH-D01..D09 dispositions) |
 | `results-index.md` | Concise map from accepted conclusions to surviving evidence |
-| `final-report.md` | Current technical report through 2026-08-13 (R1-R6 phase; S8/S9 snapshot archived) |
+| `final-report.md` | Historical technical report — R1–R6 through 2026-08-13 (S8/S9 snapshot archived) |
 | `agentic-debugging-technical-project-report-2026-08-31.docx` | Concise Turkish project, architecture, evidence, validation, and closure report |
 | `project-tracker.md` | Current execution tracker |
 

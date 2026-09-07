@@ -3,17 +3,19 @@
 ## Current state
 
 **V2 ARCHITECTURE CAMPAIGN — COMPLETE & CLOSED (2026-09-07).**
+**REPOSITORY-STATE HYGIENE CLOSEOUT — COMPLETE (2026-09-07).**
 
-- Baseline: `e86ac2d25beb5114e9a3c805f6bc468f77905deb`.
+- V2 implementation baseline: `e86ac2d25beb5114e9a3c805f6bc468f77905deb`.
 - V2 architecture campaign (Candidates 06–30): logical control/execution plane
   separation, role-scoped execution environments, session runtime contracts,
   ModelGateway, CredentialVault, and formal V2-05 verifier process-isolation
   trigger evaluation (NOT JUSTIFIED / DEFERRED). Campaign closed.
+- Repository-state and documentation hygiene closeout (Task 31): COMPLETE (2026-09-07).
+- Next implementation priority: None selected yet by repository authority. No V3 or
+  new architecture campaign opened.
 - Provider-platform integrity convergence: COMPLETE (2026-09-03).
 - Goal-Mode Cycle 3 (shared visual language, welcome redesign, terminal UI polish): COMPLETE (2026-08-29).
 - Release tag: `v0.1.0` at `d01f7a5` (cycle 1 closed).
-- Current priority: Task 31 repository-wide documentation, project-state, and
-  hygiene pass. No next implementation priority has been chosen yet.
 - Full historical tracker through cycle 1:
   `outdated/roadmap/project-tracker-pre-closure-2026-08-28.md`.
 
@@ -48,6 +50,10 @@
   security boundary, operational cost); recorded as **NOT JUSTIFIED / DEFERRED**
   with zero implementation created; physical isolation remains trigger-gated;
   campaign closed.
+- [x] **Task 31 — Repository-state hygiene closeout (2026-09-07):**
+  Reconciled repository-wide documentation, project-state authorities, security
+  boundaries, and stale references post-V2 closeout; preserved historical records
+  in place; confirmed zero active engineering campaigns.
 
 ## 2026-08-29 goal-mode UI work
 

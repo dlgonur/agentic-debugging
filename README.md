@@ -89,7 +89,7 @@ trace regeneration, and leakage auditing. It does not rerun external campaigns.
 - [Application architecture](docs/architecture/local-application-v1.md)
 - [V2 architecture plan](docs/architecture/agentic-debugger-v2-plan.md)
 - [Results and evidence index](docs/results-index.md)
-- [Final technical report](docs/final-report.md)
+- [Historical technical report (R1–R6)](docs/final-report.md)
 - [Project closeout](docs/project-closeout.md)
 - [Experiment families](experiments/README.md)
 - [Research index](research/README.md)

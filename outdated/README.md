@@ -8,7 +8,7 @@ Current sources of truth:
 - `README.md` — repository entry point.
 - `DESIGN.md` — architectural patterns and invariants.
 - `SECURITY.md` — security model, execution boundaries, and credential safety.
-- `TODO.md` — project status, active near-term work, backlog, and closed boundaries.
+- `TODO.md` — project status, completed closeout, backlog, and closed boundaries.
 - `docs/project-closeout.md` — accepted project status through V2 campaign closure.
 - `docs/results-index.md` — evidence map.
 - `docs/project-tracker.md` — execution history.

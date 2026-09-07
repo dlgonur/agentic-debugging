@@ -12,8 +12,8 @@
 snapshot) and the earlier `outdated/docs-archive/reports/final-report-v1.md`
 (2026-07-31).
 
-This is the single current reviewer/handoff status document. The full
-technical narrative through 2026-08-13 is `docs/final-report.md`; the
+This is the single current reviewer/handoff status document. The historical
+technical narrative covering R1–R6 through 2026-08-13 is `docs/final-report.md`; the
 2026-08-11 scientific snapshot is archived verbatim at
 `outdated/docs-archive/reports/final-report-2026-08-11.md`.
 
@@ -45,6 +45,9 @@ All numbered stages V2-01 through V2-04 are implemented:
   execution-authority unification) are recognized as trigger-gated future
   architecture, not unfinished campaign debt. No required engineering campaign
   remains open.
+- The post-V2 repository-wide documentation and project-state hygiene closeout
+  (Task 31) is **COMPLETE** (2026-09-07). No next implementation priority has been
+  selected by repository authority; no V3 or new architecture campaign has been opened.
 
 **2026-08-28 closure update:** the mandatory project cycle is **CLOSED**.
 Release tag `v0.1.0` exists at `d01f7a5`. The post-tag application repair
@@ -209,8 +212,8 @@ PAUSED; LOCAL APPLICATION V1 + REAL LOCAL PROJECT PATH COMPLETE;
 PRE-RELEASE-HARDENING-01 ACCEPTED / FEATURE-FREEZE READY (8fbea88); RELEASE TAG
 v0.1.0 AT d01f7a5; V2 ARCHITECTURE CAMPAIGN COMPLETE & CLOSED AT e86ac2d
 (V2-01..V2-04 IMPLEMENTED; FOLLOW-UPS RESOLVED; V2-05 EVALUATED NOT JUSTIFIED /
-DEFERRED); NO REQUIRED ENGINEERING CAMPAIGN REMAINS OPEN; ACTIVE PRIORITY:
-TASK 31 REPOSITORY-STATE HYGIENE PASS**
+DEFERRED); REPOSITORY-STATE HYGIENE CLOSEOUT COMPLETE (2026-09-07); NO REQUIRED
+ENGINEERING CAMPAIGN REMAINS OPEN; NO NEXT IMPLEMENTATION PRIORITY SELECTED**
 
 ---
 
