@@ -4,9 +4,10 @@
 **Owner:** Repository owner
 **Execution control:** Repository owner
 **Document date:** 2026-09-07 (previous reconciliation: 2026-08-28)
-**Accepted baseline HEAD:** `e86ac2d25beb5114e9a3c805f6bc468f77905deb`
-(V2 architecture campaign closeout; earlier historical docs-reconciliation baselines:
-2026-08-28 `d01f7a5`, 2026-08-27 `8fbea883212d3fe4ad6434a366ca0898fbea68f1`)
+**V2 architecture campaign closeout baseline:** `e86ac2d25beb5114e9a3c805f6bc468f77905deb`
+(earlier historical baselines: 2026-08-28 release tag `v0.1.0` at `d01f7a5`,
+2026-08-27 `8fbea883212d3fe4ad6434a366ca0898fbea68f1`; current repository HEAD
+intentionally not embedded; post-V2 documentation hygiene closeout complete)
 **Supersedes:** `outdated/docs-archive/status/project-closeout-2026-08-11.md` (the
 2026-08-11 S9 bounded-negative closeout, preserved unchanged as a historical
 snapshot) and the earlier `outdated/docs-archive/reports/final-report-v1.md`

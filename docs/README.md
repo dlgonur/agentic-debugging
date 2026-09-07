@@ -10,7 +10,7 @@ historical statements.
 
 | File | Purpose |
 |---|---|
-| `project-closeout.md` | **Current status authority** through the 2026-08-28 cycle closure and the V2 architecture campaign closure (2026-09-07) |
+| `project-closeout.md` | **Current status authority** through V2 architecture and post-V2 repository-state hygiene closeout (2026-09-07) |
 | `release-closeout-2026-08-28.md` | Concise release, validation, and negative-boundary record |
 | `pre-release-hardening-2026-08-27.md` | Durable PRE-RELEASE-HARDENING-01 closeout record (feature-freeze ready at `8fbea88`; PRH-D01..D09 dispositions) |
 | `results-index.md` | Concise map from accepted conclusions to surviving evidence |
