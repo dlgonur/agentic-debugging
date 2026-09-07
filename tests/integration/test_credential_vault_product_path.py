@@ -61,6 +61,7 @@ from agentic_debugger.application.execution_environment import (  # noqa: E402
 from agentic_debugger.application.session_runtime import (  # noqa: E402
     ProjectRuntimeEnvironmentSpec,
     build_local_project_launch,
+    local_project_model_call_ceiling,
 )
 
 SECRET_A = "v204-product-credential-alpha-not-real"
@@ -142,7 +143,13 @@ def test_vault_credential_reaches_provider_child_and_not_project_child(
 
         # 4. The transport resolves the vault lease ONCE and fixes the
         #    model-channel child environment for the session.
-        transport, _live_config = gateway.create_transport(binding)
+        #    Task-27: materialize under the SAME Local Project session-owned
+        #    ceiling the launch resolved its ModelBinding with.
+        transport, live_config = gateway.create_transport(
+            binding,
+            max_model_requests=local_project_model_call_ceiling(launch.budgets),
+        )
+        assert live_config.configuration_fingerprint == binding.config_fingerprint
         transport_env = getattr(transport, "_environment")
         channel = "AGENTIC_DEBUGGER_PROVIDER_V204_PRODUCT_GATEWAY_API_KEY"
         assert transport_env == {channel: SECRET_A}
@@ -290,9 +297,15 @@ def test_session_credential_authority_fixed_at_launch_survives_slot_overwrite(
         _hermetic_product_vault[provider_id] = SECRET_B
 
         gateway = ModelGateway()
-        transport, _live_config = gateway.create_transport(
-            launch.model_binding, credential_binding=authority
+        # Task-27: materialize under the SAME Local Project session-owned
+        # ceiling the launch resolved its ModelBinding with; the
+        # session-pinned credential authority arguments are unchanged.
+        transport, live_config = gateway.create_transport(
+            launch.model_binding,
+            max_model_requests=local_project_model_call_ceiling(launch.budgets),
+            credential_binding=authority,
         )
+        assert live_config.configuration_fingerprint == launch.model_binding.config_fingerprint
         request = {
             "protocol": {"version": "1.3", "logical_model_call_index": 0},
             "context": {"task_id": "t", "state": "UNDERSTAND"},
