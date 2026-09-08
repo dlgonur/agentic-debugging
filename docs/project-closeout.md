@@ -1,13 +1,14 @@
-# Agentic Debugging — Project Closeout (current, 2026-09-07)
+# Agentic Debugging — Project Closeout (current, 2026-09-08)
 
 **Project:** Agentic Debugger research prototype
 **Owner:** Repository owner
 **Execution control:** Repository owner
-**Document date:** 2026-09-07 (previous reconciliation: 2026-08-28)
+**Document date:** 2026-09-08 (previous reconciliation: 2026-09-07)
 **V2 architecture campaign closeout baseline:** `e86ac2d25beb5114e9a3c805f6bc468f77905deb`
 (earlier historical baselines: 2026-08-28 release tag `v0.1.0` at `d01f7a5`,
 2026-08-27 `8fbea883212d3fe4ad6434a366ca0898fbea68f1`; current repository HEAD
-intentionally not embedded; post-V2 documentation hygiene closeout complete)
+intentionally not embedded; post-V2 documentation hygiene closeout complete;
+Session Token Usage Telemetry v1 (Task 34) COMPLETE (2026-09-08); no subsequent implementation priority selected.)
 **Supersedes:** `outdated/docs-archive/status/project-closeout-2026-08-11.md` (the
 2026-08-11 S9 bounded-negative closeout, preserved unchanged as a historical
 snapshot) and the earlier `outdated/docs-archive/reports/final-report-v1.md`
@@ -17,6 +18,16 @@ This is the single current reviewer/handoff status document. The historical
 technical narrative covering R1–R6 through 2026-08-13 is `docs/final-report.md`; the
 2026-08-11 scientific snapshot is archived verbatim at
 `outdated/docs-archive/reports/final-report-2026-08-11.md`.
+
+**2026-09-08 post-V2 capability update — Task 34 Session Token Usage Telemetry v1:**
+Session Token Usage Telemetry v1 (Task 34) COMPLETE (2026-09-08); no subsequent implementation priority selected.
+Task 34 implemented truthful provider-reported token tracking across the live and replay paths on `feat/session-token-usage-v1` (Candidate 38):
+- Per-dimension counts-only SAFE contract (`TokenUsage`, `TokenUsageCoverage`);
+- Unified per-attempt accounting (`_compute_attempt_usage`) with strict parity between `LiveModelMetrics` and `_LogicalRequestUsage`;
+- F6 cache-only lower-bound aggregation: single-attempt cache reporting proves truthful lower bounds (`Input >= 40`, `Total >= 40`), complete input already includes cache contribution, and multi-attempt aggregation preserves partial subtotals (`140+ / 40+ / 20+ / 160+`);
+- F7 fail-closed contradictory exact total handling: exact totals contradicting component lower bounds fail closed in `TokenUsage.canonical` and drop telemetry at `ControllerSessionEventAdapter` while preserving lifecycle events; coverage contradictions (`Input complete + Output complete + Total partial`) are rejected;
+- Full live/replay UI rendering parity with trailing `+` partial indicators.
+This is an additive post-V2 product capability, not V3 or a new architecture campaign. No subsequent implementation priority has been selected by repository authority.
 
 **2026-09-07 V2 architecture campaign closeout update:** the V2 architecture
 implementation campaign is **COMPLETE and CLOSED** at baseline `e86ac2d`.
@@ -47,7 +58,8 @@ All numbered stages V2-01 through V2-04 are implemented:
   architecture, not unfinished campaign debt. No required engineering campaign
   remains open.
 - The post-V2 repository-wide documentation and project-state hygiene closeout
-  (Task 31) is **COMPLETE** (2026-09-07). No next implementation priority has been
+  (Task 31) is **COMPLETE** (2026-09-07). Session Token Usage Telemetry v1 (Task 34)
+  is **COMPLETE** (2026-09-08). No subsequent implementation priority has been
   selected by repository authority; no V3 or new architecture campaign has been opened.
 
 **2026-08-28 closure update:** the mandatory project cycle is **CLOSED**.

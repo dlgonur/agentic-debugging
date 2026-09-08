@@ -408,6 +408,36 @@ class TestMapping:
             "error_message": "directive was rejected",
         }
 
+    def test_contradictory_exact_total_drops_telemetry_and_preserves_lifecycle_event(self):
+        """F7: Contradictory exact total drops telemetry block fail-closed while emitting event."""
+        adapter = adapter_for()
+        adapter.notify(observation(
+            ControllerObservationKind.RUN_STARTED,
+            model_call_index=0,
+            state_before=ControllerState.REPRODUCE,
+        ))
+        adapter.notify(observation(
+            ControllerObservationKind.MODEL_REQUEST_COMPLETED,
+            model_call_index=0,
+            state_before=ControllerState.REPRODUCE,
+            request_status="ok",
+            token_usage=TokenUsage(
+                input_tokens=100,
+                output_tokens=20,
+                total_tokens=50,
+            ),
+            token_usage_coverage=TokenUsageCoverage(
+                input_tokens=False,
+                output_tokens=False,
+                total_tokens=True,
+            ),
+        ))
+        payload = dict(adapter.events()[-1].payload)
+        assert payload["request_index"] == 0
+        assert payload["status"] == "ok"
+        assert "token_usage" not in payload
+        assert "token_usage_coverage" not in payload
+
     def test_credential_shaped_model_error_detail_is_replaced(self):
         adapter = adapter_for()
         adapter.notify(observation(

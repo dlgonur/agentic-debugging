@@ -140,6 +140,20 @@ class TokenUsage:
 
         input_complete = coverage.is_complete("input_tokens")
         output_complete = coverage.is_complete("output_tokens")
+        total_complete = coverage.is_complete("total_tokens")
+
+        # Coverage contradiction:
+        # If input and output are both complete, and total is reported,
+        # total coverage cannot be partial.
+        if (
+            input_complete
+            and output_complete
+            and usage.total_tokens is not None
+            and not total_complete
+        ):
+            raise ValueError(
+                "total_tokens coverage cannot be partial when both input_tokens and output_tokens are complete"
+            )
 
         if input_complete:
             if (
@@ -151,13 +165,26 @@ class TokenUsage:
 
         if input_complete and output_complete:
             if usage.input_tokens is not None and usage.output_tokens is not None:
-                usage = replace(usage, total_tokens=usage.input_tokens + usage.output_tokens)
+                expected_total = usage.input_tokens + usage.output_tokens
+                if usage.total_tokens is not None and usage.total_tokens != expected_total:
+                    raise ValueError(
+                        f"token usage total_tokens ({usage.total_tokens}) must equal "
+                        f"input_tokens + output_tokens ({expected_total})"
+                    )
+                usage = replace(usage, total_tokens=expected_total)
         else:
             min_components = (usage.input_tokens or 0) + (usage.output_tokens or 0)
             if usage.total_tokens is not None:
-                if usage.total_tokens < min_components:
-                    usage = replace(usage, total_tokens=min_components)
-            elif usage.input_tokens is not None or usage.output_tokens is not None:
+                if total_complete:
+                    if usage.total_tokens < min_components:
+                        raise ValueError(
+                            f"exact total_tokens ({usage.total_tokens}) cannot be less than "
+                            f"sum of known component lower bounds ({min_components})"
+                        )
+                else:
+                    if usage.total_tokens < min_components:
+                        usage = replace(usage, total_tokens=min_components)
+            elif min_components > 0 or (usage.input_tokens is not None or usage.output_tokens is not None):
                 usage = replace(usage, total_tokens=min_components)
 
         return usage
@@ -258,6 +285,17 @@ def validate_usage_with_coverage(
 
         input_complete = cov.is_complete("input_tokens")
         output_complete = cov.is_complete("output_tokens")
+        total_complete = cov.is_complete("total_tokens")
+
+        if (
+            input_complete
+            and output_complete
+            and usage.total_tokens is not None
+            and not total_complete
+        ):
+            raise ValueError(
+                "total_tokens coverage cannot be partial when both input_tokens and output_tokens are complete"
+            )
 
         if input_complete and output_complete:
             if (
@@ -429,6 +467,15 @@ def coverage_from_payload(
         if disallowed:
             raise ValueError(
                 f"token usage coverage fields not in token_usage block: {sorted(disallowed)}"
+            )
+        if (
+            value.get("input_tokens") is True
+            and value.get("output_tokens") is True
+            and "total_tokens" in usage_block
+            and value.get("total_tokens") is False
+        ):
+            raise ValueError(
+                "total_tokens coverage cannot be partial when both input_tokens and output_tokens are complete"
             )
     absent = object()
     fields: dict[str, bool] = {}

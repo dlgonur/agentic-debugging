@@ -1,7 +1,7 @@
 # Session Token Usage Telemetry v1
 
-Accepted capability record (Task 34, implemented on
-`feat/session-token-usage-v1`; additive on top of the post-V2 closeout
+Accepted capability record (Task 34, COMPLETE 2026-09-08 on
+`feat/session-token-usage-v1` at Candidate 38; additive on top of the post-V2 closeout
 baseline `9e658ea`). This is a product telemetry capability, not a new
 architecture campaign.
 
@@ -40,20 +40,26 @@ route does not report a dimension, that dimension stays unknown
 zero, guessed, or locally synthesized.
 
 When a logical call spans multiple provider attempts:
-- Each attempt is evaluated under its own canonical truth:
+- Each attempt is evaluated under its own canonical truth via the shared
+  `_compute_attempt_usage` authority:
   1. If Input and Output are both known, exact attempt Total = Input + Output
      (overriding any conflicting raw provider total).
   2. Else if a valid provider Total is reported (and >= known component bounds),
      exact attempt Total = reported Total.
   3. Else exact Total is unknown, preserving any component lower bounds.
-- Known provider-reported consumption is never discarded. When components
-  are partial across attempts, reported counts survive as truthful lower
-  bounds (`Input 100+ · Output 20+ · Total 270`) accompanied by a typed
-  `token_usage_coverage` block specifying per-dimension completeness flags.
+- When an attempt reports only `cached_input_tokens = 40` (and `input_tokens = None`),
+  because Cached is a subset of Input, this proves `Input >= 40` and `Total >= 40`
+  without estimation. Complete Input already includes cache contribution (never double-counted).
+- Multi-attempt aggregation accumulates known bounds:
+  Attempt 1 (100/20/120) + Attempt 2 (Cached 40 only) proves `Input 140+ · Cached 40+ · Output 20+ · Total 160+`.
 - An exact provider Total can coexist with partial Input/Output subtotals:
   if Attempt 1 reports 100/20/120 and Attempt 2 reports only Total 150,
   the aggregate Total is exact and complete (270, coverage `True`),
   while Input (100) and Output (20) are partial lower bounds (coverage `False`).
+- Exact totals contradicting component lower bounds (`total_tokens < min_components` with exact total)
+  fail closed in `canonical` and drop telemetry at `ControllerSessionEventAdapter` while preserving lifecycle events.
+- Coverage contradictions (`Input complete + Output complete + Total reported + Total coverage partial`)
+  are rejected as impossible at the coverage/event boundary.
 
 Coverage is tracked per-dimension across the session:
 - A dimension is complete only when reported and complete on every completed request.
@@ -104,8 +110,9 @@ provider adapter normalization (transport `usage` mapping)
 → shared `reduce_event` reducer (`SessionViewState.token_usage`,
   cumulative counts + dimension-specific completeness) → header/Live-pane rendering.
   Live and replay use the same reducer, so they cannot diverge.
-→ `LiveModelMetrics.usage()` consumes canonical token semantics (`usage.canonical()`),
-  ensuring `Total = Input + Output` whenever Input and Output are known.
+→ `LiveModelMetrics.usage()` and `_LogicalRequestUsage` consume the shared
+  `_compute_attempt_usage` per-attempt authority, ensuring complete parity
+  between evaluation metrics and durable logical-request token usage.
 
 ## Provider normalization notes
 

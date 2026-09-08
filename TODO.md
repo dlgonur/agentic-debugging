@@ -4,6 +4,7 @@
 
 **V2 ARCHITECTURE CAMPAIGN COMPLETE & CLOSED (2026-09-07).**
 **REPOSITORY-STATE HYGIENE CLOSEOUT COMPLETE (2026-09-07).**
+**POST-V2 SESSION TOKEN USAGE TELEMETRY V1 (TASK 34) COMPLETE (2026-09-08).**
 
 Release tag `v0.1.0` exists at `d01f7a5`; cycle 1 closed at
 `docs/project-closeout.md`. The V2 architecture campaign (Candidates 06–30)
@@ -13,8 +14,10 @@ and closed the V2-05 verifier process-isolation evaluation as NOT JUSTIFIED / DE
 V2 implementation baseline: `e86ac2d`.
 
 The post-V2 repository-wide documentation and project-state hygiene closeout
-(Task 31) is complete. No next implementation priority has been selected by
-repository authority. No V3 or new architecture campaign has been opened.
+(Task 31) is complete. Session Token Usage Telemetry v1 (Task 34) is complete
+(2026-09-08) as an additive product telemetry capability. No next
+implementation priority has been selected by repository authority. No V3 or
+new architecture campaign has been opened.
 
 ## V2 architecture outcomes (completed 2026-09-07)
 
@@ -99,11 +102,15 @@ failure visibility, and retry.
   resolves Claude-family (`claude*`, `anthropic/*`) CommandCode models
   to the Anthropic Messages protocol deterministically.
 
-## Completed closeout work (2026-09-07)
-
+## Completed closeout and capability work
+ 
 - [x] Task 31 repository-wide documentation, project-state, and hygiene
   pass after V2 closeout (reconciled current authorities, historical retentions,
   security model, and stale references).
+- [x] Task 34 — Session Token Usage Telemetry v1 (2026-09-08): truthful
+  provider-reported token usage tracking across live and replay, per-logical-call
+  retry/repair aggregation, coverage-aware arithmetic and lower bounds, and
+  live/replay UI widgets.
 
 ## Active work
 

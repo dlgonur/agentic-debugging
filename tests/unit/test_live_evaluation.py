@@ -1912,6 +1912,231 @@ def test_logical_request_token_usage_component_only_total_lower_bound():
     assert coverage.total_tokens is False  # Does not claim lower bound is exact
 
 
+def test_logical_request_token_usage_cache_only_reporting():
+    """F6: Single attempt reporting only cached tokens proves Input >= 40 and Total >= 40."""
+    task = DebugTask.from_mapping(
+        json.loads((ROOT / "agentic_debugger/datasets/curated" / TASK_ID / "task.json").read_text())
+    )
+
+    class CacheOnlyTransport:
+        def request(self, payload, timeout_seconds):
+            return {
+                "usage": {"cached_input_tokens": 40},
+                "directive": {"kind": "transition", "target_state": "Failed", "reason": "done"},
+            }
+
+    from agentic_debugger.agent.controller_policy import ControllerBudgetLimits, ControllerBudgetState, HypothesisLedger
+    from agentic_debugger.agent.model_adapter import ControllerSnapshot
+
+    adapter = LiveModelAdapter(
+        task=task,
+        policy=DemoPolicy.STATIC_BASELINE,
+        config=config(),
+        transport=CacheOnlyTransport(),
+        limits=LiveRunLimits(max_model_requests=1, max_retries=0, max_directive_repairs=0),
+        registry=_test_live_registry(),
+    )
+    limits = ControllerBudgetLimits.from_task_constraints(task.constraints)
+    directive = adapter.next_directive(
+        ControllerSnapshot("cache-only-run", task.task_id, ControllerState.REPRODUCE, 0, limits, ControllerBudgetState(), HypothesisLedger())
+    )
+    assert directive.target_state is ControllerState.FAILED
+
+    usage = adapter.last_request_token_usage()
+    assert usage is not None
+    assert usage.input_tokens == 40
+    assert usage.cached_input_tokens == 40
+    assert usage.output_tokens is None
+    assert usage.total_tokens == 40
+
+    cov = adapter.last_request_token_coverage()
+    assert cov is not None
+    assert cov.input_tokens is False
+    assert cov.cached_input_tokens is True
+    assert cov.output_tokens is False
+    assert cov.total_tokens is False
+
+    metrics = adapter.metrics.to_mapping()["token_usage"]
+    assert metrics["prompt_tokens"] == 40
+    assert metrics["cached_input_tokens"] == 40
+    assert metrics["completion_tokens"] is None
+    assert metrics["total_tokens"] == 40
+    assert "prompt_tokens" in metrics["missing_fields"]
+    assert "total_tokens" in metrics["missing_fields"]
+    assert "completion_tokens" in metrics["missing_fields"]
+    assert "cached_input_tokens" not in metrics["missing_fields"]
+
+
+def test_logical_request_token_usage_cache_read_and_write_reporting():
+    """F6: Cache read + write without base input proves Input >= 45 and Total >= 45."""
+    task = DebugTask.from_mapping(
+        json.loads((ROOT / "agentic_debugger/datasets/curated" / TASK_ID / "task.json").read_text())
+    )
+
+    class CacheReadWriteTransport:
+        def request(self, payload, timeout_seconds):
+            return {
+                "usage": {"cached_input_tokens": 40, "cache_write_input_tokens": 5},
+                "directive": {"kind": "transition", "target_state": "Failed", "reason": "done"},
+            }
+
+    from agentic_debugger.agent.controller_policy import ControllerBudgetLimits, ControllerBudgetState, HypothesisLedger
+    from agentic_debugger.agent.model_adapter import ControllerSnapshot
+
+    adapter = LiveModelAdapter(
+        task=task,
+        policy=DemoPolicy.STATIC_BASELINE,
+        config=config(),
+        transport=CacheReadWriteTransport(),
+        limits=LiveRunLimits(max_model_requests=1, max_retries=0, max_directive_repairs=0),
+        registry=_test_live_registry(),
+    )
+    limits = ControllerBudgetLimits.from_task_constraints(task.constraints)
+    directive = adapter.next_directive(
+        ControllerSnapshot("cache-rw-run", task.task_id, ControllerState.REPRODUCE, 0, limits, ControllerBudgetState(), HypothesisLedger())
+    )
+    assert directive.target_state is ControllerState.FAILED
+
+    usage = adapter.last_request_token_usage()
+    assert usage is not None
+    assert usage.input_tokens == 45
+    assert usage.cached_input_tokens == 40
+    assert usage.total_tokens == 45
+
+    cov = adapter.last_request_token_coverage()
+    assert cov is not None
+    assert cov.input_tokens is False
+    assert cov.cached_input_tokens is True
+    assert cov.total_tokens is False
+
+    metrics = adapter.metrics.to_mapping()["token_usage"]
+    assert metrics["prompt_tokens"] == 45
+    assert metrics["cached_input_tokens"] == 40
+    assert metrics["total_tokens"] == 45
+
+
+def test_logical_request_token_usage_multi_attempt_cache_aggregation():
+    """F6: Attempt 1 (100/20/120) + Attempt 2 (Cached 40 only) -> 140+, 40+, 20+, 160+."""
+    task = DebugTask.from_mapping(
+        json.loads((ROOT / "agentic_debugger/datasets/curated" / TASK_ID / "task.json").read_text())
+    )
+    captured = []
+
+    class MultiAttemptCacheTransport:
+        def request(self, payload, timeout_seconds):
+            captured.append(payload)
+            if len(captured) == 1:
+                return {
+                    "usage": {"prompt_tokens": 100, "completion_tokens": 20, "total_tokens": 120},
+                    "directive": {"kind": "transition", "target_state": "NotAState", "reason": "rejected"},
+                }
+            return {
+                "usage": {"cached_input_tokens": 40},
+                "directive": {"kind": "transition", "target_state": "Failed", "reason": "recovered"},
+            }
+
+    from agentic_debugger.agent.controller_policy import ControllerBudgetLimits, ControllerBudgetState, HypothesisLedger
+    from agentic_debugger.agent.model_adapter import ControllerSnapshot
+
+    adapter = LiveModelAdapter(
+        task=task,
+        policy=DemoPolicy.STATIC_BASELINE,
+        config=config(),
+        transport=MultiAttemptCacheTransport(),
+        limits=LiveRunLimits(max_model_requests=2, max_retries=0, max_directive_repairs=1),
+        registry=_test_live_registry(),
+    )
+    limits = ControllerBudgetLimits.from_task_constraints(task.constraints)
+    directive = adapter.next_directive(
+        ControllerSnapshot("multi-cache-run", task.task_id, ControllerState.REPRODUCE, 0, limits, ControllerBudgetState(), HypothesisLedger())
+    )
+    assert directive.target_state is ControllerState.FAILED
+
+    usage = adapter.last_request_token_usage()
+    assert usage is not None
+    assert usage.input_tokens == 140
+    assert usage.cached_input_tokens == 40
+    assert usage.output_tokens == 20
+    assert usage.total_tokens == 160
+
+    cov = adapter.last_request_token_coverage()
+    assert cov is not None
+    assert cov.input_tokens is False
+    assert cov.cached_input_tokens is False
+    assert cov.output_tokens is False
+    assert cov.total_tokens is False
+
+    metrics = adapter.metrics.to_mapping()["token_usage"]
+    assert metrics["prompt_tokens"] == 140
+    assert metrics["cached_input_tokens"] == 40
+    assert metrics["completion_tokens"] == 20
+    assert metrics["total_tokens"] == 160
+
+
+def test_direct_anthropic_messages_cache_only_normalizer_regression():
+    """F6: Direct Anthropic Messages response with cache-read only passes through LiveModelAdapter."""
+    import sys
+    from pathlib import Path
+    scripts_dir = str(ROOT / "scripts")
+    if scripts_dir not in sys.path:
+        sys.path.insert(0, scripts_dir)
+    from provider_direct_api_adapter import extract_usage
+
+    # Simulate Anthropic Messages API response where base input_tokens is missing
+    # but cache_read_input_tokens is 40.
+    raw_api_payload = {
+        "usage": {
+            "cache_read_input_tokens": 40,
+            "output_tokens": 15,
+        }
+    }
+    normalized = extract_usage("messages", raw_api_payload)
+    assert normalized == {"cached_input_tokens": 40, "completion_tokens": 15}
+
+    task = DebugTask.from_mapping(
+        json.loads((ROOT / "agentic_debugger/datasets/curated" / TASK_ID / "task.json").read_text())
+    )
+
+    class DirectAnthropicTransport:
+        def request(self, payload, timeout_seconds):
+            return {
+                "usage": normalized,
+                "directive": {"kind": "transition", "target_state": "Failed", "reason": "done"},
+            }
+
+    from agentic_debugger.agent.controller_policy import ControllerBudgetLimits, ControllerBudgetState, HypothesisLedger
+    from agentic_debugger.agent.model_adapter import ControllerSnapshot
+
+    adapter = LiveModelAdapter(
+        task=task,
+        policy=DemoPolicy.STATIC_BASELINE,
+        config=config(),
+        transport=DirectAnthropicTransport(),
+        limits=LiveRunLimits(max_model_requests=1, max_retries=0, max_directive_repairs=0),
+        registry=_test_live_registry(),
+    )
+    limits = ControllerBudgetLimits.from_task_constraints(task.constraints)
+    directive = adapter.next_directive(
+        ControllerSnapshot("anthropic-norm-run", task.task_id, ControllerState.REPRODUCE, 0, limits, ControllerBudgetState(), HypothesisLedger())
+    )
+    assert directive.target_state is ControllerState.FAILED
+
+    usage = adapter.last_request_token_usage()
+    assert usage is not None
+    assert usage.input_tokens == 40
+    assert usage.cached_input_tokens == 40
+    assert usage.output_tokens == 15
+    assert usage.total_tokens == 55
+
+    cov = adapter.last_request_token_coverage()
+    assert cov is not None
+    assert cov.input_tokens is False
+    assert cov.cached_input_tokens is True
+    assert cov.output_tokens is True
+    assert cov.total_tokens is False
+
+
+
 
 def test_logical_request_usage_resets_between_calls_and_survives_failure():
     task = DebugTask.from_mapping(json.loads((ROOT / "agentic_debugger/datasets/curated" / TASK_ID / "task.json").read_text()))

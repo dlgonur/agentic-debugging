@@ -276,6 +276,10 @@ class TestSessionEventSchema:
             ({"input_tokens": "true"}, {"input_tokens": 100}),  # string
             ({"cached_input_tokens": False}, {"input_tokens": 100}),  # not in token_usage
             ({"unknown_field": False}, {"input_tokens": 100}),  # unknown
+            (
+                {"input_tokens": True, "output_tokens": True, "total_tokens": False},
+                {"input_tokens": 100, "output_tokens": 20, "total_tokens": 120},
+            ),  # F7: impossible partial total when components complete
         ),
     )
     def test_invalid_token_usage_coverage_fails_closed(self, coverage, usage):
@@ -283,6 +287,19 @@ class TestSessionEventSchema:
         if usage is not None:
             payload["token_usage"] = usage
         payload["token_usage_coverage"] = coverage
+        with pytest.raises(SchemaValidationError):
+            SessionEvent.from_mapping(
+                make_event_mapping(SessionEventKind.MODEL_REQUEST_COMPLETED, payload)
+            )
+
+    def test_contradictory_exact_total_event_validation_fails_closed(self):
+        """F7: Event payload with exact total contradicting component lower bounds fails closed."""
+        payload = {
+            "request_index": 0,
+            "status": "ok",
+            "token_usage": {"input_tokens": 100, "output_tokens": 20, "total_tokens": 50},
+            "token_usage_coverage": {"input_tokens": False, "output_tokens": False, "total_tokens": True},
+        }
         with pytest.raises(SchemaValidationError):
             SessionEvent.from_mapping(
                 make_event_mapping(SessionEventKind.MODEL_REQUEST_COMPLETED, payload)

@@ -443,10 +443,15 @@ class ControllerSessionEventAdapter(ControllerObserver):
             if observation.token_usage is not None:
                 # Canonical counts-only block from the typed observation
                 # value; an all-unknown usage carries no durable claim and
-                # is omitted rather than attached empty.
-                usage_block = observation.token_usage.to_payload(
-                    coverage=observation.token_usage_coverage
-                )
+                # is omitted rather than attached empty. Contradictory
+                # telemetry fails closed (dropped) while preserving the
+                # lifecycle event.
+                try:
+                    usage_block = observation.token_usage.to_payload(
+                        coverage=observation.token_usage_coverage
+                    )
+                except ValueError:
+                    usage_block = None
                 if usage_block:
                     payload["token_usage"] = usage_block
                     if observation.token_usage_coverage is not None:

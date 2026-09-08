@@ -10,7 +10,7 @@ historical statements.
 
 | File | Purpose |
 |---|---|
-| `project-closeout.md` | **Current status authority** through V2 architecture and post-V2 repository-state hygiene closeout (2026-09-07) |
+| `project-closeout.md` | **Current status authority** through V2 architecture, Task 31 hygiene, and Session Token Usage Telemetry v1 (Task 34) (2026-09-08) |
 | `release-closeout-2026-08-28.md` | Concise release, validation, and negative-boundary record |
 | `pre-release-hardening-2026-08-27.md` | Durable PRE-RELEASE-HARDENING-01 closeout record (feature-freeze ready at `8fbea88`; PRH-D01..D09 dispositions) |
 | `results-index.md` | Concise map from accepted conclusions to surviving evidence |
@@ -34,8 +34,8 @@ forwarder/cache repair, root-cause explanation metric, preference exporter, and
 repository RAG. `architecture/agentic-debugger-v2-plan.md` is the accepted V2
 architecture target and migration plan (V2-01 through V2-04 implemented, post-V2-04 follow-ups resolved, V2-05 evaluated as not justified / deferred, and V2 campaign closed at `e86ac2d`).
 `architecture/session-token-usage-v1.md` records the accepted Session Token
-Usage Telemetry v1 capability (provider-reported-only counts; no estimation,
-no pricing).
+Usage Telemetry v1 capability (Task 34, completed 2026-09-08; provider-reported-only
+counts; no estimation, no pricing).
 
 ## adr/
 

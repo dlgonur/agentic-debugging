@@ -355,4 +355,44 @@ class TestCoverageAwareArithmetic:
         with pytest.raises(ValueError, match="cached_input_tokens must not exceed input_tokens"):
             usage_from_payload(block_complete, coverage=None)
 
+    def test_canonical_rejects_contradictory_exact_total(self):
+        """F7: Exact total contradicting known component bounds fails closed."""
+        usage = TokenUsage(input_tokens=100, output_tokens=20, total_tokens=50)
+        cov = TokenUsageCoverage(input_tokens=False, output_tokens=False, total_tokens=True)
+        with pytest.raises(
+            ValueError,
+            match="exact total_tokens \\(50\\) cannot be less than sum of known component lower bounds \\(120\\)",
+        ):
+            usage.canonical(coverage=cov)
+
+    def test_canonical_strengthens_partial_total_lower_bound(self):
+        """F7: Partial total lower bound safely strengthens to min_components."""
+        usage = TokenUsage(input_tokens=100, output_tokens=20, total_tokens=50)
+        cov = TokenUsageCoverage(input_tokens=False, output_tokens=False, total_tokens=False)
+        canonical = usage.canonical(coverage=cov)
+        assert canonical.input_tokens == 100
+        assert canonical.output_tokens == 20
+        assert canonical.total_tokens == 120
+
+    def test_canonical_rejects_partial_total_when_components_complete(self):
+        """F7: Input complete + Output complete forbids partial total coverage."""
+        usage = TokenUsage(input_tokens=100, output_tokens=20, total_tokens=120)
+        cov = TokenUsageCoverage(input_tokens=True, output_tokens=True, total_tokens=False)
+        with pytest.raises(
+            ValueError,
+            match="total_tokens coverage cannot be partial when both input_tokens and output_tokens are complete",
+        ):
+            usage.canonical(coverage=cov)
+
+    def test_coverage_from_payload_rejects_partial_total_when_components_complete(self):
+        """F7: coverage_from_payload fails closed on complete components with partial total."""
+        with pytest.raises(
+            ValueError,
+            match="total_tokens coverage cannot be partial when both input_tokens and output_tokens are complete",
+        ):
+            coverage_from_payload(
+                {"input_tokens": True, "output_tokens": True, "total_tokens": False},
+                usage_block={"input_tokens": 100, "output_tokens": 20, "total_tokens": 120},
+            )
+
 
