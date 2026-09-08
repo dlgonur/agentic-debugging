@@ -35,7 +35,7 @@ from agentic_debugger.agent.model_adapter import (
     UsageReportingModelAdapter,
     directive_kind,
 )
-from agentic_debugger.agent.token_usage import TokenUsage
+from agentic_debugger.agent.token_usage import TokenUsage, TokenUsageCoverage
 from agentic_debugger.agent.observer import (
     ControllerObservation,
     ControllerObservationKind,
@@ -956,8 +956,8 @@ class DeterministicController:
             if cancel_check is not None:
                 cancel_check()
 
-        def _completed_request_usage() -> Optional[TokenUsage]:
-            """Read provider-reported usage of the just-finished request.
+        def _completed_request_telemetry() -> tuple[Optional[TokenUsage], Optional[TokenUsageCoverage]]:
+            """Read provider-reported usage and coverage of the just-finished request.
 
             Only adapters implementing the optional usage seam can report
             it (live provider adapters aggregating transport retries and
@@ -967,12 +967,23 @@ class DeterministicController:
             """
             adapter = self.model_adapter
             if not isinstance(adapter, UsageReportingModelAdapter):
-                return None
+                return None, None
             try:
                 usage = adapter.last_request_token_usage()
             except Exception:
-                return None
-            return usage if isinstance(usage, TokenUsage) else None
+                return None, None
+            if not isinstance(usage, TokenUsage):
+                return None, None
+            coverage = None
+            cov_getter = getattr(adapter, "last_request_token_coverage", None)
+            if callable(cov_getter):
+                try:
+                    cov = cov_getter()
+                    if isinstance(cov, TokenUsageCoverage):
+                        coverage = cov
+                except Exception:
+                    coverage = None
+            return usage, coverage
 
         _emit(
             ControllerObservationKind.RUN_STARTED,
@@ -1111,22 +1122,27 @@ class DeterministicController:
             except CancellationError:
                 raise
             except ModelScriptExhaustedError:
+                req_usage, req_coverage = _completed_request_telemetry()
                 _emit(ControllerObservationKind.MODEL_REQUEST_COMPLETED,
                       model_call_index=model_call_index, state_before=state,
                       request_status="error", error_kind="model_script_exhausted",
                       error_message="scripted model response is unavailable",
-                      token_usage=_completed_request_usage())
+                      token_usage=req_usage,
+                      token_usage_coverage=req_coverage)
                 failure_step(ControllerStopReason.MODEL_SCRIPT_EXHAUSTED)
                 return result(ControllerStopReason.MODEL_SCRIPT_EXHAUSTED, state)
             except ModelScriptMismatchError:
+                req_usage, req_coverage = _completed_request_telemetry()
                 _emit(ControllerObservationKind.MODEL_REQUEST_COMPLETED,
                       model_call_index=model_call_index, state_before=state,
                       request_status="error", error_kind="model_script_mismatch",
                       error_message="scripted model response does not match controller state",
-                      token_usage=_completed_request_usage())
+                      token_usage=req_usage,
+                      token_usage_coverage=req_coverage)
                 failure_step(ControllerStopReason.MODEL_SCRIPT_MISMATCH)
                 return result(ControllerStopReason.MODEL_SCRIPT_MISMATCH, state)
             except ModelAdapterError as exc:
+                req_usage, req_coverage = _completed_request_telemetry()
                 _emit(ControllerObservationKind.MODEL_REQUEST_COMPLETED,
                       model_call_index=model_call_index, state_before=state,
                       request_status="error",
@@ -1138,37 +1154,44 @@ class DeterministicController:
                           "model adapter rejected the request",
                           512,
                       ),
-                      token_usage=_completed_request_usage())
+                      token_usage=req_usage,
+                      token_usage_coverage=req_coverage)
                 failure_step(ControllerStopReason.MODEL_ERROR)
                 return result(ControllerStopReason.MODEL_ERROR, state)
             except Exception:
+                req_usage, req_coverage = _completed_request_telemetry()
                 _emit(ControllerObservationKind.MODEL_REQUEST_COMPLETED,
                       model_call_index=model_call_index, state_before=state,
                       request_status="error", error_kind="unexpected_model_error",
                       error_message="unexpected model request failure",
-                      token_usage=_completed_request_usage())
+                      token_usage=req_usage,
+                      token_usage_coverage=req_coverage)
                 failure_step(ControllerStopReason.MODEL_ERROR)
                 return result(ControllerStopReason.MODEL_ERROR, state)
 
             try:
                 kind, directive = _canonical_directive(directive)
             except Exception:
+                req_usage, req_coverage = _completed_request_telemetry()
                 _emit(ControllerObservationKind.MODEL_REQUEST_COMPLETED,
                       model_call_index=model_call_index, state_before=state,
                       request_status="error", error_kind="invalid_directive",
                       error_message="model response did not produce a canonical directive",
-                      token_usage=_completed_request_usage())
+                      token_usage=req_usage,
+                      token_usage_coverage=req_coverage)
                 failure_step(ControllerStopReason.MODEL_ERROR)
                 return result(ControllerStopReason.MODEL_ERROR, state)
 
             _check_cancelled()
             model_call_index += 1
+            req_usage, req_coverage = _completed_request_telemetry()
             _emit(
                 ControllerObservationKind.MODEL_REQUEST_COMPLETED,
                 model_call_index=model_call_index - 1,
                 state_before=state_before,
                 request_status="ok",
-                token_usage=_completed_request_usage(),
+                token_usage=req_usage,
+                token_usage_coverage=req_coverage,
             )
             if kind is ModelDirectiveKind.ACTION:
                 _check_cancelled()

@@ -24,7 +24,7 @@ count is ever estimated locally: provider-reported usage only.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, replace
 from typing import Any, Optional
 
@@ -234,10 +234,107 @@ def usage_from_payload(value: Any) -> TokenUsage:
     return usage
 
 
+@dataclass(frozen=True)
+class TokenUsageCoverage:
+    """Per-dimension completeness for provider-reported token usage.
+
+    For each dimension reported in :class:`TokenUsage`:
+    - ``True`` indicates complete coverage across all provider-completed
+      transport attempts for the logical model request.
+    - ``False`` indicates a truthful lower bound / subtotal because at
+      least one provider-completed attempt did not report that dimension
+      or lacked usage entirely.
+    """
+
+    input_tokens: bool = True
+    output_tokens: bool = True
+    cached_input_tokens: bool = True
+    total_tokens: bool = True
+
+    def __post_init__(self) -> None:
+        for field in TOKEN_USAGE_PAYLOAD_FIELDS:
+            val = getattr(self, field)
+            if type(val) is not bool:
+                raise ValueError(
+                    f"token usage coverage field {field} must be a boolean"
+                )
+
+    def is_complete(self, dimension: str) -> bool:
+        alias_map = {
+            "input": "input_tokens",
+            "input_tokens": "input_tokens",
+            "cached": "cached_input_tokens",
+            "cached_input": "cached_input_tokens",
+            "cached_input_tokens": "cached_input_tokens",
+            "output": "output_tokens",
+            "output_tokens": "output_tokens",
+            "total": "total_tokens",
+            "total_tokens": "total_tokens",
+        }
+        attr = alias_map.get(dimension, dimension)
+        return bool(getattr(self, attr, True))
+
+    def is_partial(self, dimension: str) -> bool:
+        return not self.is_complete(dimension)
+
+    def to_payload(
+        self, for_fields: Optional[Mapping[str, Any] | Iterable[str]] = None
+    ) -> dict[str, bool]:
+        """Canonical event block: bools only, known fields only."""
+        allowed = (
+            set(for_fields.keys())
+            if isinstance(for_fields, Mapping)
+            else set(for_fields)
+            if for_fields is not None
+            else set(TOKEN_USAGE_PAYLOAD_FIELDS)
+        )
+        return {
+            field: getattr(self, field)
+            for field in TOKEN_USAGE_PAYLOAD_FIELDS
+            if field in allowed
+        }
+
+
+def coverage_from_payload(
+    value: Any, usage_block: Optional[Mapping[str, Any]] = None
+) -> TokenUsageCoverage:
+    """Strictly validate a durable ``token_usage_coverage`` payload block.
+
+    Fails closed on non-mapping values, empty blocks, unknown fields,
+    non-bool values, or fields not reported in the corresponding
+    ``token_usage`` block.
+    """
+    if not isinstance(value, Mapping):
+        raise ValueError("token usage coverage block must be a mapping of boolean flags")
+    unknown = set(value) - set(TOKEN_USAGE_PAYLOAD_FIELDS)
+    if unknown:
+        raise ValueError(f"unknown token usage coverage fields: {sorted(unknown)}")
+    if not value:
+        raise ValueError("token usage coverage block must report at least one dimension")
+    if usage_block is not None:
+        disallowed = set(value) - set(usage_block)
+        if disallowed:
+            raise ValueError(
+                f"token usage coverage fields not in token_usage block: {sorted(disallowed)}"
+            )
+    absent = object()
+    fields: dict[str, bool] = {}
+    for field in TOKEN_USAGE_PAYLOAD_FIELDS:
+        flag = value.get(field, absent)
+        if flag is absent:
+            continue
+        if type(flag) is not bool:
+            raise ValueError(f"token usage coverage field {field} must be a boolean")
+        fields[field] = flag
+    return TokenUsageCoverage(**fields)
+
+
 __all__ = [
     "MAX_TOKEN_COUNT",
     "TOKEN_USAGE_PAYLOAD_FIELDS",
     "TokenUsage",
+    "TokenUsageCoverage",
+    "coverage_from_payload",
     "usage_from_payload",
     "usage_from_transport",
 ]

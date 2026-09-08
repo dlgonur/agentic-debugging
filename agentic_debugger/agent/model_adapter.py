@@ -21,7 +21,7 @@ from agentic_debugger.agent.controller_policy import (
     allowed_actions_for_state,
 )
 from agentic_debugger.agent.state_machine import ControllerState
-from agentic_debugger.agent.token_usage import TokenUsage
+from agentic_debugger.agent.token_usage import TokenUsage, TokenUsageCoverage
 from agentic_debugger.events.schema import Observation
 
 
@@ -512,6 +512,18 @@ class UsageReportingModelAdapter(Protocol):
     """
 
     def last_request_token_usage(self) -> Optional[TokenUsage]: ...
+
+
+@runtime_checkable
+class CoverageReportingModelAdapter(Protocol):
+    """Optional :class:`ModelAdapter` seam for token-usage coverage truth.
+
+    Adapters aggregating multi-attempt logical calls implement this to
+    report per-dimension completeness (whether reported dimensions are
+    exact or lower bounds).
+    """
+
+    def last_request_token_coverage(self) -> Optional[TokenUsageCoverage]: ...
 
 
 @dataclass(frozen=True)

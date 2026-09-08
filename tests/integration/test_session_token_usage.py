@@ -48,6 +48,7 @@ from agentic_debugger.evaluation.live import (
     LiveRunLimits,
 )
 from agentic_debugger.evaluation.task_schema import DebugTask
+from agentic_debugger.ui.widgets import session_tokens_breakdown, session_tokens_summary
 
 ROOT = Path(__file__).resolve().parents[2]
 TASK_ID = "curated-none-handling-001"
@@ -91,20 +92,61 @@ class _UsageTransport:
         }
 
 
-def _run_synthetic_live_session(tmp_path: Path):
+class _PartialUsageTransport:
+    """Deterministic offline transport: attempt 1 reports usage but rejected directive,
+    attempt 2 has valid directive but lacks usage block."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def request(self, payload, timeout_seconds):
+        self.calls += 1
+        if self.calls == 1:
+            return {
+                "usage": {
+                    "prompt_tokens": 100,
+                    "completion_tokens": 20,
+                    "cached_input_tokens": 40,
+                },
+                "directive": {
+                    "kind": "transition",
+                    "target_state": "InvalidNonExistentState",
+                    "reason": "bad state",
+                },
+            }
+        return {
+            "directive": {
+                "kind": "transition",
+                "target_state": "Failed",
+                "reason": "bounded synthetic stop",
+            },
+        }
+
+
+def _run_synthetic_live_session(
+    tmp_path: Path,
+    transport=None,
+    limits=None,
+    session_id: str = SESSION_ID,
+    journal_name: str = "session-token-usage.jsonl",
+):
+    if transport is None:
+        transport = _UsageTransport()
+    if limits is None:
+        limits = LiveRunLimits(max_model_requests=2, max_retries=0, max_directive_repairs=0)
     task = DebugTask.from_mapping(
         json.loads(
             (ROOT / "agentic_debugger/datasets/curated" / TASK_ID / "task.json").read_text()
         )
     )
     journal = SessionEventJournal(
-        tmp_path / "session-token-usage.jsonl",
-        session_id=SESSION_ID,
+        tmp_path / journal_name,
+        session_id=session_id,
         task_id=task.task_id,
         source_kind=SourceKind.CONFIGURED_MODEL,
     )
     emitter = SessionEventEmitter(
-        session_id=SESSION_ID,
+        session_id=session_id,
         task_id=task.task_id,
         source_kind=SourceKind.CONFIGURED_MODEL,
         run_id=RUN_ID,
@@ -117,13 +159,13 @@ def _run_synthetic_live_session(tmp_path: Path):
         task=task,
         policy=DemoPolicy.STATIC_BASELINE,
         config=LiveModelConfig("usage-synthetic", (sys.executable, "-c", "pass")),
-        transport=_UsageTransport(),
-        limits=LiveRunLimits(max_model_requests=2, max_retries=0, max_directive_repairs=0),
+        transport=transport,
+        limits=limits,
         registry=ToolRegistry(()),
     )
     observer = ControllerSessionEventAdapter(
         ControllerObservationContext(
-            session_id=SESSION_ID,
+            session_id=session_id,
             task_id=task.task_id,
             source_kind=SourceKind.CONFIGURED_MODEL,
             run_id=RUN_ID,
@@ -224,3 +266,85 @@ def test_live_session_usage_flows_to_journal_and_replay_reduces_identically(tmp_
     assert after_second.effective_total_tokens == 3_000
     assert after_second.complete
     assert view.token_usage == after_second
+
+
+def test_partial_logical_call_preserves_lower_bound_and_replay_parity(tmp_path):
+    adapter, observer, result = _run_synthetic_live_session(
+        tmp_path,
+        transport=_PartialUsageTransport(),
+        limits=LiveRunLimits(max_model_requests=2, max_retries=0, max_directive_repairs=1),
+        session_id="session-token-partial-001",
+        journal_name="session-token-partial.jsonl",
+    )
+    assert result.stop_reason is not None
+
+    # The adapter preserved attempt 1's usage as a lower bound and marked coverage partial.
+    from agentic_debugger.agent.token_usage import TokenUsage
+    assert adapter.last_request_token_usage() == TokenUsage(
+        input_tokens=100, output_tokens=20, cached_input_tokens=40, total_tokens=120
+    )
+    coverage = adapter.last_request_token_coverage()
+    assert coverage is not None
+    assert not coverage.input_tokens
+    assert not coverage.cached_input_tokens
+    assert not coverage.output_tokens
+    assert not coverage.total_tokens
+
+    # Controller emitted MODEL_REQUEST_COMPLETED carrying usage and coverage.
+    live_events = observer.events()
+    completions = [
+        event
+        for event in live_events
+        if event.event_kind is SessionEventKind.MODEL_REQUEST_COMPLETED
+    ]
+    assert len(completions) == 1
+    assert dict(completions[0].payload["token_usage"]) == {
+        "input_tokens": 100,
+        "output_tokens": 20,
+        "cached_input_tokens": 40,
+        "total_tokens": 120,
+    }
+    assert dict(completions[0].payload["token_usage_coverage"]) == {
+        "input_tokens": False,
+        "output_tokens": False,
+        "cached_input_tokens": False,
+        "total_tokens": False,
+    }
+
+    # Journal roundtrip preserves the coverage block.
+    read = read_session_journal(tmp_path / "session-token-partial.jsonl")
+    journal_completions = [
+        event
+        for event in read.events
+        if event.event_kind is SessionEventKind.MODEL_REQUEST_COMPLETED
+    ]
+    assert len(journal_completions) == 1
+    assert journal_completions[0].to_mapping()["payload"] == completions[0].to_mapping()["payload"]
+
+    # Live and replayed views match identically.
+    identity = PresentationIdentity(
+        task_id=TASK_ID, source_kind=SourceKind.CONFIGURED_MODEL, session_id="session-token-partial-001"
+    )
+    view = initial_session_view(identity)
+    for event in read.events:
+        view = reduce_event(view, event)
+
+    usage = view.token_usage
+    assert usage.requests_completed == 1
+    assert usage.requests_with_usage == 1
+    assert usage.input_tokens == 100
+    assert usage.cached_input_tokens == 40
+    assert usage.output_tokens == 20
+    assert usage.total_tokens == 120
+    assert usage.requests_complete_input == 0
+    assert usage.requests_complete_cached == 0
+    assert usage.requests_complete_output == 0
+    assert usage.requests_complete_total == 0
+    assert usage.is_partial("input_tokens")
+    assert usage.is_partial("cached_input_tokens")
+    assert usage.is_partial("output_tokens")
+    assert usage.is_partial("total_tokens")
+    assert not usage.total_complete
+
+    assert session_tokens_summary(usage) == "Tokens 120 (partial)"
+    assert session_tokens_breakdown(usage) == "In 100+ · Cache 40+ · Out 20+"

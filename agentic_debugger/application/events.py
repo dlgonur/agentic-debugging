@@ -30,6 +30,7 @@ from agentic_debugger import SchemaValidationError
 from agentic_debugger.agent.state_machine import ControllerState
 from agentic_debugger.agent.token_usage import (
     TOKEN_USAGE_PAYLOAD_FIELDS,
+    coverage_from_payload,
     usage_from_payload,
 )
 from agentic_debugger.application import ApplicationContractError
@@ -991,7 +992,7 @@ def _payload_request_completed(payload: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(payload, Mapping):
         raise SchemaValidationError("model.request_completed payload must be a mapping")
     required = {"request_index", "status"}
-    optional = {"error_kind", "error_message", "token_usage"}
+    optional = {"error_kind", "error_message", "token_usage", "token_usage_coverage"}
     _check_required(payload, required, "model.request_completed payload")
     _check_no_unknown(payload, required | optional, "model.request_completed payload")
     result = {
@@ -1039,6 +1040,23 @@ def _payload_request_completed(payload: Mapping[str, Any]) -> dict[str, Any]:
             field: block[field]
             for field in TOKEN_USAGE_PAYLOAD_FIELDS
             if field in block
+        }
+    if "token_usage_coverage" in payload:
+        if "token_usage" not in payload:
+            raise SchemaValidationError(
+                "model.request_completed cannot carry token_usage_coverage without token_usage"
+            )
+        try:
+            coverage_from_payload(payload["token_usage_coverage"], payload["token_usage"])
+        except ValueError as exc:
+            raise SchemaValidationError(
+                f"model.request_completed token_usage_coverage is invalid: {exc}"
+            ) from None
+        cov_block = payload["token_usage_coverage"]
+        result["token_usage_coverage"] = {
+            field: cov_block[field]
+            for field in TOKEN_USAGE_PAYLOAD_FIELDS
+            if field in cov_block
         }
     return result
 

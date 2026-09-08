@@ -447,6 +447,10 @@ class ControllerSessionEventAdapter(ControllerObserver):
                 usage_block = observation.token_usage.to_payload()
                 if usage_block:
                     payload["token_usage"] = usage_block
+                    if observation.token_usage_coverage is not None:
+                        payload["token_usage_coverage"] = (
+                            observation.token_usage_coverage.to_payload(for_fields=usage_block)
+                        )
             self._emit(
                 SessionEventKind.MODEL_REQUEST_COMPLETED,
                 payload,

@@ -425,7 +425,7 @@ class TestWorkstreamProjection:
         )
         entry = stream.view.workstream[-1]
         assert entry.status is WorkstreamStatus.FAILED
-        assert entry.detail == "transport"
+        assert entry.detail == "transport · x"
 
     def test_model_request_usage_joins_row_detail(self) -> None:
         stream = Stream()
@@ -499,6 +499,56 @@ class TestWorkstreamProjection:
         assert entry.detail == (
             "malformed_directive · unrecognized target_state · Input 220 · Output 50 · Total 270"
         )
+
+    def test_model_request_usage_with_partial_coverage_marks_dimensions(self) -> None:
+        stream = Stream()
+        stream.emit(SessionEventKind.MODEL_REQUEST_STARTED, {"request_index": 0})
+        stream.emit(
+            SessionEventKind.MODEL_REQUEST_COMPLETED,
+            {
+                "request_index": 0,
+                "status": "ok",
+                "token_usage": {
+                    "input_tokens": 100,
+                    "cached_input_tokens": 40,
+                    "output_tokens": 20,
+                    "total_tokens": 120,
+                },
+                "token_usage_coverage": {
+                    "input_tokens": False,
+                    "cached_input_tokens": False,
+                    "output_tokens": False,
+                    "total_tokens": False,
+                },
+            },
+        )
+        entry = stream.view.workstream[-1]
+        assert entry.status is WorkstreamStatus.COMPLETED
+        assert entry.detail == "Input 100+ · Cached 40+ · Output 20+ · Total 120+"
+
+    def test_model_request_usage_with_mixed_coverage_marks_partial_only(self) -> None:
+        stream = Stream()
+        stream.emit(SessionEventKind.MODEL_REQUEST_STARTED, {"request_index": 0})
+        stream.emit(
+            SessionEventKind.MODEL_REQUEST_COMPLETED,
+            {
+                "request_index": 0,
+                "status": "ok",
+                "token_usage": {
+                    "input_tokens": 100,
+                    "output_tokens": 20,
+                    "total_tokens": 120,
+                },
+                "token_usage_coverage": {
+                    "input_tokens": False,
+                    "output_tokens": True,
+                    "total_tokens": False,
+                },
+            },
+        )
+        entry = stream.view.workstream[-1]
+        assert entry.status is WorkstreamStatus.COMPLETED
+        assert entry.detail == "Input 100+ · Output 20 · Total 120+"
 
     def test_settled_model_requests_retained_in_chronological_order(self) -> None:
         stream = Stream()

@@ -144,13 +144,20 @@ def replay_completed_stream():
     return tuple(events)
 
 
-def _usage_event(request_index: int, token_usage, sequence: int, status: str = "ok"):
+def _usage_event(
+    request_index: int,
+    token_usage,
+    sequence: int,
+    status: str = "ok",
+    token_usage_coverage=None,
+):
     return make_event(
         SessionEventKind.MODEL_REQUEST_COMPLETED,
         {
             "request_index": request_index,
             "status": status,
             **({"token_usage": token_usage} if token_usage is not None else {}),
+            **({"token_usage_coverage": token_usage_coverage} if token_usage_coverage is not None else {}),
         },
         sequence=sequence,
         run_id=VALID_RUN_ID,
@@ -444,6 +451,135 @@ class TestSessionTokenUsageReduction:
         assert replay_view.token_usage.total_tokens == 1_540
         assert replay_view.token_usage.requests_completed == 3
         assert replay_view.token_usage.requests_with_usage == 2
+
+    def test_partial_request_marks_session_dimension_as_partial(self):
+        """F3: partial logical calls preserve lower bound and mark partial coverage."""
+        from agentic_debugger.ui.widgets import session_tokens_summary, session_tokens_breakdown
+
+        view = reduce_all(
+            state_running(),
+            (
+                _usage_event(
+                    0,
+                    {"input_tokens": 100, "output_tokens": 20, "cached_input_tokens": 40, "total_tokens": 120},
+                    sequence=3,
+                    token_usage_coverage={
+                        "input_tokens": False,
+                        "cached_input_tokens": False,
+                        "output_tokens": False,
+                        "total_tokens": False,
+                    },
+                ),
+                _usage_event(
+                    1,
+                    {"input_tokens": 50, "output_tokens": 10, "total_tokens": 60},
+                    sequence=4,
+                ),
+            ),
+        )
+        usage = view.token_usage
+        assert usage.requests_completed == 2
+        assert usage.requests_with_usage == 2
+        assert usage.input_tokens == 150
+        assert usage.cached_input_tokens == 40
+        assert usage.output_tokens == 30
+        assert usage.total_tokens == 180
+        assert usage.requests_complete_input == 1
+        assert usage.requests_complete_cached == 0
+        assert usage.requests_complete_output == 1
+        assert usage.requests_complete_total == 1
+        assert usage.is_partial("input_tokens")
+        assert usage.is_partial("cached_input_tokens")
+        assert usage.is_partial("output_tokens")
+        assert usage.is_partial("total_tokens")
+        assert not usage.total_complete
+        assert session_tokens_summary(usage) == "Tokens 180 (partial)"
+        assert session_tokens_breakdown(usage) == "In 150+ · Cache 40+ · Out 30+"
+
+    def test_dimension_specific_coverage_preserves_per_dimension_completeness(self):
+        """F3: coverage is dimension-specific; complete dimensions don't get '+'."""
+        from agentic_debugger.ui.widgets import session_tokens_breakdown
+
+        view = reduce_all(
+            state_running(),
+            (
+                _usage_event(
+                    0,
+                    {"input_tokens": 100, "output_tokens": 20, "cached_input_tokens": 40, "total_tokens": 120},
+                    sequence=3,
+                    token_usage_coverage={
+                        "input_tokens": False,
+                        "cached_input_tokens": False,
+                        "output_tokens": True,
+                        "total_tokens": False,
+                    },
+                ),
+                _usage_event(
+                    1,
+                    {"input_tokens": 50, "output_tokens": 10, "total_tokens": 60},
+                    sequence=4,
+                    token_usage_coverage={
+                        "input_tokens": True,
+                        "output_tokens": True,
+                        "total_tokens": True,
+                    },
+                ),
+            ),
+        )
+        usage = view.token_usage
+        assert usage.requests_completed == 2
+        assert usage.requests_with_usage == 2
+        assert usage.input_tokens == 150
+        assert usage.cached_input_tokens == 40
+        assert usage.output_tokens == 30
+        assert usage.total_tokens == 180
+        assert usage.requests_complete_output == 2
+        assert usage.output_complete
+        assert not usage.is_partial("output_tokens")
+        assert usage.is_partial("input_tokens")
+        assert usage.is_partial("cached_input_tokens")
+        # Output is complete (no '+'); Input and Cache are partial ('+')
+        assert session_tokens_breakdown(usage) == "In 150+ · Cache 40+ · Out 30"
+
+    def test_replay_preserves_partial_coverage_reduction(self):
+        """F3: journal replay matches live reduction for partial coverage events."""
+        events = (
+            _usage_event(
+                0,
+                {"input_tokens": 100, "output_tokens": 20, "cached_input_tokens": 40, "total_tokens": 120},
+                sequence=3,
+                token_usage_coverage={
+                    "input_tokens": False,
+                    "cached_input_tokens": False,
+                    "output_tokens": False,
+                    "total_tokens": False,
+                },
+            ),
+            _usage_event(
+                1,
+                {"input_tokens": 50, "output_tokens": 10, "total_tokens": 60},
+                sequence=4,
+            ),
+        )
+        live_view = reduce_all(state_running(), events)
+        replay_events = []
+        for event in events:
+            mapping = event.to_mapping()
+            mapping["source_kind"] = SourceKind.SESSION_BUNDLE.value
+            replay_events.append(SessionEvent.from_mapping(mapping))
+        replay_view = reduce_all(
+            initial_session_view(
+                PresentationIdentity(
+                    task_id=VALID_TASK_ID,
+                    source_kind=SourceKind.SESSION_BUNDLE,
+                    session_id=VALID_SESSION_ID,
+                )
+            ),
+            tuple(replay_events),
+        )
+        assert replay_view.token_usage == live_view.token_usage
+        assert replay_view.token_usage.requests_complete_input == 1
+        assert replay_view.token_usage.is_partial("input_tokens")
 
 
 class TestPresentationIdentity:

@@ -48,7 +48,7 @@ from agentic_debugger.agent.observer import (
     ControllerObservationKind,
 )
 from agentic_debugger.agent.state_machine import ControllerState
-from agentic_debugger.agent.token_usage import TokenUsage
+from agentic_debugger.agent.token_usage import TokenUsage, TokenUsageCoverage
 from agentic_debugger.agent.tool_registry import ToolRegistry, ToolResult, ToolSpec
 from agentic_debugger.events.schema import ObservationStatus
 from application_support import (
@@ -327,6 +327,47 @@ class TestMapping:
             "output_tokens": 50,
             "cached_input_tokens": 120,
             "total_tokens": 270,
+        }
+
+    def test_request_token_usage_coverage_mapped_into_event(self):
+        adapter = adapter_for()
+        adapter.notify(observation(
+            ControllerObservationKind.RUN_STARTED,
+            model_call_index=0,
+            state_before=ControllerState.REPRODUCE,
+        ))
+        adapter.notify(observation(
+            ControllerObservationKind.MODEL_REQUEST_COMPLETED,
+            model_call_index=0,
+            state_before=ControllerState.REPRODUCE,
+            request_status="ok",
+            token_usage=TokenUsage(
+                input_tokens=100,
+                output_tokens=20,
+                cached_input_tokens=40,
+                total_tokens=120,
+            ),
+            token_usage_coverage=TokenUsageCoverage(
+                input_tokens=False,
+                output_tokens=False,
+                cached_input_tokens=False,
+                total_tokens=False,
+            ),
+        ))
+        payload = dict(adapter.events()[-1].payload)
+        assert payload["request_index"] == 0
+        assert payload["status"] == "ok"
+        assert dict(payload["token_usage"]) == {
+            "input_tokens": 100,
+            "output_tokens": 20,
+            "cached_input_tokens": 40,
+            "total_tokens": 120,
+        }
+        assert dict(payload["token_usage_coverage"]) == {
+            "input_tokens": False,
+            "output_tokens": False,
+            "cached_input_tokens": False,
+            "total_tokens": False,
         }
 
     def test_request_without_token_usage_maps_no_block(self):

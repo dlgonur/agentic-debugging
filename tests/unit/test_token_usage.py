@@ -15,6 +15,8 @@ from agentic_debugger.agent.token_usage import (
     MAX_TOKEN_COUNT,
     TOKEN_USAGE_PAYLOAD_FIELDS,
     TokenUsage,
+    TokenUsageCoverage,
+    coverage_from_payload,
     usage_from_payload,
     usage_from_transport,
 )
@@ -202,3 +204,72 @@ class TestDurablePayloadValidation:
             "cached_input_tokens",
             "total_tokens",
         )
+
+
+class TestTokenUsageCoverage:
+    def test_default_coverage_is_all_complete(self):
+        cov = TokenUsageCoverage()
+        assert cov.input_tokens is True
+        assert cov.output_tokens is True
+        assert cov.cached_input_tokens is True
+        assert cov.total_tokens is True
+        assert cov.is_complete("input_tokens")
+        assert not cov.is_partial("input_tokens")
+        assert cov.to_payload() == {
+            "input_tokens": True,
+            "output_tokens": True,
+            "cached_input_tokens": True,
+            "total_tokens": True,
+        }
+
+    def test_partial_dimension_reporting(self):
+        cov = TokenUsageCoverage(input_tokens=True, cached_input_tokens=False, output_tokens=True, total_tokens=True)
+        assert cov.is_complete("input")
+        assert cov.is_partial("cached")
+        assert not cov.is_complete("cached")
+        assert cov.to_payload() == {
+            "input_tokens": True,
+            "output_tokens": True,
+            "cached_input_tokens": False,
+            "total_tokens": True,
+        }
+
+    def test_to_payload_filters_for_reported_fields(self):
+        cov = TokenUsageCoverage(input_tokens=False, output_tokens=False, cached_input_tokens=False, total_tokens=False)
+        assert cov.to_payload(for_fields={"input_tokens": 100, "total_tokens": 100}) == {
+            "input_tokens": False,
+            "total_tokens": False,
+        }
+
+    def test_coverage_rejects_non_boolean_values(self):
+        with pytest.raises(ValueError):
+            TokenUsageCoverage(input_tokens=1)  # type: ignore
+        with pytest.raises(ValueError):
+            TokenUsageCoverage(cached_input_tokens="true")  # type: ignore
+        with pytest.raises(ValueError):
+            TokenUsageCoverage(output_tokens=None)  # type: ignore
+
+    def test_coverage_from_payload_roundtrip(self):
+        payload = {"input_tokens": True, "cached_input_tokens": False, "output_tokens": True, "total_tokens": True}
+        usage_block = {"input_tokens": 220, "cached_input_tokens": 40, "output_tokens": 50, "total_tokens": 270}
+        cov = coverage_from_payload(payload, usage_block)
+        assert cov.input_tokens is True
+        assert cov.cached_input_tokens is False
+        assert cov.output_tokens is True
+        assert cov.total_tokens is True
+
+    @pytest.mark.parametrize(
+        "block,usage_block",
+        (
+            ({}, {"input_tokens": 10}),
+            ({"input_tokens": 1}, {"input_tokens": 10}),
+            ({"input_tokens": "true"}, {"input_tokens": 10}),
+            ({"unknown_field": True}, {"input_tokens": 10}),
+            ({"cached_input_tokens": True}, {"input_tokens": 10}),  # cached not in usage_block
+            ("not-a-mapping", {"input_tokens": 10}),
+        ),
+    )
+    def test_invalid_coverage_payloads_fail_closed(self, block, usage_block):
+        with pytest.raises(ValueError):
+            coverage_from_payload(block, usage_block)
+

@@ -32,15 +32,28 @@ state from the journal.
 
 Example: Input 10,000 · Cached 7,000 · Output 2,000 → Total 12,000.
 
-## Provider-reported only
+## Provider-reported only and lower-bound truth
 
 No local token estimation exists or is authorized for this feature. If a
 route does not report a dimension, that dimension stays unknown
 (`None` end-to-end, `—` in the UI); it is never silently converted to
-zero. A session where some completed request reported no usable usage
-preserves the known provider-reported subtotal/lower bound and is marked
-partial (`Tokens 31.8k (partial)`) rather than discarding known usage or
-claiming an exact complete total.
+zero.
+
+When a logical call spans multiple provider attempts (e.g., attempt 1
+reports token usage but a directive is rejected, and attempt 2 repairs the
+directive but lacks a usage block), known provider-reported consumption is
+never discarded. Instead, it is preserved as a truthful lower bound
+(`Input 100+ · Cached 40+ · Output 20+ · Total 120+`) and accompanied by a
+typed `token_usage_coverage` block specifying which dimensions are complete
+versus lower bounds.
+
+Coverage is tracked per-dimension across the session:
+- A dimension is complete only when reported and complete on every completed request.
+- Subtotals for partially reported dimensions survive as truthful lower bounds
+  and render with a trailing `+` indicator (e.g., `In 150+ · Cache 40+ · Out 30`).
+- Session-level total completeness requires all completed requests to carry
+  complete total coverage; otherwise, the session summary is truthfully marked
+  `Tokens 31.8k (partial)`.
 
 ## Value contract
 
@@ -52,23 +65,27 @@ completions, credentials, headers, endpoints, or request/response bodies;
 unknown provider payload is ignored at ingestion and rejected at the
 durable-event boundary, which also fails closed on non-integer/negative
 counts, unknown fields, `total != input + output`, and
-`cached > input`.
+`cached > input`. An accompanying `TokenUsageCoverage` value tracks
+per-dimension boolean completeness flags.
 
 ## Flow (one chain, no second telemetry system)
 
 provider adapter normalization (transport `usage` mapping)
 → `LiveModelAdapter` per-logical-call aggregation
-  (`last_request_token_usage()`; every provider-completed attempt counts,
-  including transport retries and directive repairs; transport failures
+  (`last_request_token_usage()` and `last_request_token_coverage()`; every
+  provider-completed attempt accumulates known consumption; partial logical
+  calls preserve lower bounds rather than discarding tokens; transport failures
   without a provider response contribute nothing and are never fabricated)
-→ `ControllerObservation.token_usage` (optional adapter seam; scripted
-  adapters legitimately report none)
+→ `ControllerObservation.token_usage` and `.token_usage_coverage` (optional
+  adapter seam; scripted adapters legitimately report none)
 → `ControllerSessionEventAdapter` → `model.request_completed` payload
-  (`token_usage` block, additive; historical events without usage remain
-  valid)
+  (`token_usage` and `token_usage_coverage` blocks, additive; historical events
+  without coverage default to complete for reported dimensions)
 → shared `reduce_event` reducer (`SessionViewState.token_usage`,
-  cumulative counts + coverage) → header/Live-pane rendering. Live and
-  replay use the same reducer, so they cannot diverge.
+  cumulative counts + dimension-specific completeness) → header/Live-pane rendering.
+  Live and replay use the same reducer, so they cannot diverge.
+→ `LiveModelMetrics.usage()` consumes canonical token semantics (`usage.canonical()`),
+  ensuring `Total = Input + Output` whenever Input and Output are known.
 
 ## Provider normalization notes
 

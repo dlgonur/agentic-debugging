@@ -646,11 +646,14 @@ def _token_usage_detail(payload: Mapping[str, Any]) -> Optional[str]:
     Unknown dimensions are omitted rather than rendered as fake zeroes;
     a request with no usage block produces no detail at all.  Counts are
     the durable event's validated provider-reported values — never
-    locally estimated.
+    locally estimated.  Partial/lower-bound dimensions carry the truthful
+    '+' indicator.
     """
     usage = payload.get("token_usage")
     if not isinstance(usage, Mapping):
         return None
+    coverage = payload.get("token_usage_coverage")
+    cov_map = coverage if isinstance(coverage, Mapping) else {}
     parts: list[str] = []
     for label, field in (
         ("Input", "input_tokens"),
@@ -660,7 +663,8 @@ def _token_usage_detail(payload: Mapping[str, Any]) -> Optional[str]:
     ):
         count = usage.get(field)
         if type(count) is int:
-            parts.append(f"{label} {count:,}")
+            suffix = "+" if cov_map.get(field) is False else ""
+            parts.append(f"{label} {count:,}{suffix}")
     return " · ".join(parts) if parts else None
 
 

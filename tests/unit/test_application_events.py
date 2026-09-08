@@ -141,6 +141,51 @@ class TestSessionEventSchema:
             make_event_mapping(SessionEventKind.MODEL_REQUEST_COMPLETED, payload)
         )
         assert "token_usage" not in event.payload
+        assert "token_usage_coverage" not in event.payload
+
+    def test_model_request_token_usage_coverage_round_trips(self):
+        payload = {
+            "request_index": 0,
+            "status": "ok",
+            "token_usage": {
+                "input_tokens": 100,
+                "cached_input_tokens": 40,
+                "output_tokens": 20,
+                "total_tokens": 120,
+            },
+            "token_usage_coverage": {
+                "input_tokens": False,
+                "cached_input_tokens": False,
+                "output_tokens": False,
+                "total_tokens": False,
+            },
+        }
+        event = SessionEvent.from_mapping(
+            make_event_mapping(SessionEventKind.MODEL_REQUEST_COMPLETED, payload)
+        )
+        assert event.to_mapping()["payload"] == payload
+        back = SessionEvent.from_mapping(event.to_mapping())
+        assert back == event
+
+    @pytest.mark.parametrize(
+        "coverage,usage",
+        (
+            ({"input_tokens": True}, None),  # coverage without usage fails
+            ({"input_tokens": 1}, {"input_tokens": 100}),  # non-bool
+            ({"input_tokens": "true"}, {"input_tokens": 100}),  # string
+            ({"cached_input_tokens": False}, {"input_tokens": 100}),  # not in token_usage
+            ({"unknown_field": False}, {"input_tokens": 100}),  # unknown
+        ),
+    )
+    def test_invalid_token_usage_coverage_fails_closed(self, coverage, usage):
+        payload = {"request_index": 0, "status": "ok"}
+        if usage is not None:
+            payload["token_usage"] = usage
+        payload["token_usage_coverage"] = coverage
+        with pytest.raises(SchemaValidationError):
+            SessionEvent.from_mapping(
+                make_event_mapping(SessionEventKind.MODEL_REQUEST_COMPLETED, payload)
+            )
 
     @pytest.mark.parametrize(
         "usage",

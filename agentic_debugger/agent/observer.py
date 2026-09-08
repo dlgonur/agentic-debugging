@@ -44,7 +44,7 @@ from enum import Enum
 from typing import Optional, Protocol
 
 from agentic_debugger.agent.state_machine import ControllerState
-from agentic_debugger.agent.token_usage import TokenUsage
+from agentic_debugger.agent.token_usage import TokenUsage, TokenUsageCoverage
 from agentic_debugger.events.schema import ObservationStatus
 
 
@@ -168,6 +168,7 @@ class ControllerObservation:
     #: state, never a zero claim.  Scripted/offline adapters never
     #: fabricate it.
     token_usage: Optional[TokenUsage] = None
+    token_usage_coverage: Optional[TokenUsageCoverage] = None
 
     def __post_init__(self) -> None:
         if type(self.kind) is not ControllerObservationKind:
@@ -232,6 +233,11 @@ class ControllerObservation:
         )
         if self.token_usage is not None and type(self.token_usage) is not TokenUsage:
             raise _invalid("token_usage")
+        if (
+            self.token_usage_coverage is not None
+            and type(self.token_usage_coverage) is not TokenUsageCoverage
+        ):
+            raise _invalid("token_usage_coverage")
 
 
 class ControllerObserver(Protocol):

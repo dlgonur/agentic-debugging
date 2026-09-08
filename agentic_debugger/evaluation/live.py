@@ -22,7 +22,11 @@ from agentic_debugger.agent.controller_policy import (
     decide_pdb_access,
 )
 from agentic_debugger.agent.model_adapter import ActionDirective, AddHypothesisDirective, ControllerSnapshot, ModelAdapterError, ModelDirective, ReviseHypothesisDirective, SetHypothesisStatusDirective, TransitionDirective
-from agentic_debugger.agent.token_usage import TokenUsage, usage_from_transport
+from agentic_debugger.agent.token_usage import (
+    TokenUsage,
+    TokenUsageCoverage,
+    usage_from_transport,
+)
 from agentic_debugger.agent.state_machine import ControllerState, TRANSITION_GRAPH
 from agentic_debugger.agent.trajectory import project_controller_run
 from agentic_debugger.agent.observer import (
@@ -598,19 +602,31 @@ class LiveModelMetrics:
         if category not in self.directive_rejection_categories: self.directive_rejection_categories.append(category)
     def directive_repair(self):
         self.directive_repairs+=1
-    def usage(self,value):
+    def usage(self, value):
         # Session-cumulative provider-reported usage (the accepted evaluation
         # usage authority).  Normalization, per-dimension unknownness, and
         # the counts-only safety contract live in ``agent.token_usage``.
-        usage=usage_from_transport(value)
-        fields=(("prompt_tokens",usage.input_tokens),("completion_tokens",usage.output_tokens),("total_tokens",usage.total_tokens),("cached_input_tokens",usage.cached_input_tokens),("cache_write_input_tokens",usage.cache_write_input_tokens))
-        if not isinstance(value,Mapping):
-            self.usage_missing_fields.extend(x for x in dict(fields) if x not in self.usage_missing_fields); return
-        self.usage_reported=True
-        for name,number in fields:
+        raw_usage = usage_from_transport(value)
+        usage = raw_usage.canonical()
+        fields = (
+            ("prompt_tokens", usage.input_tokens),
+            ("completion_tokens", usage.output_tokens),
+            ("total_tokens", usage.total_tokens),
+            ("cached_input_tokens", usage.cached_input_tokens),
+            ("cache_write_input_tokens", usage.cache_write_input_tokens),
+        )
+        if not isinstance(value, Mapping):
+            self.usage_missing_fields.extend(
+                x for x in dict(fields) if x not in self.usage_missing_fields
+            )
+            return
+        self.usage_reported = True
+        for name, number in fields:
             if number is not None:
-                old=getattr(self,name); setattr(self,name,number if old is None else old+number)
-            elif name not in self.usage_missing_fields: self.usage_missing_fields.append(name)
+                old = getattr(self, name)
+                setattr(self, name, number if old is None else old + number)
+            elif name not in self.usage_missing_fields:
+                self.usage_missing_fields.append(name)
     def activity(self,value):
         if not isinstance(value,Mapping): return
         for source,target in (("stream_frame_count","stream_frame_count"),("thinking_bytes","thinking_bytes"),("content_bytes","action_content_bytes")):
@@ -627,38 +643,141 @@ class _LogicalRequestUsage:
     repairs) and attempts followed by transport retries: each reported
     response consumed real tokens.  Transport attempts that failed
     without a provider-completed response contribute nothing and never
-    receive fabricated counts.  A provider-completed response that omits
-    a dimension leaves that dimension unknown (``None``) for the whole
-    logical call; unknown is never treated as a zero contribution.
+    receive fabricated counts.
+
+    Known consumption survives as a truthful lower bound when a
+    provider-completed attempt omits usage or a dimension: counts are
+    never discarded or falsely treated as zero, and incomplete dimensions
+    are marked partial.
     """
 
-    __slots__=("_total","_reported")
+    __slots__ = (
+        "_completed_attempts",
+        "_reported_attempts",
+        "_accum_input",
+        "_accum_output",
+        "_accum_cached",
+        "_accum_total",
+        "_accum_cache_write",
+        "_attempts_with_input",
+        "_attempts_with_output",
+        "_attempts_with_cached",
+        "_attempts_with_total",
+    )
 
-    def __init__(self):
-        self._total: TokenUsage|None=None
-        self._reported=False
+    def __init__(self) -> None:
+        self._completed_attempts = 0
+        self._reported_attempts = 0
+        self._accum_input: int | None = None
+        self._accum_output: int | None = None
+        self._accum_cached: int | None = None
+        self._accum_total: int | None = None
+        self._accum_cache_write: int | None = None
+        self._attempts_with_input = 0
+        self._attempts_with_output = 0
+        self._attempts_with_cached = 0
+        self._attempts_with_total = 0
 
-    def add_provider_response(self,value):
-        usage=usage_from_transport(value)
-        if isinstance(value,Mapping):
-            self._reported=True
-        # The first reported response seeds the sum; later responses merge
-        # with unknown propagation (an omitted dimension poisons the sum
-        # for the whole logical call, never a zero contribution).
-        self._total=usage if self._total is None else self._total.added(usage)
+    def add_provider_response(self, value: Any) -> None:
+        self._completed_attempts += 1
+        if not isinstance(value, Mapping):
+            return
+        self._reported_attempts += 1
+        raw_usage = usage_from_transport(value)
+        usage = raw_usage.canonical()
 
-    def build(self)->TokenUsage|None:
-        """Canonical usage of the logical call, or ``None`` when unusable.
+        if usage.input_tokens is not None:
+            self._accum_input = (
+                usage.input_tokens
+                if self._accum_input is None
+                else self._accum_input + usage.input_tokens
+            )
+            self._attempts_with_input += 1
 
-        ``None`` means no provider-completed attempt reported any usable
-        dimension, or every reported dimension was poisoned to unknown by
-        a completed response that omitted it; either way no usage block
-        may be claimed for the request.
-        """
-        if not self._reported or self._total is None:
+        if usage.output_tokens is not None:
+            self._accum_output = (
+                usage.output_tokens
+                if self._accum_output is None
+                else self._accum_output + usage.output_tokens
+            )
+            self._attempts_with_output += 1
+
+        if usage.cached_input_tokens is not None:
+            self._accum_cached = (
+                usage.cached_input_tokens
+                if self._accum_cached is None
+                else self._accum_cached + usage.cached_input_tokens
+            )
+            self._attempts_with_cached += 1
+
+        if usage.total_tokens is not None:
+            self._accum_total = (
+                usage.total_tokens
+                if self._accum_total is None
+                else self._accum_total + usage.total_tokens
+            )
+            self._attempts_with_total += 1
+
+        if usage.cache_write_input_tokens is not None:
+            self._accum_cache_write = (
+                usage.cache_write_input_tokens
+                if self._accum_cache_write is None
+                else self._accum_cache_write + usage.cache_write_input_tokens
+            )
+
+    def build(self) -> TokenUsage | None:
+        """Canonical usage of the logical call, or None when no attempt reported usage."""
+        if self._reported_attempts == 0:
             return None
-        usage=self._total.canonical()
-        return usage if usage.reported else None
+        total = self._accum_total
+        if self._accum_input is not None and self._accum_output is not None:
+            total = self._accum_input + self._accum_output
+        raw = TokenUsage(
+            input_tokens=self._accum_input,
+            output_tokens=self._accum_output,
+            cached_input_tokens=self._accum_cached,
+            total_tokens=total,
+            cache_write_input_tokens=self._accum_cache_write,
+        )
+        canonical = raw.canonical()
+        return canonical if canonical.reported else None
+
+    def build_coverage(self) -> TokenUsageCoverage | None:
+        """Per-dimension completeness truth for the logical call."""
+        usage = self.build()
+        if usage is None:
+            return None
+        completed = max(self._completed_attempts, 1)
+
+        input_complete = (
+            self._attempts_with_input == completed
+            if usage.input_tokens is not None
+            else True
+        )
+        output_complete = (
+            self._attempts_with_output == completed
+            if usage.output_tokens is not None
+            else True
+        )
+        cached_complete = (
+            self._attempts_with_cached == completed
+            if usage.cached_input_tokens is not None
+            else True
+        )
+
+        if usage.input_tokens is not None and usage.output_tokens is not None:
+            total_complete = input_complete and output_complete
+        elif usage.total_tokens is not None:
+            total_complete = self._attempts_with_total == completed
+        else:
+            total_complete = True
+
+        return TokenUsageCoverage(
+            input_tokens=input_complete,
+            output_tokens=output_complete,
+            cached_input_tokens=cached_complete,
+            total_tokens=total_complete,
+        )
 
 def _rejected(category: "DirectiveRejectionCategory", detail: str = "", *, stage: str | None = None, reason_code: str | None = None, content: str | None = None) -> LiveModelAdapterError:
     return LiveModelAdapterError("invalid model directive", category=category, detail=detail, stage=stage, reason_code=reason_code, content=content, directive_rejection=True)
@@ -2495,6 +2614,15 @@ class LiveModelAdapter:
         was reported; it is never a zero claim.
         """
         return self._call_usage.build() if self._call_usage is not None else None
+
+    def last_request_token_coverage(self) -> TokenUsageCoverage | None:
+        """Provider-reported usage coverage of the most recent logical model call.
+
+        Optional adapter seam consumed by the controller alongside token usage.
+        Indicates whether reported dimensions have complete coverage across all
+        provider-completed attempts or are truthful lower bounds.
+        """
+        return self._call_usage.build_coverage() if self._call_usage is not None else None
 
     def _remaining(self):
         left=self.limits.max_model_phase_seconds-self.model_phase_elapsed_seconds
