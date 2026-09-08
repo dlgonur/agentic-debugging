@@ -569,13 +569,6 @@ def _fold_request_usage(
     block = payload.get("token_usage")
     if not isinstance(block, Mapping):
         return state._fold(None)
-    try:
-        usage = usage_from_payload(block)
-    except ValueError:
-        # Defensive only: journal events were already schema-validated at
-        # write time; an unusable block degrades to no-usage coverage
-        # rather than failing the reduction.
-        return state._fold(None)
     cov_block = payload.get("token_usage_coverage")
     coverage = None
     if isinstance(cov_block, Mapping):
@@ -583,6 +576,13 @@ def _fold_request_usage(
             coverage = coverage_from_payload(cov_block, block)
         except ValueError:
             coverage = None
+    try:
+        usage = usage_from_payload(block, coverage=coverage)
+    except ValueError:
+        # Defensive only: journal events were already schema-validated at
+        # write time; an unusable block degrades to no-usage coverage
+        # rather than failing the reduction.
+        return state._fold(None)
     return state._fold(usage, coverage)
 
 

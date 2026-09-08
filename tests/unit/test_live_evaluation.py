@@ -1776,6 +1776,143 @@ def test_live_model_metrics_canonical_total():
     assert metrics.to_mapping()["token_usage"]["total_tokens"] == 120
 
 
+def test_logical_request_token_usage_exact_total_with_partial_components():
+    """F5 / Regression A & B: Attempt 1 (100/20/120) + Attempt 2 (Total 150 only) -> 100+, 20+, 270 exact."""
+    task = DebugTask.from_mapping(json.loads((ROOT / "agentic_debugger/datasets/curated" / TASK_ID / "task.json").read_text()))
+    captured = []
+
+    class ExactTotalWithPartialComponentsTransport:
+        def request(self, payload, timeout_seconds):
+            captured.append(payload)
+            if len(captured) == 1:
+                return {
+                    "usage": {"prompt_tokens": 100, "completion_tokens": 20, "total_tokens": 120},
+                    "directive": {"kind": "transition", "target_state": "NotAState", "reason": "rejected"},
+                }
+            return {
+                "usage": {"total_tokens": 150},
+                "directive": {"kind": "transition", "target_state": "Failed", "reason": "recovered"},
+            }
+
+    from agentic_debugger.agent.controller_policy import ControllerBudgetLimits, ControllerBudgetState, HypothesisLedger
+    from agentic_debugger.agent.model_adapter import ControllerSnapshot
+
+    adapter = LiveModelAdapter(
+        task=task,
+        policy=DemoPolicy.STATIC_BASELINE,
+        config=config(),
+        transport=ExactTotalWithPartialComponentsTransport(),
+        limits=LiveRunLimits(max_model_requests=2, max_retries=0, max_directive_repairs=1),
+        registry=_test_live_registry(),
+    )
+    limits = ControllerBudgetLimits.from_task_constraints(task.constraints)
+    directive = adapter.next_directive(
+        ControllerSnapshot("exact-total-run", task.task_id, ControllerState.REPRODUCE, 0, limits, ControllerBudgetState(), HypothesisLedger())
+    )
+    assert directive.target_state is ControllerState.FAILED
+
+    usage = adapter.last_request_token_usage()
+    assert usage is not None
+    assert usage.input_tokens == 100
+    assert usage.output_tokens == 20
+    assert usage.total_tokens == 270
+
+    coverage = adapter.last_request_token_coverage()
+    assert coverage is not None
+    assert coverage.input_tokens is False
+    assert coverage.output_tokens is False
+    assert coverage.total_tokens is True
+
+    # Regression B: Metrics and durable request Total agree on 270
+    assert adapter.metrics.total_tokens == 270
+    assert adapter.metrics.total_tokens == usage.total_tokens
+
+    # Controller execution and observation propagation
+    from agentic_debugger.agent.controller import DeterministicController
+    from agentic_debugger.agent.observer import ControllerObservationKind
+    observations = []
+
+    class Observer:
+        def notify(self, obs):
+            observations.append(obs)
+
+    captured.clear()
+    registry = _test_live_registry()
+    adapter2 = LiveModelAdapter(
+        task=task,
+        policy=DemoPolicy.STATIC_BASELINE,
+        config=config(),
+        transport=ExactTotalWithPartialComponentsTransport(),
+        limits=LiveRunLimits(max_model_requests=2, max_retries=0, max_directive_repairs=1),
+        registry=registry,
+    )
+    controller = DeterministicController(registry=registry, model_adapter=adapter2, observer=Observer())
+    snapshot = ControllerSnapshot("r2", task.task_id, ControllerState.REPRODUCE, 0, limits, ControllerBudgetState(), HypothesisLedger())
+    controller.run(snapshot)
+    req_completed = [o for o in observations if o.kind is ControllerObservationKind.MODEL_REQUEST_COMPLETED]
+    assert len(req_completed) == 1
+    assert req_completed[0].token_usage is not None
+    assert req_completed[0].token_usage.total_tokens == 270
+    assert req_completed[0].token_usage.input_tokens == 100
+    assert req_completed[0].token_usage.output_tokens == 20
+    assert req_completed[0].token_usage_coverage is not None
+    assert req_completed[0].token_usage_coverage.input_tokens is False
+    assert req_completed[0].token_usage_coverage.output_tokens is False
+    assert req_completed[0].token_usage_coverage.total_tokens is True
+    assert req_completed[0].token_usage.to_payload(coverage=req_completed[0].token_usage_coverage) == {
+        "input_tokens": 100,
+        "output_tokens": 20,
+        "total_tokens": 270,
+    }
+
+
+def test_logical_request_token_usage_component_only_total_lower_bound():
+    """Regression F: Attempt 1 (Input 100 only), Attempt 2 (usage absent) retains Total >= 100 partial."""
+    task = DebugTask.from_mapping(json.loads((ROOT / "agentic_debugger/datasets/curated" / TASK_ID / "task.json").read_text()))
+    captured = []
+
+    class ComponentOnlyTransport:
+        def request(self, payload, timeout_seconds):
+            captured.append(payload)
+            if len(captured) == 1:
+                return {
+                    "usage": {"prompt_tokens": 100},
+                    "directive": {"kind": "transition", "target_state": "NotAState", "reason": "rejected"},
+                }
+            return {
+                "directive": {"kind": "transition", "target_state": "Failed", "reason": "recovered"},
+            }
+
+    from agentic_debugger.agent.controller_policy import ControllerBudgetLimits, ControllerBudgetState, HypothesisLedger
+    from agentic_debugger.agent.model_adapter import ControllerSnapshot
+
+    adapter = LiveModelAdapter(
+        task=task,
+        policy=DemoPolicy.STATIC_BASELINE,
+        config=config(),
+        transport=ComponentOnlyTransport(),
+        limits=LiveRunLimits(max_model_requests=2, max_retries=0, max_directive_repairs=1),
+        registry=_test_live_registry(),
+    )
+    limits = ControllerBudgetLimits.from_task_constraints(task.constraints)
+    directive = adapter.next_directive(
+        ControllerSnapshot("comp-only-run", task.task_id, ControllerState.REPRODUCE, 0, limits, ControllerBudgetState(), HypothesisLedger())
+    )
+    assert directive.target_state is ControllerState.FAILED
+
+    usage = adapter.last_request_token_usage()
+    assert usage is not None
+    assert usage.input_tokens == 100
+    assert usage.output_tokens is None  # Does not fabricate output
+    assert usage.total_tokens == 100  # Truthful lower bound
+
+    coverage = adapter.last_request_token_coverage()
+    assert coverage is not None
+    assert coverage.input_tokens is False
+    assert coverage.total_tokens is False  # Does not claim lower bound is exact
+
+
+
 def test_logical_request_usage_resets_between_calls_and_survives_failure():
     task = DebugTask.from_mapping(json.loads((ROOT / "agentic_debugger/datasets/curated" / TASK_ID / "task.json").read_text()))
     calls = []

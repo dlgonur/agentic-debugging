@@ -108,25 +108,58 @@ class TokenUsage:
         """True when at least one dimension is known."""
         return any(getattr(self, name) is not None for name in _ALL_DIMENSIONS)
 
-    def canonical(self) -> "TokenUsage":
+    def canonical(
+        self, coverage: Optional["TokenUsageCoverage"] = None
+    ) -> "TokenUsage":
         """Return the canonical, event-ready usage value.
 
-        ``total_tokens`` is *defined* as input + output: when both are
+        When coverage is None (or both input and output are complete),
+        ``total_tokens`` is defined as input + output: when both are
         known, the canonical total is that sum and a disagreeing provider
-        total cannot be represented under this contract.  A cached count
-        exceeding the input count cannot be a subset of input and becomes
-        unknown rather than being clamped (clamping would fabricate a
-        count the provider did not report).
+        total cannot be represented under this contract.
+
+        When coverage indicates partial input or output, the exact total
+        (or truthful lower bound) is preserved, provided it is not less
+        than the sum of known component lower bounds.
+
+        Cached input tokens cannot exceed input tokens when input is
+        complete; when input is partial, cached tokens may exceed the
+        partial input subtotal.
         """
         usage = self
-        if (
-            usage.cached_input_tokens is not None
-            and usage.input_tokens is not None
-            and usage.cached_input_tokens > usage.input_tokens
-        ):
-            usage = replace(usage, cached_input_tokens=None)
-        if usage.input_tokens is not None and usage.output_tokens is not None:
-            usage = replace(usage, total_tokens=usage.input_tokens + usage.output_tokens)
+        if coverage is None:
+            if (
+                usage.cached_input_tokens is not None
+                and usage.input_tokens is not None
+                and usage.cached_input_tokens > usage.input_tokens
+            ):
+                usage = replace(usage, cached_input_tokens=None)
+            if usage.input_tokens is not None and usage.output_tokens is not None:
+                usage = replace(usage, total_tokens=usage.input_tokens + usage.output_tokens)
+            return usage
+
+        input_complete = coverage.is_complete("input_tokens")
+        output_complete = coverage.is_complete("output_tokens")
+
+        if input_complete:
+            if (
+                usage.cached_input_tokens is not None
+                and usage.input_tokens is not None
+                and usage.cached_input_tokens > usage.input_tokens
+            ):
+                usage = replace(usage, cached_input_tokens=None)
+
+        if input_complete and output_complete:
+            if usage.input_tokens is not None and usage.output_tokens is not None:
+                usage = replace(usage, total_tokens=usage.input_tokens + usage.output_tokens)
+        else:
+            min_components = (usage.input_tokens or 0) + (usage.output_tokens or 0)
+            if usage.total_tokens is not None:
+                if usage.total_tokens < min_components:
+                    usage = replace(usage, total_tokens=min_components)
+            elif usage.input_tokens is not None or usage.output_tokens is not None:
+                usage = replace(usage, total_tokens=min_components)
+
         return usage
 
     def added(self, other: "TokenUsage") -> "TokenUsage":
@@ -151,9 +184,11 @@ class TokenUsage:
             ),
         )
 
-    def to_payload(self) -> dict[str, int]:
+    def to_payload(
+        self, coverage: Optional["TokenUsageCoverage"] = None
+    ) -> dict[str, int]:
         """Canonical durable-event block: counts only, known fields only."""
-        canonical = self.canonical()
+        canonical = self.canonical(coverage=coverage)
         return {
             field: getattr(canonical, field)
             for field in TOKEN_USAGE_PAYLOAD_FIELDS
@@ -182,16 +217,111 @@ def usage_from_transport(value: Any) -> TokenUsage:
     )
 
 
-def usage_from_payload(value: Any) -> TokenUsage:
+def validate_usage_with_coverage(
+    usage: TokenUsage,
+    coverage: Optional["TokenUsageCoverage" | Mapping[str, Any]] = None,
+) -> TokenUsage:
+    """Validate a TokenUsage instance against its optional coverage authority.
+
+    Enforces coverage-aware cross-field rules:
+    - When coverage is None (historical / no-coverage):
+      - ``total_tokens == input_tokens + output_tokens`` when all three exist.
+      - ``cached_input_tokens <= input_tokens`` when both exist.
+      - ``total_tokens >= (input_tokens or 0) + (output_tokens or 0)`` when total exists.
+    - When coverage is present:
+      - ``total_tokens >= (input_tokens or 0) + (output_tokens or 0)`` when total exists.
+      - If input and output are both complete, ``total_tokens == input_tokens + output_tokens``
+        when all three exist.
+      - If input is complete, ``cached_input_tokens <= input_tokens`` when both exist.
+      - If input is partial, cached tokens may exceed the partial input lower bound.
+    """
+    min_components = (usage.input_tokens or 0) + (usage.output_tokens or 0)
+    if usage.total_tokens is not None and usage.total_tokens < min_components:
+        raise ValueError(
+            f"token usage total_tokens ({usage.total_tokens}) cannot be less than "
+            f"sum of known component lower bounds ({min_components})"
+        )
+
+    if coverage is not None:
+        usage_fields = {
+            f: getattr(usage, f)
+            for f in TOKEN_USAGE_PAYLOAD_FIELDS
+            if getattr(usage, f) is not None
+        }
+        cov = (
+            coverage_from_payload(coverage, usage_fields)
+            if isinstance(coverage, Mapping)
+            else coverage
+        )
+        if not isinstance(cov, TokenUsageCoverage):
+            raise ValueError("coverage must be a TokenUsageCoverage or mapping")
+
+        input_complete = cov.is_complete("input_tokens")
+        output_complete = cov.is_complete("output_tokens")
+
+        if input_complete and output_complete:
+            if (
+                usage.total_tokens is not None
+                and usage.input_tokens is not None
+                and usage.output_tokens is not None
+                and usage.total_tokens != usage.input_tokens + usage.output_tokens
+            ):
+                raise ValueError(
+                    "token usage total_tokens must equal input_tokens + output_tokens"
+                )
+
+        if input_complete:
+            if (
+                usage.cached_input_tokens is not None
+                and usage.input_tokens is not None
+                and usage.cached_input_tokens > usage.input_tokens
+            ):
+                raise ValueError(
+                    "token usage cached_input_tokens must not exceed input_tokens"
+                )
+    else:
+        if (
+            usage.total_tokens is not None
+            and usage.input_tokens is not None
+            and usage.output_tokens is not None
+            and usage.total_tokens != usage.input_tokens + usage.output_tokens
+        ):
+            raise ValueError(
+                "token usage total_tokens must equal input_tokens + output_tokens"
+            )
+        if (
+            usage.cached_input_tokens is not None
+            and usage.input_tokens is not None
+            and usage.cached_input_tokens > usage.input_tokens
+        ):
+            raise ValueError(
+                "token usage cached_input_tokens must not exceed input_tokens"
+            )
+
+    return usage
+
+
+def usage_from_payload(
+    value: Any,
+    coverage: Optional["TokenUsageCoverage" | Mapping[str, Any]] = None,
+) -> TokenUsage:
     """Strictly validate a durable ``token_usage`` payload block.
 
     Fails closed (raises ``ValueError``) on: non-mapping values, empty
     blocks, unknown fields, non-integer/negative/unbounded/bool counts,
-    and violated cross-field semantics (``total_tokens`` differing from
-    ``input_tokens + output_tokens`` when all three are present, or
-    ``cached_input_tokens`` exceeding ``input_tokens`` when both are
-    present).  No field is derived here: the durable block preserves
-    exactly what the producing boundary recorded.
+    and violated cross-field semantics.
+
+    Cross-field arithmetic is coverage-aware:
+    - Historical / no-coverage events: reported fields are treated as
+      exact (``total_tokens == input_tokens + output_tokens`` when all
+      three exist; ``cached_input_tokens <= input_tokens`` when both exist).
+    - With coverage:
+      - If input and output are complete, ``total_tokens == input_tokens + output_tokens``
+        is enforced.
+      - If input or output is partial, an exact total (or lower bound)
+        is valid provided ``total_tokens >= input_lower_bound + output_lower_bound``.
+      - If input is complete, ``cached_input_tokens <= input_tokens`` is enforced.
+      - If input is partial, cached tokens may exceed the partial input lower bound.
 
     Presence is detected via ``get`` rather than ``in`` because journal
     events freeze payloads into tuple-backed mappings whose tuple
@@ -214,24 +344,7 @@ def usage_from_payload(value: Any) -> TokenUsage:
     if not fields:
         raise ValueError("token usage block must report at least one dimension")
     usage = TokenUsage(**fields)
-    if (
-        usage.total_tokens is not None
-        and usage.input_tokens is not None
-        and usage.output_tokens is not None
-        and usage.total_tokens != usage.input_tokens + usage.output_tokens
-    ):
-        raise ValueError(
-            "token usage total_tokens must equal input_tokens + output_tokens"
-        )
-    if (
-        usage.cached_input_tokens is not None
-        and usage.input_tokens is not None
-        and usage.cached_input_tokens > usage.input_tokens
-    ):
-        raise ValueError(
-            "token usage cached_input_tokens must not exceed input_tokens"
-        )
-    return usage
+    return validate_usage_with_coverage(usage, coverage)
 
 
 @dataclass(frozen=True)
@@ -337,4 +450,5 @@ __all__ = [
     "coverage_from_payload",
     "usage_from_payload",
     "usage_from_transport",
+    "validate_usage_with_coverage",
 ]

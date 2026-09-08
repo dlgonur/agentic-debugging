@@ -24,6 +24,7 @@ from agentic_debugger.application.presentation import (
     reduce_event,
 )
 from agentic_debugger.agent.state_machine import ControllerState
+from agentic_debugger.ui.widgets import session_tokens_breakdown, session_tokens_summary
 from application_support import (
     VALID_PATCH_SHA256,
     VALID_PAYLOADS,
@@ -580,6 +581,56 @@ class TestSessionTokenUsageReduction:
         assert replay_view.token_usage == live_view.token_usage
         assert replay_view.token_usage.requests_complete_input == 1
         assert replay_view.token_usage.is_partial("input_tokens")
+
+    def test_reduction_exact_total_with_partial_components(self):
+        """F5 / Regression H: Session reduction and replay for exact total with partial components."""
+        events = (
+            _usage_event(
+                0,
+                {"input_tokens": 100, "output_tokens": 20, "total_tokens": 270},
+                sequence=3,
+                token_usage_coverage={
+                    "input_tokens": False,
+                    "output_tokens": False,
+                    "total_tokens": True,
+                },
+            ),
+        )
+        view = reduce_all(state_running(), events)
+        usage = view.token_usage
+        assert usage.requests_completed == 1
+        assert usage.requests_with_usage == 1
+        assert usage.input_tokens == 100
+        assert usage.output_tokens == 20
+        assert usage.total_tokens == 270
+        assert usage.total_complete is True
+        assert usage.is_partial("input_tokens") is True
+        assert usage.is_partial("output_tokens") is True
+        assert not usage.is_partial("total_tokens")
+        # Header summary has no (partial) because total is complete
+        assert session_tokens_summary(usage) == "Tokens 270"
+        # Breakdown has + on partial components
+        assert session_tokens_breakdown(usage) == "In 100+ · Out 20+"
+
+        # Replay parity
+        replay_events = []
+        for event in events:
+            mapping = event.to_mapping()
+            mapping["source_kind"] = SourceKind.SESSION_BUNDLE.value
+            replay_events.append(SessionEvent.from_mapping(mapping))
+        replay_view = reduce_all(
+            initial_session_view(
+                PresentationIdentity(
+                    task_id=VALID_TASK_ID,
+                    source_kind=SourceKind.SESSION_BUNDLE,
+                    session_id=VALID_SESSION_ID,
+                )
+            ),
+            tuple(replay_events),
+        )
+        assert replay_view.token_usage == view.token_usage
+        assert session_tokens_summary(replay_view.token_usage) == "Tokens 270"
+        assert session_tokens_breakdown(replay_view.token_usage) == "In 100+ · Out 20+"
 
 
 class TestPresentationIdentity:

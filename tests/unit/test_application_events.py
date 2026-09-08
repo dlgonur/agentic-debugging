@@ -167,6 +167,107 @@ class TestSessionEventSchema:
         back = SessionEvent.from_mapping(event.to_mapping())
         assert back == event
 
+    def test_model_request_coverage_aware_total_and_cached_validation(self):
+        # Regression G: Valid partial input/output with complete exact total
+        valid_payload = {
+            "request_index": 0,
+            "status": "ok",
+            "token_usage": {
+                "input_tokens": 100,
+                "output_tokens": 20,
+                "total_tokens": 270,
+            },
+            "token_usage_coverage": {
+                "input_tokens": False,
+                "output_tokens": False,
+                "total_tokens": True,
+            },
+        }
+        event = SessionEvent.from_mapping(
+            make_event_mapping(SessionEventKind.MODEL_REQUEST_COMPLETED, valid_payload)
+        )
+        assert event.to_mapping()["payload"] == valid_payload
+
+        # Regression G: Invalid total smaller than known component lower bounds
+        invalid_total_payload = {
+            "request_index": 0,
+            "status": "ok",
+            "token_usage": {
+                "input_tokens": 100,
+                "output_tokens": 20,
+                "total_tokens": 50,
+            },
+            "token_usage_coverage": {
+                "input_tokens": False,
+                "output_tokens": False,
+                "total_tokens": True,
+            },
+        }
+        with pytest.raises(SchemaValidationError):
+            SessionEvent.from_mapping(
+                make_event_mapping(SessionEventKind.MODEL_REQUEST_COMPLETED, invalid_total_payload)
+            )
+
+        # Regression G: Historical event without coverage requires exact equality
+        historical_invalid_payload = {
+            "request_index": 0,
+            "status": "ok",
+            "token_usage": {
+                "input_tokens": 100,
+                "output_tokens": 20,
+                "total_tokens": 270,
+            },
+        }
+        with pytest.raises(SchemaValidationError):
+            SessionEvent.from_mapping(
+                make_event_mapping(SessionEventKind.MODEL_REQUEST_COMPLETED, historical_invalid_payload)
+            )
+
+        # Cached > Input allowed when Input is partial
+        cached_partial_payload = {
+            "request_index": 0,
+            "status": "ok",
+            "token_usage": {
+                "input_tokens": 50,
+                "cached_input_tokens": 100,
+                "output_tokens": 20,
+                "total_tokens": 270,
+            },
+            "token_usage_coverage": {
+                "input_tokens": False,
+                "cached_input_tokens": False,
+                "output_tokens": True,
+                "total_tokens": True,
+            },
+        }
+        event_cached = SessionEvent.from_mapping(
+            make_event_mapping(SessionEventKind.MODEL_REQUEST_COMPLETED, cached_partial_payload)
+        )
+        assert event_cached.to_mapping()["payload"] == cached_partial_payload
+
+        # Cached > Input rejected when Input is complete
+        cached_complete_payload = {
+            "request_index": 0,
+            "status": "ok",
+            "token_usage": {
+                "input_tokens": 50,
+                "cached_input_tokens": 100,
+                "output_tokens": 20,
+                "total_tokens": 70,
+            },
+            "token_usage_coverage": {
+                "input_tokens": True,
+                "cached_input_tokens": False,
+                "output_tokens": True,
+                "total_tokens": True,
+            },
+        }
+        with pytest.raises(SchemaValidationError):
+            SessionEvent.from_mapping(
+                make_event_mapping(SessionEventKind.MODEL_REQUEST_COMPLETED, cached_complete_payload)
+            )
+
+
     @pytest.mark.parametrize(
         "coverage,usage",
         (

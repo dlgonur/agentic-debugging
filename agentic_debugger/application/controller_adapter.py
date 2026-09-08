@@ -444,7 +444,9 @@ class ControllerSessionEventAdapter(ControllerObserver):
                 # Canonical counts-only block from the typed observation
                 # value; an all-unknown usage carries no durable claim and
                 # is omitted rather than attached empty.
-                usage_block = observation.token_usage.to_payload()
+                usage_block = observation.token_usage.to_payload(
+                    coverage=observation.token_usage_coverage
+                )
                 if usage_block:
                     payload["token_usage"] = usage_block
                     if observation.token_usage_coverage is not None:

@@ -30,6 +30,7 @@ from agentic_debugger import SchemaValidationError
 from agentic_debugger.agent.state_machine import ControllerState
 from agentic_debugger.agent.token_usage import (
     TOKEN_USAGE_PAYLOAD_FIELDS,
+    TokenUsageCoverage,
     coverage_from_payload,
     usage_from_payload,
 )
@@ -1026,11 +1027,18 @@ def _payload_request_completed(payload: Mapping[str, Any]) -> dict[str, Any]:
     if "token_usage" in payload:
         # Optional provider-reported counts (additive v1 field): strict
         # non-negative integer dimensions, unknown-field rejection, and
-        # semantic consistency (total == input + output; cached <= input)
-        # where the fields are present.  Historical events without the
+        # coverage-aware semantic consistency. Historical events without the
         # block remain valid; nothing here is derived or defaulted.
+        coverage: Optional[TokenUsageCoverage] = None
+        if "token_usage_coverage" in payload:
+            try:
+                coverage = coverage_from_payload(payload["token_usage_coverage"], payload["token_usage"])
+            except ValueError as exc:
+                raise SchemaValidationError(
+                    f"model.request_completed token_usage_coverage is invalid: {exc}"
+                ) from None
         try:
-            usage_from_payload(payload["token_usage"])
+            usage_from_payload(payload["token_usage"], coverage=coverage)
         except ValueError as exc:
             raise SchemaValidationError(
                 f"model.request_completed token_usage is invalid: {exc}"
@@ -1041,23 +1049,17 @@ def _payload_request_completed(payload: Mapping[str, Any]) -> dict[str, Any]:
             for field in TOKEN_USAGE_PAYLOAD_FIELDS
             if field in block
         }
-    if "token_usage_coverage" in payload:
-        if "token_usage" not in payload:
-            raise SchemaValidationError(
-                "model.request_completed cannot carry token_usage_coverage without token_usage"
-            )
-        try:
-            coverage_from_payload(payload["token_usage_coverage"], payload["token_usage"])
-        except ValueError as exc:
-            raise SchemaValidationError(
-                f"model.request_completed token_usage_coverage is invalid: {exc}"
-            ) from None
-        cov_block = payload["token_usage_coverage"]
-        result["token_usage_coverage"] = {
-            field: cov_block[field]
-            for field in TOKEN_USAGE_PAYLOAD_FIELDS
-            if field in cov_block
-        }
+        if "token_usage_coverage" in payload:
+            cov_block = payload["token_usage_coverage"]
+            result["token_usage_coverage"] = {
+                field: cov_block[field]
+                for field in TOKEN_USAGE_PAYLOAD_FIELDS
+                if field in cov_block
+            }
+    elif "token_usage_coverage" in payload:
+        raise SchemaValidationError(
+            "model.request_completed cannot carry token_usage_coverage without token_usage"
+        )
     return result
 
 

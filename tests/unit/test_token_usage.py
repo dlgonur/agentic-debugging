@@ -19,6 +19,7 @@ from agentic_debugger.agent.token_usage import (
     coverage_from_payload,
     usage_from_payload,
     usage_from_transport,
+    validate_usage_with_coverage,
 )
 
 
@@ -272,4 +273,86 @@ class TestTokenUsageCoverage:
     def test_invalid_coverage_payloads_fail_closed(self, block, usage_block):
         with pytest.raises(ValueError):
             coverage_from_payload(block, usage_block)
+
+
+class TestCoverageAwareArithmetic:
+    def test_canonical_preserves_exact_total_with_partial_components(self):
+        # Regression A / F5: Attempt 1 (100/20/120) + Attempt 2 (Total 150 only) -> 100+, 20+, 270 exact
+        usage = TokenUsage(input_tokens=100, output_tokens=20, total_tokens=270)
+        cov = TokenUsageCoverage(input_tokens=False, output_tokens=False, total_tokens=True)
+        canonical = usage.canonical(coverage=cov)
+        assert canonical.input_tokens == 100
+        assert canonical.output_tokens == 20
+        assert canonical.total_tokens == 270
+        assert usage.to_payload(coverage=cov) == {
+            "input_tokens": 100,
+            "output_tokens": 20,
+            "total_tokens": 270,
+        }
+
+    def test_canonical_preserves_lower_bound_when_total_partial(self):
+        # Regression F: Attempt 1 (Input 100 only), Attempt 2 (usage absent)
+        usage = TokenUsage(input_tokens=100, total_tokens=100)
+        cov = TokenUsageCoverage(input_tokens=False, output_tokens=True, cached_input_tokens=True, total_tokens=False)
+        canonical = usage.canonical(coverage=cov)
+        assert canonical.input_tokens == 100
+        assert canonical.output_tokens is None
+        assert canonical.total_tokens == 100
+
+    def test_canonical_allows_cached_exceeding_input_when_input_partial(self):
+        usage = TokenUsage(input_tokens=50, cached_input_tokens=100, output_tokens=20, total_tokens=270)
+        cov = TokenUsageCoverage(input_tokens=False, cached_input_tokens=False, output_tokens=True, total_tokens=True)
+        canonical = usage.canonical(coverage=cov)
+        assert canonical.cached_input_tokens == 100
+        assert canonical.input_tokens == 50
+        assert canonical.total_tokens == 270
+
+    def test_canonical_discards_cached_exceeding_input_when_input_complete(self):
+        usage = TokenUsage(input_tokens=50, cached_input_tokens=100, output_tokens=20, total_tokens=70)
+        cov = TokenUsageCoverage(input_tokens=True, cached_input_tokens=False, output_tokens=True, total_tokens=True)
+        canonical = usage.canonical(coverage=cov)
+        assert canonical.cached_input_tokens is None
+        assert canonical.input_tokens == 50
+        assert canonical.total_tokens == 70
+
+    def test_usage_from_payload_coverage_aware_validation(self):
+        # Regression G: Valid partial input/output with complete total
+        valid_block = {"input_tokens": 100, "output_tokens": 20, "total_tokens": 270}
+        valid_cov = {"input_tokens": False, "output_tokens": False, "total_tokens": True}
+        usage = usage_from_payload(valid_block, coverage=valid_cov)
+        assert usage.input_tokens == 100
+        assert usage.output_tokens == 20
+        assert usage.total_tokens == 270
+
+        # Regression G: Invalid total smaller than known component lower bounds
+        invalid_block = {"input_tokens": 100, "output_tokens": 20, "total_tokens": 50}
+        with pytest.raises(ValueError, match="cannot be less than sum of known component lower bounds"):
+            usage_from_payload(invalid_block, coverage=valid_cov)
+
+        # Regression G: Historical event without coverage requires exact equality
+        with pytest.raises(ValueError, match="must equal input_tokens \\+ output_tokens"):
+            usage_from_payload(valid_block, coverage=None)
+
+        # Complete input and output requires exact equality
+        complete_cov = {"input_tokens": True, "output_tokens": True, "total_tokens": True}
+        with pytest.raises(ValueError, match="must equal input_tokens \\+ output_tokens"):
+            usage_from_payload(valid_block, coverage=complete_cov)
+
+    def test_usage_from_payload_cached_inequality_with_coverage(self):
+        # Cached > Input allowed when Input is partial
+        block = {"input_tokens": 50, "cached_input_tokens": 100, "output_tokens": 20, "total_tokens": 270}
+        cov_partial = {"input_tokens": False, "cached_input_tokens": False, "output_tokens": True, "total_tokens": True}
+        usage = usage_from_payload(block, coverage=cov_partial)
+        assert usage.cached_input_tokens == 100
+
+        # Cached > Input rejected when Input is complete
+        block_complete = {"input_tokens": 50, "cached_input_tokens": 100, "output_tokens": 20, "total_tokens": 70}
+        cov_complete = {"input_tokens": True, "cached_input_tokens": False, "output_tokens": True, "total_tokens": True}
+        with pytest.raises(ValueError, match="cached_input_tokens must not exceed input_tokens"):
+            usage_from_payload(block_complete, coverage=cov_complete)
+
+        # Cached > Input rejected in historical/no-coverage mode
+        with pytest.raises(ValueError, match="cached_input_tokens must not exceed input_tokens"):
+            usage_from_payload(block_complete, coverage=None)
+
 

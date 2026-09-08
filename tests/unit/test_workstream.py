@@ -550,6 +550,30 @@ class TestWorkstreamProjection:
         assert entry.status is WorkstreamStatus.COMPLETED
         assert entry.detail == "Input 100+ · Output 20 · Total 120+"
 
+    def test_model_request_usage_exact_total_with_partial_components(self) -> None:
+        stream = Stream()
+        stream.emit(SessionEventKind.MODEL_REQUEST_STARTED, {"request_index": 0})
+        stream.emit(
+            SessionEventKind.MODEL_REQUEST_COMPLETED,
+            {
+                "request_index": 0,
+                "status": "ok",
+                "token_usage": {
+                    "input_tokens": 100,
+                    "output_tokens": 20,
+                    "total_tokens": 270,
+                },
+                "token_usage_coverage": {
+                    "input_tokens": False,
+                    "output_tokens": False,
+                    "total_tokens": True,
+                },
+            },
+        )
+        entry = stream.view.workstream[-1]
+        assert entry.status is WorkstreamStatus.COMPLETED
+        assert entry.detail == "Input 100+ · Output 20+ · Total 270"
+
     def test_settled_model_requests_retained_in_chronological_order(self) -> None:
         stream = Stream()
         for index in range(6):

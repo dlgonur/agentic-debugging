@@ -123,6 +123,41 @@ class _PartialUsageTransport:
         }
 
 
+class _ExactTotalPartialComponentsTransport:
+    """Deterministic offline transport: attempt 1 reports 100/20/120 with rejected
+    directive; attempt 2 reports valid directive but only total_tokens=150."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def request(self, payload, timeout_seconds):
+        self.calls += 1
+        if self.calls == 1:
+            return {
+                "usage": {
+                    "prompt_tokens": 100,
+                    "completion_tokens": 20,
+                    "total_tokens": 120,
+                },
+                "directive": {
+                    "kind": "transition",
+                    "target_state": "InvalidNonExistentState",
+                    "reason": "bad state",
+                },
+            }
+        return {
+            "usage": {
+                "total_tokens": 150,
+            },
+            "directive": {
+                "kind": "transition",
+                "target_state": "Failed",
+                "reason": "bounded synthetic stop",
+            },
+        }
+
+
+
 def _run_synthetic_live_session(
     tmp_path: Path,
     transport=None,
@@ -348,3 +383,93 @@ def test_partial_logical_call_preserves_lower_bound_and_replay_parity(tmp_path):
 
     assert session_tokens_summary(usage) == "Tokens 120 (partial)"
     assert session_tokens_breakdown(usage) == "In 100+ · Cache 40+ · Out 20+"
+
+
+def test_session_token_usage_exact_total_with_partial_components(tmp_path):
+    """F5 / Regression H: Live session with exact total and partial components
+    flows through journal, reduces identically on replay, and verifies both
+    UI header summary ('Tokens 270') and workstream detail ('Input 100+ · Output 20+ · Total 270')."""
+    from agentic_debugger.agent.token_usage import TokenUsage
+    from agentic_debugger.application.workstream import _token_usage_detail
+
+    adapter, observer, result = _run_synthetic_live_session(
+        tmp_path,
+        transport=_ExactTotalPartialComponentsTransport(),
+        limits=LiveRunLimits(max_model_requests=2, max_retries=0, max_directive_repairs=1),
+        session_id="session-token-exact-total-001",
+        journal_name="session-token-exact-total.jsonl",
+    )
+    assert result.stop_reason is not None
+
+    # 1. Adapter produces exact total 270 with complete total coverage
+    assert adapter.last_request_token_usage() == TokenUsage(
+        input_tokens=100, output_tokens=20, total_tokens=270
+    )
+    coverage = adapter.last_request_token_coverage()
+    assert coverage is not None
+    assert not coverage.input_tokens
+    assert not coverage.output_tokens
+    assert coverage.total_tokens
+
+    # 2. Controller emitted MODEL_REQUEST_COMPLETED with exact total 270
+    live_events = observer.events()
+    completions = [
+        event
+        for event in live_events
+        if event.event_kind is SessionEventKind.MODEL_REQUEST_COMPLETED
+    ]
+    assert len(completions) == 1
+    assert dict(completions[0].payload["token_usage"]) == {
+        "input_tokens": 100,
+        "output_tokens": 20,
+        "total_tokens": 270,
+    }
+    assert dict(completions[0].payload["token_usage_coverage"]) == {
+        "input_tokens": False,
+        "output_tokens": False,
+        "total_tokens": True,
+    }
+
+    # Workstream detail from the completed event payload
+    detail = _token_usage_detail(completions[0].payload)
+    assert detail == "Input 100+ · Output 20+ · Total 270"
+
+    # 3. Journal serialization/deserialization preserves the event payload
+    read = read_session_journal(tmp_path / "session-token-exact-total.jsonl")
+    journal_completions = [
+        event
+        for event in read.events
+        if event.event_kind is SessionEventKind.MODEL_REQUEST_COMPLETED
+    ]
+    assert len(journal_completions) == 1
+    assert journal_completions[0].to_mapping()["payload"] == completions[0].to_mapping()["payload"]
+
+    # 4. Live and replayed views match identically
+    identity = PresentationIdentity(
+        task_id=TASK_ID,
+        source_kind=SourceKind.CONFIGURED_MODEL,
+        session_id="session-token-exact-total-001",
+    )
+    view = initial_session_view(identity)
+    for event in read.events:
+        view = reduce_event(view, event)
+
+    usage = view.token_usage
+    assert usage.requests_completed == 1
+    assert usage.requests_with_usage == 1
+    assert usage.input_tokens == 100
+    assert usage.output_tokens == 20
+    assert usage.total_tokens == 270
+    assert usage.requests_complete_input == 0
+    assert usage.requests_complete_output == 0
+    assert usage.requests_complete_total == 1
+    assert usage.is_partial("input_tokens")
+    assert usage.is_partial("output_tokens")
+    assert not usage.is_partial("total_tokens")
+    assert usage.total_complete
+
+    # 5. UI widgets: header summary has no (partial); breakdown has + on partials
+    assert session_tokens_summary(usage) == "Tokens 270"
+    assert session_tokens_breakdown(usage) == "In 100+ · Out 20+"
+
+

@@ -606,25 +606,74 @@ class LiveModelMetrics:
         # Session-cumulative provider-reported usage (the accepted evaluation
         # usage authority).  Normalization, per-dimension unknownness, and
         # the counts-only safety contract live in ``agent.token_usage``.
-        raw_usage = usage_from_transport(value)
-        usage = raw_usage.canonical()
         fields = (
-            ("prompt_tokens", usage.input_tokens),
-            ("completion_tokens", usage.output_tokens),
-            ("total_tokens", usage.total_tokens),
-            ("cached_input_tokens", usage.cached_input_tokens),
-            ("cache_write_input_tokens", usage.cache_write_input_tokens),
+            "prompt_tokens",
+            "completion_tokens",
+            "total_tokens",
+            "cached_input_tokens",
+            "cache_write_input_tokens",
         )
         if not isinstance(value, Mapping):
             self.usage_missing_fields.extend(
-                x for x in dict(fields) if x not in self.usage_missing_fields
+                x for x in fields if x not in self.usage_missing_fields
             )
             return
+
+        raw_usage = usage_from_transport(value)
+        if not raw_usage.reported:
+            self.usage_missing_fields.extend(
+                x for x in fields if x not in self.usage_missing_fields
+            )
+            return
+
         self.usage_reported = True
-        for name, number in fields:
+
+        in_tok = raw_usage.input_tokens
+        out_tok = raw_usage.output_tokens
+        cached_tok = raw_usage.cached_input_tokens
+        write_tok = raw_usage.cache_write_input_tokens
+        tot_tok = raw_usage.total_tokens
+
+        # For a single attempt, cached cannot exceed input:
+        if cached_tok is not None and in_tok is not None and cached_tok > in_tok:
+            cached_tok = None
+
+        # Determine attempt total and completeness under per-attempt authority:
+        # Rule 1: If valid Input and Output are both known, exact attempt Total = Input + Output
+        if in_tok is not None and out_tok is not None:
+            attempt_total = in_tok + out_tok
+            attempt_total_is_exact = True
+        # Rule 2: Else if a valid provider Total is reported
+        elif tot_tok is not None and tot_tok >= (in_tok or 0) + (out_tok or 0):
+            attempt_total = tot_tok
+            attempt_total_is_exact = True
+        # Rule 3: Else exact Total is unknown, preserve truthful lower bound from components
+        else:
+            attempt_total = (
+                (in_tok or 0) + (out_tok or 0)
+                if (in_tok is not None or out_tok is not None)
+                else None
+            )
+            attempt_total_is_exact = False
+
+        attempt_fields = (
+            ("prompt_tokens", in_tok),
+            ("completion_tokens", out_tok),
+            ("total_tokens", attempt_total),
+            ("cached_input_tokens", cached_tok),
+            ("cache_write_input_tokens", write_tok),
+        )
+
+        for name, number in attempt_fields:
             if number is not None:
                 old = getattr(self, name)
                 setattr(self, name, number if old is None else old + number)
+                if (
+                    name == "total_tokens"
+                    and not attempt_total_is_exact
+                    and name not in self.usage_missing_fields
+                ):
+                    self.usage_missing_fields.append(name)
             elif name not in self.usage_missing_fields:
                 self.usage_missing_fields.append(name)
     def activity(self,value):
@@ -645,10 +694,19 @@ class _LogicalRequestUsage:
     without a provider-completed response contribute nothing and never
     receive fabricated counts.
 
-    Known consumption survives as a truthful lower bound when a
-    provider-completed attempt omits usage or a dimension: counts are
-    never discarded or falsely treated as zero, and incomplete dimensions
-    are marked partial.
+    Each attempt is evaluated under its own canonical truth first:
+    1. If valid Input and Output are both known, exact attempt Total =
+       Input + Output (overriding conflicting raw provider Total).
+    2. Else if a valid provider Total is reported (and >= known
+       component lower bounds), exact attempt Total = that reported Total.
+    3. Else exact Total is unknown, preserving any truthful lower bound
+       from reported Input/Output.
+
+    Across attempts, attempt totals and lower bounds accumulate:
+    - Logical Total is COMPLETE only if every provider-completed attempt
+      had a complete exact total.
+    - If any completed attempt lacked exact total, logical Total retains
+      the truthful lower bound and is marked partial.
     """
 
     __slots__ = (
@@ -657,12 +715,13 @@ class _LogicalRequestUsage:
         "_accum_input",
         "_accum_output",
         "_accum_cached",
-        "_accum_total",
         "_accum_cache_write",
         "_attempts_with_input",
         "_attempts_with_output",
         "_attempts_with_cached",
-        "_attempts_with_total",
+        "_attempts_with_cache_write",
+        "_exact_attempt_totals",
+        "_attempt_total_bounds",
     )
 
     def __init__(self) -> None:
@@ -671,106 +730,112 @@ class _LogicalRequestUsage:
         self._accum_input: int | None = None
         self._accum_output: int | None = None
         self._accum_cached: int | None = None
-        self._accum_total: int | None = None
         self._accum_cache_write: int | None = None
         self._attempts_with_input = 0
         self._attempts_with_output = 0
         self._attempts_with_cached = 0
-        self._attempts_with_total = 0
+        self._attempts_with_cache_write = 0
+        self._exact_attempt_totals: list[int | None] = []
+        self._attempt_total_bounds: list[int] = []
 
     def add_provider_response(self, value: Any) -> None:
         self._completed_attempts += 1
         if not isinstance(value, Mapping):
+            self._exact_attempt_totals.append(None)
+            self._attempt_total_bounds.append(0)
             return
-        self._reported_attempts += 1
-        raw_usage = usage_from_transport(value)
-        usage = raw_usage.canonical()
 
-        if usage.input_tokens is not None:
+        raw_usage = usage_from_transport(value)
+        if not raw_usage.reported:
+            self._exact_attempt_totals.append(None)
+            self._attempt_total_bounds.append(0)
+            return
+
+        self._reported_attempts += 1
+
+        in_tok = raw_usage.input_tokens
+        out_tok = raw_usage.output_tokens
+        cached_tok = raw_usage.cached_input_tokens
+        write_tok = raw_usage.cache_write_input_tokens
+        tot_tok = raw_usage.total_tokens
+
+        # For a single attempt, cached cannot exceed input:
+        if cached_tok is not None and in_tok is not None and cached_tok > in_tok:
+            cached_tok = None
+
+        if in_tok is not None:
             self._accum_input = (
-                usage.input_tokens
-                if self._accum_input is None
-                else self._accum_input + usage.input_tokens
+                in_tok if self._accum_input is None else self._accum_input + in_tok
             )
             self._attempts_with_input += 1
 
-        if usage.output_tokens is not None:
+        if out_tok is not None:
             self._accum_output = (
-                usage.output_tokens
-                if self._accum_output is None
-                else self._accum_output + usage.output_tokens
+                out_tok if self._accum_output is None else self._accum_output + out_tok
             )
             self._attempts_with_output += 1
 
-        if usage.cached_input_tokens is not None:
+        if cached_tok is not None:
             self._accum_cached = (
-                usage.cached_input_tokens
+                cached_tok
                 if self._accum_cached is None
-                else self._accum_cached + usage.cached_input_tokens
+                else self._accum_cached + cached_tok
             )
             self._attempts_with_cached += 1
 
-        if usage.total_tokens is not None:
-            self._accum_total = (
-                usage.total_tokens
-                if self._accum_total is None
-                else self._accum_total + usage.total_tokens
-            )
-            self._attempts_with_total += 1
-
-        if usage.cache_write_input_tokens is not None:
+        if write_tok is not None:
             self._accum_cache_write = (
-                usage.cache_write_input_tokens
+                write_tok
                 if self._accum_cache_write is None
-                else self._accum_cache_write + usage.cache_write_input_tokens
+                else self._accum_cache_write + write_tok
             )
+            self._attempts_with_cache_write += 1
 
-    def build(self) -> TokenUsage | None:
-        """Canonical usage of the logical call, or None when no attempt reported usage."""
-        if self._reported_attempts == 0:
-            return None
-        total = self._accum_total
-        if self._accum_input is not None and self._accum_output is not None:
-            total = self._accum_input + self._accum_output
-        raw = TokenUsage(
-            input_tokens=self._accum_input,
-            output_tokens=self._accum_output,
-            cached_input_tokens=self._accum_cached,
-            total_tokens=total,
-            cache_write_input_tokens=self._accum_cache_write,
-        )
-        canonical = raw.canonical()
-        return canonical if canonical.reported else None
+        # Determine attempt total and completeness:
+        # Rule 1: If valid Input and Output are both known:
+        # exact attempt Total = Input + Output (overrides conflicting raw provider total).
+        if in_tok is not None and out_tok is not None:
+            attempt_total = in_tok + out_tok
+            self._exact_attempt_totals.append(attempt_total)
+            self._attempt_total_bounds.append(attempt_total)
+        # Rule 2: Else if a valid provider Total is reported:
+        elif tot_tok is not None and tot_tok >= (in_tok or 0) + (out_tok or 0):
+            attempt_total = tot_tok
+            self._exact_attempt_totals.append(attempt_total)
+            self._attempt_total_bounds.append(attempt_total)
+        # Rule 3: Else exact Total is unknown, preserve truthful lower bound from components
+        else:
+            self._exact_attempt_totals.append(None)
+            component_bound = (in_tok or 0) + (out_tok or 0)
+            self._attempt_total_bounds.append(component_bound)
 
     def build_coverage(self) -> TokenUsageCoverage | None:
         """Per-dimension completeness truth for the logical call."""
-        usage = self.build()
-        if usage is None:
+        if self._reported_attempts == 0:
             return None
         completed = max(self._completed_attempts, 1)
 
         input_complete = (
             self._attempts_with_input == completed
-            if usage.input_tokens is not None
+            if self._accum_input is not None
             else True
         )
         output_complete = (
             self._attempts_with_output == completed
-            if usage.output_tokens is not None
+            if self._accum_output is not None
             else True
         )
         cached_complete = (
             self._attempts_with_cached == completed
-            if usage.cached_input_tokens is not None
+            if self._accum_cached is not None
             else True
         )
 
-        if usage.input_tokens is not None and usage.output_tokens is not None:
-            total_complete = input_complete and output_complete
-        elif usage.total_tokens is not None:
-            total_complete = self._attempts_with_total == completed
-        else:
-            total_complete = True
+        # Logical Total is complete only if EVERY completed attempt had an exact total:
+        total_complete = (
+            len(self._exact_attempt_totals) == completed
+            and all(t is not None for t in self._exact_attempt_totals)
+        )
 
         return TokenUsageCoverage(
             input_tokens=input_complete,
@@ -778,6 +843,34 @@ class _LogicalRequestUsage:
             cached_input_tokens=cached_complete,
             total_tokens=total_complete,
         )
+
+    def build(self) -> TokenUsage | None:
+        """Canonical usage of the logical call, or None when no attempt reported usage."""
+        if self._reported_attempts == 0:
+            return None
+
+        cov = self.build_coverage()
+        total: int | None = None
+        if cov is not None and cov.total_tokens:
+            total = sum(t for t in self._exact_attempt_totals if t is not None)
+        else:
+            bound = sum(self._attempt_total_bounds)
+            if bound > 0 or any(t is not None for t in self._exact_attempt_totals):
+                total = bound
+            elif self._accum_input is not None or self._accum_output is not None:
+                total = (self._accum_input or 0) + (self._accum_output or 0)
+            else:
+                total = None
+
+        raw = TokenUsage(
+            input_tokens=self._accum_input,
+            output_tokens=self._accum_output,
+            cached_input_tokens=self._accum_cached,
+            total_tokens=total,
+            cache_write_input_tokens=self._accum_cache_write,
+        )
+        canonical = raw.canonical(coverage=cov)
+        return canonical if canonical.reported else None
 
 def _rejected(category: "DirectiveRejectionCategory", detail: str = "", *, stage: str | None = None, reason_code: str | None = None, content: str | None = None) -> LiveModelAdapterError:
     return LiveModelAdapterError("invalid model directive", category=category, detail=detail, stage=stage, reason_code=reason_code, content=content, directive_rejection=True)

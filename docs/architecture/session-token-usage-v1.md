@@ -37,23 +37,32 @@ Example: Input 10,000 · Cached 7,000 · Output 2,000 → Total 12,000.
 No local token estimation exists or is authorized for this feature. If a
 route does not report a dimension, that dimension stays unknown
 (`None` end-to-end, `—` in the UI); it is never silently converted to
-zero.
+zero, guessed, or locally synthesized.
 
-When a logical call spans multiple provider attempts (e.g., attempt 1
-reports token usage but a directive is rejected, and attempt 2 repairs the
-directive but lacks a usage block), known provider-reported consumption is
-never discarded. Instead, it is preserved as a truthful lower bound
-(`Input 100+ · Cached 40+ · Output 20+ · Total 120+`) and accompanied by a
-typed `token_usage_coverage` block specifying which dimensions are complete
-versus lower bounds.
+When a logical call spans multiple provider attempts:
+- Each attempt is evaluated under its own canonical truth:
+  1. If Input and Output are both known, exact attempt Total = Input + Output
+     (overriding any conflicting raw provider total).
+  2. Else if a valid provider Total is reported (and >= known component bounds),
+     exact attempt Total = reported Total.
+  3. Else exact Total is unknown, preserving any component lower bounds.
+- Known provider-reported consumption is never discarded. When components
+  are partial across attempts, reported counts survive as truthful lower
+  bounds (`Input 100+ · Output 20+ · Total 270`) accompanied by a typed
+  `token_usage_coverage` block specifying per-dimension completeness flags.
+- An exact provider Total can coexist with partial Input/Output subtotals:
+  if Attempt 1 reports 100/20/120 and Attempt 2 reports only Total 150,
+  the aggregate Total is exact and complete (270, coverage `True`),
+  while Input (100) and Output (20) are partial lower bounds (coverage `False`).
 
 Coverage is tracked per-dimension across the session:
 - A dimension is complete only when reported and complete on every completed request.
 - Subtotals for partially reported dimensions survive as truthful lower bounds
   and render with a trailing `+` indicator (e.g., `In 150+ · Cache 40+ · Out 30`).
 - Session-level total completeness requires all completed requests to carry
-  complete total coverage; otherwise, the session summary is truthfully marked
-  `Tokens 31.8k (partial)`.
+  complete total coverage; when complete, the header shows `Tokens 270` without
+  `(partial)`. If any request lacked complete total coverage, the header is
+  truthfully marked `Tokens 31.8k (partial)`.
 
 ## Value contract
 
@@ -64,9 +73,20 @@ retained by the evaluation metrics). It can never carry prompts,
 completions, credentials, headers, endpoints, or request/response bodies;
 unknown provider payload is ignored at ingestion and rejected at the
 durable-event boundary, which also fails closed on non-integer/negative
-counts, unknown fields, `total != input + output`, and
-`cached > input`. An accompanying `TokenUsageCoverage` value tracks
-per-dimension boolean completeness flags.
+counts and unknown fields.
+
+Cross-field arithmetic is coverage-aware:
+- Historical events (coverage is None) and requests where both Input and
+  Output are complete enforce strict equality (`total == input + output`)
+  and containment (`cached <= input`).
+- Requests with partial component coverage allow `total >= input + output`
+  (exact total coexisting with partial component lower bounds) and allow
+  `cached > input` (cached tokens from one attempt exceeding a partial input
+  lower bound). Total is never permitted to be less than the sum of known
+  component lower bounds.
+- An accompanying `TokenUsageCoverage` value tracks per-dimension boolean
+  completeness flags (`input_tokens`, `output_tokens`, `cached_input_tokens`,
+  `total_tokens`).
 
 ## Flow (one chain, no second telemetry system)
 
