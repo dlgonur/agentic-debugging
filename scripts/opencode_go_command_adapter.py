@@ -822,6 +822,112 @@ def prepare_isolation(root: Path, *, auth_content: Optional[str] = None) -> dict
     }
 
 
+def _is_valid_token_count(value: Any) -> bool:
+    return type(value) is int and 0 <= value <= 1_000_000_000_000
+
+
+def _normalize_opencode_token_block(candidate: Mapping[str, Any]) -> dict[str, int]:
+    """Normalize one OpenCode token mapping into canonical transport usage.
+
+    Enforces non-negative bounded integers only: bools, floats, strings,
+    and negatives are strictly rejected with zero coercion.
+
+    Input: base + cache.read + cache.write when cache is known.
+    Cached: cache.read.
+    Output: base + reasoning when reasoning is known.
+    Total: provider-reported total when valid.
+
+    Fail-closed: if cache or reasoning is present but malformed, the affected
+    canonical dimension is omitted rather than silently undercounting.
+    """
+    result: dict[str, int] = {}
+
+    # 1. Total tokens
+    for total_key in ("total_tokens", "totalTokens", "total"):
+        if total_key in candidate:
+            val = candidate[total_key]
+            if _is_valid_token_count(val):
+                result["total_tokens"] = val
+            break
+
+    # 2. Input and Cache dimensions
+    input_base: Optional[int] = None
+    input_present = False
+    for input_key in ("prompt_tokens", "promptTokens", "input_tokens", "inputTokens", "input"):
+        if input_key in candidate:
+            input_present = True
+            raw_input = candidate[input_key]
+            if _is_valid_token_count(raw_input):
+                input_base = raw_input
+            break
+
+    if input_present and input_base is not None:
+        if "cache" in candidate:
+            cache = candidate["cache"]
+            if isinstance(cache, Mapping):
+                read_val: Optional[int] = None
+                write_val: Optional[int] = None
+                cache_malformed = False
+
+                if "read" in cache:
+                    if _is_valid_token_count(cache["read"]):
+                        read_val = cache["read"]
+                    else:
+                        cache_malformed = True
+
+                if "write" in cache:
+                    if _is_valid_token_count(cache["write"]):
+                        write_val = cache["write"]
+                    else:
+                        cache_malformed = True
+
+                if not cache_malformed:
+                    effective_input = input_base
+                    if read_val is not None:
+                        effective_input += read_val
+                        result["cached_input_tokens"] = read_val
+                    if write_val is not None:
+                        effective_input += write_val
+                        result["cache_write_input_tokens"] = write_val
+                    result["prompt_tokens"] = effective_input
+                # If cache is malformed, fail closed: do not report prompt_tokens
+                # or cached_input_tokens because omitting the malformed cache
+                # tokens would undercount canonical input.
+            else:
+                # cache is present but not a mapping: malformed -> fail closed.
+                pass
+        else:
+            # Genuine older event shape omitting cache entirely
+            result["prompt_tokens"] = input_base
+
+    # 3. Output and Reasoning dimensions
+    output_base: Optional[int] = None
+    output_present = False
+    for output_key in ("completion_tokens", "completionTokens", "output_tokens", "outputTokens", "output"):
+        if output_key in candidate:
+            output_present = True
+            raw_output = candidate[output_key]
+            if _is_valid_token_count(raw_output):
+                output_base = raw_output
+            break
+
+    if output_present and output_base is not None:
+        reasoning_keys = ("reasoning", "reasoning_tokens", "reasoningTokens")
+        reasoning_key = next((k for k in reasoning_keys if k in candidate), None)
+        if reasoning_key is not None:
+            raw_reasoning = candidate[reasoning_key]
+            if _is_valid_token_count(raw_reasoning):
+                result["completion_tokens"] = output_base + raw_reasoning
+            # If reasoning is present but malformed, fail closed: do not report
+            # completion_tokens because omitting reasoning would undercount
+            # canonical output.
+        else:
+            # Genuine older event shape omitting reasoning entirely
+            result["completion_tokens"] = output_base
+
+    return result
+
+
 def parse_opencode_output(raw_stdout: str) -> Tuple[str, Optional[dict[str, Any]], Optional[dict[str, Any]]]:
     """Parse JSON lines from OpenCode output into text parts, usage, and telemetry."""
     text_parts: list[str] = []
@@ -844,36 +950,15 @@ def parse_opencode_output(raw_stdout: str) -> Tuple[str, Optional[dict[str, Any]
         if isinstance(part, dict):
             if isinstance(part.get("text"), str):
                 text_parts.append(part["text"])
-            if isinstance(part.get("tokens"), dict) or "cost" in part:
-                usage = usage or {}
-                if isinstance(part.get("tokens"), dict):
+            if isinstance(part.get("tokens"), Mapping) or "cost" in part:
+                if isinstance(part.get("tokens"), Mapping):
                     tok = part["tokens"]
-                    if "input" in tok and isinstance(tok["input"], (int, float)):
-                        usage["prompt_tokens"] = int(tok["input"])
-                    if "output" in tok and isinstance(tok["output"], (int, float)):
-                        usage["completion_tokens"] = int(tok["output"])
-                    # OpenCode reports Anthropic-style disjoint input
-                    # buckets: ``input`` is the uncached base and
-                    # ``cache.read``/``cache.write`` are additional input
-                    # tokens.  Canonical prompt_tokens reports the complete
-                    # effective input; cached stays the cache-read subset.
-                    cache = tok.get("cache")
-                    if isinstance(cache, dict):
-                        if type(cache.get("read")) is int and cache["read"] >= 0:
-                            usage["cached_input_tokens"] = cache["read"]
-                        if type(cache.get("write")) is int and cache["write"] >= 0:
-                            usage["cache_write_input_tokens"] = cache["write"]
-                    if (
-                        "cached_input_tokens" in usage
-                        and "cache_write_input_tokens" in usage
-                        and "prompt_tokens" in usage
-                    ):
-                        usage["prompt_tokens"] = (
-                            usage["prompt_tokens"]
-                            + usage["cached_input_tokens"]
-                            + usage["cache_write_input_tokens"]
-                        )
-                if "cost" in part and isinstance(part["cost"], (int, float)):
+                    normalized_tokens = _normalize_opencode_token_block(tok)
+                    if normalized_tokens:
+                        usage = usage or {}
+                        usage.update(normalized_tokens)
+                if "cost" in part and type(part["cost"]) in (int, float) and not isinstance(part["cost"], bool):
+                    usage = usage or {}
                     usage["cost"] = float(part["cost"])
             for key in ("observed_model", "observed_billing_route", "observed_model_substitution"):
                 if key in part:

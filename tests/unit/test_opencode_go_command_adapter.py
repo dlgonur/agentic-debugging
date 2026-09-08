@@ -1096,3 +1096,107 @@ def test_inflight_registry_cleanup_is_reentrant() -> None:
     assert finished.wait(2.0), "registry cleanup deadlocked on a non-reentrant lock"
     worker.join(timeout=1.0)
     assert not errors, f"reentrant cleanup raised: {errors!r}"
+
+
+# --- 12. Token usage parsing and strict numeric handling -------------------
+
+def test_parse_opencode_output_reasoning_inclusive_usage() -> None:
+    from agentic_debugger.agent.token_usage import usage_from_transport
+
+    directive = {"kind": "stop", "reason": "done"}
+    event = {
+        "type": "step_finish",
+        "part": {
+            "text": json.dumps(directive),
+            "tokens": {
+                "total": 22,
+                "input": 11,
+                "output": 5,
+                "reasoning": 2,
+                "cache": {
+                    "read": 3,
+                    "write": 1,
+                },
+            },
+            "cost": 0.05,
+        },
+    }
+    raw = json.dumps(event) + "\n"
+    text, usage, telemetry = adapter.parse_opencode_output(raw)
+    assert usage is not None
+    assert usage["prompt_tokens"] == 15
+    assert usage["cached_input_tokens"] == 3
+    assert usage["cache_write_input_tokens"] == 1
+    assert usage["completion_tokens"] == 7
+    assert usage["total_tokens"] == 22
+    assert usage["cost"] == 0.05
+
+    payload = usage_from_transport(usage).to_payload()
+    assert payload == {
+        "input_tokens": 15,
+        "cached_input_tokens": 3,
+        "output_tokens": 7,
+        "total_tokens": 22,
+    }
+
+
+def test_parse_opencode_output_no_numeric_fabrication() -> None:
+    """Token dimensions must never coerce boolean, float, string, or negative values."""
+    event = {
+        "type": "step_finish",
+        "part": {
+            "tokens": {
+                "total": True,
+                "input": True,
+                "output": 9.7,
+                "reasoning": "9",
+                "cache": {
+                    "read": -1,
+                    "write": 4.2,
+                },
+            },
+        },
+    }
+    raw = json.dumps(event) + "\n"
+    text, usage, telemetry = adapter.parse_opencode_output(raw)
+    # None of the malformed or coerced dimensions may enter usage
+    assert usage is None or not any(
+        k in usage
+        for k in (
+            "prompt_tokens",
+            "completion_tokens",
+            "cached_input_tokens",
+            "cache_write_input_tokens",
+            "total_tokens",
+        )
+    )
+
+
+def test_parse_opencode_output_malformed_cache_and_reasoning_fail_closed() -> None:
+    # Malformed cache: prompt_tokens omitted fail-closed, completion_tokens reported
+    event_cache_bad = {
+        "type": "step_finish",
+        "part": {
+            "tokens": {
+                "input": 9,
+                "output": 4,
+                "cache": {"read": -2, "write": "many"},
+            },
+        },
+    }
+    _, u_cache, _ = adapter.parse_opencode_output(json.dumps(event_cache_bad) + "\n")
+    assert u_cache == {"completion_tokens": 4}
+
+    # Malformed reasoning: completion_tokens omitted fail-closed, prompt_tokens reported
+    event_reasoning_bad = {
+        "type": "step_finish",
+        "part": {
+            "tokens": {
+                "input": 9,
+                "output": 4,
+                "reasoning": -1,
+            },
+        },
+    }
+    _, u_reasoning, _ = adapter.parse_opencode_output(json.dumps(event_reasoning_bad) + "\n")
+    assert u_reasoning == {"prompt_tokens": 9}

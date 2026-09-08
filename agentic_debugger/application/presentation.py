@@ -321,12 +321,12 @@ class SessionTokenUsage:
     """Cumulative provider-reported token usage over completed requests.
 
     Reduced exclusively from durable ``model.request_completed`` events,
-    so live and replay derive the identical state.  A per-dimension count
-    becomes ``None`` (unknown, never zero) once any completed request
-    with reported usage lacked that dimension, or once any completed
-    request reported no usage at all.  ``requests_completed`` /
-    ``requests_with_usage`` carry the coverage truth a summary needs to
-    distinguish a complete total from a partial one.
+    so live and replay derive the identical state.  Partial request
+    coverage preserves the known provider-reported subtotal/lower bound
+    without claiming exactness; cumulative counts are never wiped to
+    ``None`` when another request lacks usage.  Per-dimension request
+    counts track coverage truth so that partial subtotals and complete
+    totals can be truthfully distinguished in live and replay views.
     """
 
     input_tokens: Optional[int] = None
@@ -335,6 +335,36 @@ class SessionTokenUsage:
     total_tokens: Optional[int] = None
     requests_completed: int = 0
     requests_with_usage: int = 0
+    requests_with_input: Optional[int] = None
+    requests_with_cached: Optional[int] = None
+    requests_with_output: Optional[int] = None
+    requests_with_total: Optional[int] = None
+
+    def __post_init__(self) -> None:
+        if self.requests_with_input is None:
+            object.__setattr__(
+                self,
+                "requests_with_input",
+                self.requests_with_usage if self.input_tokens is not None else 0,
+            )
+        if self.requests_with_cached is None:
+            object.__setattr__(
+                self,
+                "requests_with_cached",
+                self.requests_with_usage if self.cached_input_tokens is not None else 0,
+            )
+        if self.requests_with_output is None:
+            object.__setattr__(
+                self,
+                "requests_with_output",
+                self.requests_with_usage if self.output_tokens is not None else 0,
+            )
+        if self.requests_with_total is None:
+            object.__setattr__(
+                self,
+                "requests_with_total",
+                self.requests_with_usage if self.total_tokens is not None else 0,
+            )
 
     @property
     def usage_available(self) -> bool:
@@ -349,39 +379,101 @@ class SessionTokenUsage:
             and self.requests_with_usage == self.requests_completed
         )
 
+    def is_partial(self, dimension: str) -> bool:
+        """True if the dimension has a known subtotal but incomplete request coverage."""
+        if self.requests_completed == 0:
+            return False
+        reqs = self._dimension_requests(dimension)
+        return 0 < reqs < self.requests_completed
+
+    def is_complete(self, dimension: str) -> bool:
+        """True if the dimension was reported on every completed request."""
+        if self.requests_completed == 0:
+            return False
+        reqs = self._dimension_requests(dimension)
+        return reqs == self.requests_completed and reqs > 0
+
+    @property
+    def input_complete(self) -> bool:
+        return self.is_complete("input")
+
+    @property
+    def cached_complete(self) -> bool:
+        return self.is_complete("cached")
+
+    @property
+    def output_complete(self) -> bool:
+        return self.is_complete("output")
+
+    def _dimension_requests(self, dimension: str) -> int:
+        alias_map = {
+            "input": "requests_with_input",
+            "input_tokens": "requests_with_input",
+            "cached": "requests_with_cached",
+            "cached_input": "requests_with_cached",
+            "cached_input_tokens": "requests_with_cached",
+            "output": "requests_with_output",
+            "output_tokens": "requests_with_output",
+            "total": "requests_with_total",
+            "total_tokens": "requests_with_total",
+        }
+        attr = alias_map.get(dimension, dimension)
+        val = getattr(self, attr, 0)
+        return val if isinstance(val, int) else 0
+
     @property
     def effective_total_tokens(self) -> Optional[int]:
         """Canonical total: ``total_tokens`` or input + output when known."""
         if self.total_tokens is not None:
+            if self.input_tokens is not None and self.output_tokens is not None:
+                return max(self.total_tokens, self.input_tokens + self.output_tokens)
             return self.total_tokens
         if self.input_tokens is not None and self.output_tokens is not None:
             return self.input_tokens + self.output_tokens
         return None
 
+    @property
+    def total_complete(self) -> bool:
+        """True when total tokens has complete coverage across completed requests."""
+        if self.requests_completed == 0:
+            return False
+        if (self.requests_with_total or 0) == self.requests_completed and self.total_tokens is not None:
+            return True
+        if (
+            (self.requests_with_input or 0) == self.requests_completed
+            and (self.requests_with_output or 0) == self.requests_completed
+            and self.input_tokens is not None
+            and self.output_tokens is not None
+        ):
+            return True
+        return False
+
     def _fold(self, usage: Optional[TokenUsage]) -> "SessionTokenUsage":
         completed = self.requests_completed + 1
-        if usage is None:
-            # A completed request that reported no usage consumed an
-            # unknown amount: every cumulative count becomes unknown.
+        if usage is None or not usage.reported:
             return SessionTokenUsage(
+                input_tokens=self.input_tokens,
+                cached_input_tokens=self.cached_input_tokens,
+                output_tokens=self.output_tokens,
+                total_tokens=self.total_tokens,
                 requests_completed=completed,
                 requests_with_usage=self.requests_with_usage,
-            )
-        if self.requests_with_usage == 0:
-            # First reporting request seeds the cumulative counts.
-            return SessionTokenUsage(
-                input_tokens=usage.input_tokens,
-                cached_input_tokens=usage.cached_input_tokens,
-                output_tokens=usage.output_tokens,
-                total_tokens=usage.total_tokens,
-                requests_completed=completed,
-                requests_with_usage=1,
+                requests_with_input=self.requests_with_input,
+                requests_with_cached=self.requests_with_cached,
+                requests_with_output=self.requests_with_output,
+                requests_with_total=self.requests_with_total,
             )
 
         def _sum(left: Optional[int], right: Optional[int]) -> Optional[int]:
-            if left is None or right is None:
-                return None
+            if right is None:
+                return left
+            if left is None:
+                return right
             return left + right
+
+        def _sum_req(current: Optional[int], val: Optional[int]) -> int:
+            base = current or 0
+            return base + 1 if val is not None else base
 
         return SessionTokenUsage(
             input_tokens=_sum(self.input_tokens, usage.input_tokens),
@@ -390,6 +482,10 @@ class SessionTokenUsage:
             total_tokens=_sum(self.total_tokens, usage.total_tokens),
             requests_completed=completed,
             requests_with_usage=self.requests_with_usage + 1,
+            requests_with_input=_sum_req(self.requests_with_input, usage.input_tokens),
+            requests_with_cached=_sum_req(self.requests_with_cached, usage.cached_input_tokens),
+            requests_with_output=_sum_req(self.requests_with_output, usage.output_tokens),
+            requests_with_total=_sum_req(self.requests_with_total, usage.total_tokens),
         )
 
 

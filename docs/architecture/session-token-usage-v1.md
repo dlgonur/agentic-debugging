@@ -25,7 +25,9 @@ state from the journal.
   own usage semantics.
 - `Cached` — the cache-read/hit portion of Input when the provider reports
   it. **Cached is a subset of Input.**
-- `Output` — provider-reported output/completion tokens.
+- `Output` — provider-reported output/completion tokens (including
+  generation-side reasoning tokens when reported separately by the
+  provider, e.g. OpenCode reasoning or Gemini thinking).
 - `Total` — `Input + Output` (never `Input + Cached + Output`).
 
 Example: Input 10,000 · Cached 7,000 · Output 2,000 → Total 12,000.
@@ -35,9 +37,10 @@ Example: Input 10,000 · Cached 7,000 · Output 2,000 → Total 12,000.
 No local token estimation exists or is authorized for this feature. If a
 route does not report a dimension, that dimension stays unknown
 (`None` end-to-end, `—` in the UI); it is never silently converted to
-zero. A session where some completed request reported no usable usage is
-marked partial (`Tokens 31.8k (partial)`) instead of claiming a complete
-total.
+zero. A session where some completed request reported no usable usage
+preserves the known provider-reported subtotal/lower bound and is marked
+partial (`Tokens 31.8k (partial)`) rather than discarding known usage or
+claiming an exact complete total.
 
 ## Value contract
 
@@ -73,7 +76,7 @@ provider adapter normalization (transport `usage` mapping)
 |---|---|---|
 | Direct API `chat_completions` / `responses` | yes — `prompt_tokens_details` / `input_tokens_details` `cached_tokens` (subset of the reported prompt/input count) | |
 | Direct API `messages` (Anthropic) | yes — `cache_read_input_tokens` | Canonical input = base + cache read + cache creation (the provider's disjoint input buckets); cache-write retained internally. |
-| OpenCode protocol / Go command / legacy CLI | yes — `part.tokens.cache.read` | Anthropic-style disjoint buckets: canonical input = base + read + write. |
+| OpenCode protocol / Go command / legacy CLI | yes — `part.tokens.cache.read` | Anthropic-style disjoint buckets: canonical input = base + read + write; reasoning tokens are generation-side and fold into canonical Output (output + reasoning). |
 | AGY Gemini command | yes — `cache_read_tokens` (Gemini semantics: input already includes cached content) | `thinking_tokens` are generation-side and fold into Output so the canonical total matches the provider's own total. |
 | CommandCode GOAT (legacy CLI) | when the CLI reports `cachedInputTokens` | camelCase usage is normalized to the canonical transport keys. |
 | Ollama Cloud | no cache dimension | prompt/eval counts only; no cached claim. |

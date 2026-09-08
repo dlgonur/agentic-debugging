@@ -431,7 +431,6 @@ class TestTokenUsageRendering:
                 requests_with_usage=3,
             )
         ) == "In 27.4k · Cache 18.1k · Out 4.4k"
-        # Unknown cached dimension is omitted rather than zeroed.
         assert session_tokens_breakdown(
             SessionTokenUsage(
                 input_tokens=27_400,
@@ -441,6 +440,25 @@ class TestTokenUsageRendering:
                 requests_with_usage=1,
             )
         ) == "In 27.4k · Out 4.4k"
+
+    def test_panel_breakdown_partial_dimension_marks_subtotal(self):
+        assert (
+            session_tokens_breakdown(
+                SessionTokenUsage(
+                    input_tokens=220,
+                    cached_input_tokens=40,
+                    output_tokens=50,
+                    total_tokens=270,
+                    requests_completed=2,
+                    requests_with_usage=2,
+                    requests_with_input=2,
+                    requests_with_cached=1,
+                    requests_with_output=2,
+                    requests_with_total=2,
+                )
+            )
+            == "In 220 · Cache 40+ · Out 50"
+        )
 
     def test_summary_derives_total_from_input_plus_output(self):
         usage = SessionTokenUsage(

@@ -154,6 +154,8 @@ def test_malformed_or_missing_directive_is_failure(monkeypatch: pytest.MonkeyPat
 
 
 def test_opencode_telemetry_shape_is_retained_without_defaults(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    from agentic_debugger.agent.token_usage import usage_from_transport
+
     directive = {"kind": "stop", "reason": "done"}
     events = [
         {"type": "text", "part": {"text": json.dumps(directive)}},
@@ -164,17 +166,26 @@ def test_opencode_telemetry_shape_is_retained_without_defaults(monkeypatch: pyte
     assert rc == 0
     response = json.loads(capsys.readouterr().out)
     assert response["provider_telemetry"] == {"input": 11, "output": 5, "reasoning": 2, "cache": {"read": 3, "write": 1}, "cost": 0.0}
-    # Task-34: OpenCode reports Anthropic-style disjoint input buckets, so
-    # canonical input is base + cache read + cache write (11 + 3 + 1);
-    # cached stays the cache-read subset and total derives input + output.
+    # OpenCode reports Anthropic-style disjoint input buckets, so
+    # canonical input is base + cache read + cache write (11 + 3 + 1 = 15);
+    # cached stays the cache-read subset (3).
+    # Reasoning is generation-side and folds into Output (5 + 2 = 7).
     assert response["usage"] == {
         "prompt_tokens": 15,
-        "completion_tokens": 5,
+        "completion_tokens": 7,
         "cached_input_tokens": 3,
         "cache_write_input_tokens": 1,
     }
     assert _records(evidence)[-1]["provider_telemetry"] == response["provider_telemetry"]
     assert _records(evidence)[-1]["usage"] == response["usage"]
+
+    payload = usage_from_transport(response["usage"]).to_payload()
+    assert payload == {
+        "input_tokens": 15,
+        "cached_input_tokens": 3,
+        "output_tokens": 7,
+        "total_tokens": 22,
+    }
 
 
 def test_opencode_usage_without_cache_dimensions_unchanged(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -200,9 +211,43 @@ def test_opencode_usage_with_malformed_cache_dimensions_omitted(monkeypatch: pyt
     rc, _, _, _, _ = _run_main(monkeypatch, tmp_path, result)
     assert rc == 0
     response = json.loads(capsys.readouterr().out)
-    # Absent/partial cache knowledge leaves input as the reported base;
-    # malformed cache counts are omitted rather than zeroed or summed.
-    assert response["usage"] == {"prompt_tokens": 9, "completion_tokens": 4}
+    # Fail-closed: cache field is present but malformed; omitting it would make
+    # canonical Input undercount known consumed tokens, so prompt_tokens is omitted.
+    assert response["usage"] == {"completion_tokens": 4}
+
+
+def test_opencode_usage_with_malformed_reasoning_omitted(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    directive = {"kind": "stop", "reason": "done"}
+    events = [
+        {"type": "text", "part": {"text": json.dumps(directive)}},
+        {"type": "step_finish", "part": {"tokens": {"input": 11, "output": 5, "reasoning": "two", "cache": {"read": 3, "write": 1}}, "cost": 0.0}},
+    ]
+    result = _completed(["opencode.cmd"], stdout="\n".join(json.dumps(event) for event in events) + "\n")
+    rc, _, _, _, _ = _run_main(monkeypatch, tmp_path, result)
+    assert rc == 0
+    response = json.loads(capsys.readouterr().out)
+    # Fail-closed: reasoning is present but malformed; omitting it would make
+    # canonical Output undercount known consumed tokens, so completion_tokens is omitted.
+    assert response["usage"] == {
+        "prompt_tokens": 15,
+        "cached_input_tokens": 3,
+        "cache_write_input_tokens": 1,
+    }
+
+
+def test_opencode_transport_strict_numeric_no_coercion(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    directive = {"kind": "stop", "reason": "done"}
+    events = [
+        {"type": "text", "part": {"text": json.dumps(directive)}},
+        {"type": "step_finish", "part": {"tokens": {"input": True, "output": 9.7, "reasoning": "9", "cache": {"read": -1, "write": 4.2}}, "cost": 0.0}},
+    ]
+    result = _completed(["opencode.cmd"], stdout="\n".join(json.dumps(event) for event in events) + "\n")
+    rc, _, _, _, _ = _run_main(monkeypatch, tmp_path, result)
+    assert rc == 0
+    response = json.loads(capsys.readouterr().out)
+    # No numeric fabrication: boolean, float, string, and negative token dimensions
+    # never enter the normalized usage mapping.
+    assert "usage" not in response
 
 
 def test_missing_provider_telemetry_is_not_invented(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

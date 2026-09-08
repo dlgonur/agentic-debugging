@@ -228,30 +228,135 @@ class TestSessionTokenUsageReduction:
         assert usage.input_tokens is None
         assert usage.effective_total_tokens is None
 
-    def test_mixed_session_is_partial_and_poisons_cumulative_counts(self):
-        view = reduce_all(
+    def test_mixed_session_order_invariance(self):
+        """F2: order-independent aggregation preserves reported subtotals."""
+        from agentic_debugger.ui.widgets import session_tokens_summary, session_tokens_breakdown
+
+        usage_payload = {
+            "input_tokens": 1_000,
+            "output_tokens": 200,
+            "cached_input_tokens": 600,
+            "total_tokens": 1_200,
+        }
+        # Order A: [usage -> no-usage]
+        view_a = reduce_all(
             state_running(),
             (
-                _usage_event(
-                    0,
-                    {"input_tokens": 1_000, "output_tokens": 200,
-                     "cached_input_tokens": 600, "total_tokens": 1_200},
-                    sequence=3,
-                ),
+                _usage_event(0, usage_payload, sequence=3),
                 _usage_event(1, None, sequence=4),
             ),
         )
-        usage = view.token_usage
+        # Order B: [no-usage -> usage]
+        view_b = reduce_all(
+            state_running(),
+            (
+                _usage_event(0, None, sequence=3),
+                _usage_event(1, usage_payload, sequence=4),
+            ),
+        )
+
+        assert view_a.token_usage == view_b.token_usage
+        usage = view_a.token_usage
+        assert usage.input_tokens == 1_000
+        assert usage.cached_input_tokens == 600
+        assert usage.output_tokens == 200
+        assert usage.total_tokens == 1_200
+        assert usage.effective_total_tokens == 1_200
         assert usage.requests_completed == 2
         assert usage.requests_with_usage == 1
         assert not usage.complete
-        # The unreported request consumed an unknown amount; the totals
-        # become unknown rather than a silently complete lower bound.
+        assert usage.is_partial("input_tokens")
+        assert usage.is_partial("cached_input_tokens")
+        assert usage.is_partial("output_tokens")
+        assert not usage.total_complete
+
+        # UI representations are identical across orders and mark partial coverage
+        summary_a = session_tokens_summary(view_a.token_usage)
+        summary_b = session_tokens_summary(view_b.token_usage)
+        assert summary_a == summary_b == "Tokens 1.2k (partial)"
+
+        breakdown_a = session_tokens_breakdown(view_a.token_usage)
+        breakdown_b = session_tokens_breakdown(view_b.token_usage)
+        assert breakdown_a == breakdown_b == "In 1k+ · Cache 600+ · Out 200+"
+
+    def test_usage_missing_usage_sequence_permutations(self):
+        """Order-invariance holds for usage -> missing -> usage and permutations."""
+        u1 = {"input_tokens": 1_000, "output_tokens": 200, "cached_input_tokens": 600, "total_tokens": 1_200}
+        u2 = {"input_tokens": 300, "output_tokens": 40, "total_tokens": 340}
+
+        seq_a = reduce_all(
+            state_running(),
+            (
+                _usage_event(0, u1, sequence=3),
+                _usage_event(1, None, sequence=4),
+                _usage_event(2, u2, sequence=5),
+            ),
+        )
+        seq_b = reduce_all(
+            state_running(),
+            (
+                _usage_event(0, None, sequence=3),
+                _usage_event(1, u1, sequence=4),
+                _usage_event(2, u2, sequence=5),
+            ),
+        )
+        seq_c = reduce_all(
+            state_running(),
+            (
+                _usage_event(0, u1, sequence=3),
+                _usage_event(1, u2, sequence=4),
+                _usage_event(2, None, sequence=5),
+            ),
+        )
+
+        assert seq_a.token_usage == seq_b.token_usage == seq_c.token_usage
+        usage = seq_a.token_usage
+        assert usage.requests_completed == 3
+        assert usage.requests_with_usage == 2
+        assert usage.input_tokens == 1_300
+        assert usage.cached_input_tokens == 600
+        assert usage.output_tokens == 240
+        assert usage.total_tokens == 1_540
+        assert not usage.complete
+
+    def test_multiple_missing_requests_preserves_known_subtotal(self):
+        view = reduce_all(
+            state_running(),
+            (
+                _usage_event(0, {"input_tokens": 500, "output_tokens": 100, "total_tokens": 600}, sequence=3),
+                _usage_event(1, None, sequence=4),
+                _usage_event(2, None, sequence=5),
+                _usage_event(3, None, sequence=6),
+            ),
+        )
+        usage = view.token_usage
+        assert usage.requests_completed == 4
+        assert usage.requests_with_usage == 1
+        assert usage.input_tokens == 500
+        assert usage.output_tokens == 100
+        assert usage.total_tokens == 600
+        assert not usage.complete
+
+    def test_all_requests_missing_usage(self):
+        view = reduce_all(
+            state_running(),
+            (
+                _usage_event(0, None, sequence=3),
+                _usage_event(1, None, sequence=4),
+                _usage_event(2, None, sequence=5),
+            ),
+        )
+        usage = view.token_usage
+        assert usage.requests_completed == 3
+        assert usage.requests_with_usage == 0
+        assert not usage.usage_available
+        assert not usage.complete
         assert usage.input_tokens is None
-        assert usage.total_tokens is None
         assert usage.effective_total_tokens is None
 
-    def test_missing_dimension_poisons_only_that_dimension(self):
+    def test_missing_dimension_preserves_subtotal_and_truthful_unknownness(self):
+        from agentic_debugger.ui.widgets import session_tokens_summary, session_tokens_breakdown
+
         view = reduce_all(
             state_running(),
             (
@@ -269,11 +374,24 @@ class TestSessionTokenUsageReduction:
             ),
         )
         usage = view.token_usage
+        # Exact totals are known for dimensions reported on both requests
         assert usage.input_tokens == 220
         assert usage.output_tokens == 50
         assert usage.total_tokens == 270
-        assert usage.cached_input_tokens is None
-        assert usage.complete
+        assert usage.input_complete
+        assert usage.output_complete
+        assert usage.total_complete
+        assert not usage.is_partial("input_tokens")
+        assert not usage.is_partial("output_tokens")
+
+        # Cached was only reported on request 1: known subtotal survives as lower bound
+        assert usage.cached_input_tokens == 40
+        assert usage.is_partial("cached_input_tokens")
+        assert not usage.cached_complete
+
+        # UI renders complete dimensions normally and marks partial cached dimension
+        assert session_tokens_summary(usage) == "Tokens 270"
+        assert session_tokens_breakdown(usage) == "In 220 · Cache 40+ · Out 50"
 
     def test_derived_total_when_events_report_no_total(self):
         view = reduce_all(
@@ -318,6 +436,12 @@ class TestSessionTokenUsageReduction:
             tuple(replay_events),
         )
         assert replay_view.token_usage == live_view.token_usage
+        assert replay_view.token_usage.requests_completed == 3
+        assert replay_view.token_usage.requests_with_usage == 2
+        assert replay_view.token_usage.input_tokens == 1_300
+        assert replay_view.token_usage.output_tokens == 240
+        assert replay_view.token_usage.cached_input_tokens == 600
+        assert replay_view.token_usage.total_tokens == 1_540
         assert replay_view.token_usage.requests_completed == 3
         assert replay_view.token_usage.requests_with_usage == 2
 

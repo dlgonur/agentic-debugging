@@ -1442,8 +1442,10 @@ def session_tokens_summary(usage: SessionTokenUsage) -> Optional[str]:
     if not usage.usage_available:
         return None
     total = usage.effective_total_tokens
+    if total is None:
+        return None
     summary = f"Tokens {format_token_count_compact(total)}"
-    if not usage.complete:
+    if not usage.total_complete:
         summary += " (partial)"
     return summary
 
@@ -1454,11 +1456,14 @@ def session_tokens_breakdown(usage: SessionTokenUsage) -> str:
         return "—"
     parts = []
     if usage.input_tokens is not None:
-        parts.append(f"In {format_token_count_compact(usage.input_tokens)}")
+        suffix = "+" if usage.is_partial("input_tokens") else ""
+        parts.append(f"In {format_token_count_compact(usage.input_tokens)}{suffix}")
     if usage.cached_input_tokens is not None:
-        parts.append(f"Cache {format_token_count_compact(usage.cached_input_tokens)}")
+        suffix = "+" if usage.is_partial("cached_input_tokens") else ""
+        parts.append(f"Cache {format_token_count_compact(usage.cached_input_tokens)}{suffix}")
     if usage.output_tokens is not None:
-        parts.append(f"Out {format_token_count_compact(usage.output_tokens)}")
+        suffix = "+" if usage.is_partial("output_tokens") else ""
+        parts.append(f"Out {format_token_count_compact(usage.output_tokens)}{suffix}")
     if not parts:
         return "—"
     return " · ".join(parts)
