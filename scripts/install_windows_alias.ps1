@@ -4,42 +4,59 @@
 
 .DESCRIPTION
     Creates an application-owned isolated virtual environment under
-    %LOCALAPPDATA%\AgenticDebugger\cli-venv, installs Agentic Debugger with [app]
-    dependencies in editable mode, and registers only its app-owned Scripts
-    directory in the User PATH so 'agenticdebugger' and 'agentic-debugger' can be
-    run globally from any PowerShell or CMD terminal.
+    <InstallRoot>\AgenticDebugger\cli-venv (default: %LOCALAPPDATA%\AgenticDebugger\cli-venv),
+    installs Agentic Debugger with [app] dependencies in editable mode,
+    creates an ownership marker (.agentic-debugger-managed), and registers only
+    its app-owned Scripts directory in User PATH so 'agenticdebugger' and
+    'agentic-debugger' can be run globally from any PowerShell or CMD terminal.
 
 .PARAMETER Uninstall
-    Removes the app-owned virtual environment and deletes only the app-owned
-    launcher directory from User PATH, preserving all pre-existing PATH entries.
+    Removes the app-owned virtual environment (verifying ownership marker before
+    destructive deletion) and deletes only the app-owned launcher directory from
+    User PATH, preserving all pre-existing PATH entries.
 
 .PARAMETER Python
     Base Python executable used to create the app-owned environment (default: 'python').
 
-.PARAMETER InstallDir
-    Optional custom path for the app-owned virtual environment. Defaults to
-    %LOCALAPPDATA%\AgenticDebugger\cli-venv.
+.PARAMETER InstallRoot
+    Optional root directory override under which AgenticDebugger\cli-venv will be
+    managed. Defaults to %LOCALAPPDATA% (or %USERPROFILE%\AppData\Local).
 #>
 [CmdletBinding()]
 param(
     [switch]$Uninstall,
     [string]$Python = "python",
-    [string]$InstallDir = ""
+    [string]$InstallRoot = ""
 )
 
 $ErrorActionPreference = "Stop"
 
-# Resolve app-owned environment directory
-if ($InstallDir) {
-    $cliVenv = $InstallDir
+# Resolve effective root and managed app-owned environment paths
+$effectiveRoot = if ($InstallRoot) {
+    $InstallRoot
 } else {
-    $localAppData = if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { Join-Path $env:USERPROFILE "AppData\Local" }
-    $appDir = Join-Path $localAppData "AgenticDebugger"
-    $cliVenv = Join-Path $appDir "cli-venv"
+    if ($env:LOCALAPPDATA) { $env:LOCALAPPDATA } else { Join-Path $env:USERPROFILE "AppData\Local" }
 }
+
+$appDir = Join-Path $effectiveRoot "AgenticDebugger"
+$cliVenv = Join-Path $appDir "cli-venv"
 $launcherDir = Join-Path $cliVenv "Scripts"
 $targetUnhyphenated = Join-Path $launcherDir "agenticdebugger.exe"
 $targetHyphenated = Join-Path $launcherDir "agentic-debugger.exe"
+$markerFile = Join-Path $cliVenv ".agentic-debugger-managed"
+
+# Helper to verify Agentic Debugger ownership of an existing directory
+function Test-AppVenvOwnership {
+    param([string]$VenvPath, [string]$Marker)
+    if (-not (Test-Path $VenvPath)) {
+        return $false
+    }
+    if (-not (Test-Path $Marker)) {
+        return $false
+    }
+    $markerContent = Get-Content -Path $Marker -Raw -ErrorAction SilentlyContinue
+    return ($markerContent -and $markerContent -match "managed-by=AgenticDebugger")
+}
 
 # Dynamically resolve repository root without hardcoded machine paths
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
@@ -49,9 +66,13 @@ $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 # -------------------------------------------------------------------------
 if ($Uninstall) {
     Write-Host "Uninstalling Agentic Debugger global launcher..."
-    
-    # 1. Remove app-owned venv directory
+
+    # 1. Remove app-owned venv directory with strict ownership verification
     if (Test-Path $cliVenv) {
+        if (-not (Test-AppVenvOwnership -VenvPath $cliVenv -Marker $markerFile)) {
+            Write-Error "Target directory '$cliVenv' exists but is missing the Agentic Debugger ownership marker ('$markerFile'). Refusing destructive removal to prevent data loss."
+            exit 1
+        }
         try {
             Remove-Item -Recurse -Force $cliVenv -ErrorAction Stop
             Write-Host "Removed app-owned virtual environment at '$cliVenv'."
@@ -106,7 +127,7 @@ if ($Uninstall) {
 # INSTALL MODE
 # -------------------------------------------------------------------------
 
-# 1. Verify Python availability and version (3.11+)
+# 1. Verify base Python availability and version (3.11+)
 try {
     $pythonVersion = & $Python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')"
 } catch {
@@ -134,11 +155,19 @@ foreach ($cmdName in @("agenticdebugger", "agentic-debugger")) {
     }
 }
 
-# 3. Create or reuse app-owned virtual environment
+# 3. Create or reuse app-owned virtual environment with ownership enforcement
 Write-Host "Setting up app-owned virtual environment at '$cliVenv'..."
-if (-not (Test-Path $cliVenv)) {
+if (Test-Path $cliVenv) {
+    if (-not (Test-AppVenvOwnership -VenvPath $cliVenv -Marker $markerFile)) {
+        Write-Error "Target directory '$cliVenv' already exists but lacks the Agentic Debugger ownership marker ('$markerFile'). Refusing to adopt or overwrite an unmarked directory."
+        exit 1
+    }
+    Write-Host "Existing verified app-owned virtual environment found; reinstalling."
+} else {
+    New-Item -ItemType Directory -Path $appDir -Force | Out-Null
     try {
-        & $Python -m venv --system-site-packages $cliVenv
+        # Isolated standalone virtual environment
+        & $Python -m venv $cliVenv
     } catch {
         Write-Error "Failed to create virtual environment at '$cliVenv': $_"
         exit 1
@@ -147,6 +176,9 @@ if (-not (Test-Path $cliVenv)) {
         Write-Error "venv creation failed with exit code $LASTEXITCODE."
         exit $LASTEXITCODE
     }
+
+    # Write non-secret ownership marker
+    Set-Content -Path $markerFile -Value "managed-by=AgenticDebugger;version=1.0;created_at=$(Get-Date -Format 'o')" -Encoding utf8
 }
 
 $venvPython = Join-Path $launcherDir "python.exe"
@@ -155,18 +187,35 @@ if (-not (Test-Path $venvPython)) {
     exit 1
 }
 
-# 4. Install Agentic Debugger with [app] dependencies in editable mode
-# Note: Editable install links the app-owned launcher to this repository source tree
-Write-Host "Installing Agentic Debugger into app-owned environment from '$repoRoot'..."
-& $venvPython -m pip install --no-build-isolation --no-deps -e $repoRoot
+# 4. Install Agentic Debugger with [app] dependencies into app-owned environment
+# Editable install links the app-owned launcher to this repository source tree
+Write-Host "Installing Agentic Debugger with [app] dependencies into app-owned environment from '$repoRoot'..."
+& $venvPython -m pip install -e "$repoRoot[app]"
 if ($LASTEXITCODE -ne 0) {
     Write-Error "pip installation failed with exit code $LASTEXITCODE."
     exit $LASTEXITCODE
 }
 
-# 5. Verify generated Windows launchers
+# 5. Verification Gate: launchers, Textual import, and doctor readiness
 if (-not (Test-Path $targetUnhyphenated) -or -not (Test-Path $targetHyphenated)) {
     Write-Error "Expected launchers ('agenticdebugger.exe' and 'agentic-debugger.exe') were not found in '$launcherDir' after installation."
+    exit 1
+}
+
+try {
+    & $venvPython -c "import textual"
+} catch {
+    Write-Error "Textual dependency verification failed in app-owned environment: $_"
+    exit 1
+}
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "Textual dependency verification failed in app-owned environment."
+    exit 1
+}
+
+$doctorOutput = & $targetUnhyphenated --doctor | Out-String
+if ($doctorOutput -notmatch "Status: READY") {
+    Write-Error "Launcher doctor readiness check failed:\n$doctorOutput"
     exit 1
 }
 
@@ -214,11 +263,11 @@ if (-not $alreadyInProcessPath) {
     $env:PATH = "$launcherDir;$env:PATH"
 }
 
-# 8. Verify launch resolution in current process
+# 8. Final launch resolution check in current process
 $resolvedUnhyphenated = Get-Command "agenticdebugger" -ErrorAction SilentlyContinue
 $resolvedHyphenated = Get-Command "agentic-debugger" -ErrorAction SilentlyContinue
 if (-not $resolvedUnhyphenated -or -not $resolvedHyphenated) {
-    Write-Warning "Launchers installed at '$launcherDir' but could not be resolved in the current process session."
+    Write-Warning "Launchers installed at '$launcherDir' but could not be resolved in current process session."
 } else {
     Write-Host "Success! 'agenticdebugger' and 'agentic-debugger' are installed and available globally."
 }

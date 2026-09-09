@@ -313,9 +313,15 @@ def test_powershell_installer_script_contract() -> None:
 
     # Must contain essential parameters and guards
     assert "[switch]$Uninstall" in content
+    assert "[string]$InstallRoot" in content
+    assert "$InstallDir" not in content
     assert "agenticdebugger.exe" in content
     assert "agentic-debugger.exe" in content
-    assert "-e $repoRoot" in content or "pip install" in content
+    assert 'pip install -e "$repoRoot[app]"' in content
+
+    # Regression check (F7): Must NOT use --system-site-packages or --no-deps
+    assert "--system-site-packages" not in content
+    assert "--no-deps" not in content
 
     # Regression check (F1, F2): Must NOT use caller interpreter's shared sysconfig scripts path
     assert "sysconfig.get_path" not in content, (
@@ -326,6 +332,15 @@ def test_powershell_installer_script_contract() -> None:
     # Must target dedicated application-owned venv directory
     assert "cli-venv" in content
     assert "AgenticDebugger" in content
+
+    # Regression check (F8): Must enforce ownership marker and verify before removal/re-use
+    assert ".agentic-debugger-managed" in content
+    assert "Test-AppVenvOwnership" in content
+    assert "managed-by=AgenticDebugger" in content
+
+    # Verification gate
+    assert "import textual" in content
+    assert "Status: READY" in content
 
     # Must manage User PATH via HKCU\Environment safely without admin
     assert "Environment]::SetEnvironmentVariable('Path'" in content
@@ -356,10 +371,14 @@ def test_windows_installer_isolated_lifecycle_smoke(tmp_path: Path) -> None:
         orig_user_path = ""
 
     ps1_path = REPO_ROOT / "scripts" / "install_windows_alias.ps1"
-    test_install_dir = tmp_path / "test_cli_venv"
+    cli_venv = tmp_path / "AgenticDebugger" / "cli-venv"
+    scripts_dir = cli_venv / "Scripts"
+    marker_file = cli_venv / ".agentic-debugger-managed"
+    outside_dir = tmp_path / "outside_workdir"
+    outside_dir.mkdir(parents=True)
 
     try:
-        # 1. Fresh install into isolated test directory
+        # 1. Fresh install into isolated test root
         proc_install = subprocess.run(
             [
                 "powershell.exe",
@@ -368,8 +387,8 @@ def test_windows_installer_isolated_lifecycle_smoke(tmp_path: Path) -> None:
                 "Bypass",
                 "-File",
                 str(ps1_path),
-                "-InstallDir",
-                str(test_install_dir),
+                "-InstallRoot",
+                str(tmp_path),
             ],
             capture_output=True,
             text=True,
@@ -378,9 +397,37 @@ def test_windows_installer_isolated_lifecycle_smoke(tmp_path: Path) -> None:
             f"Installer failed:\nSTDOUT:\n{proc_install.stdout}\nSTDERR:\n{proc_install.stderr}"
         )
 
-        scripts_dir = test_install_dir / "Scripts"
         assert (scripts_dir / "agenticdebugger.exe").is_file()
         assert (scripts_dir / "agentic-debugger.exe").is_file()
+        assert marker_file.is_file()
+        assert "managed-by=AgenticDebugger" in marker_file.read_text(encoding="utf-8")
+
+        # Verify Textual dependency is installed in app-owned venv (F7)
+        proc_import = subprocess.run(
+            [str(scripts_dir / "python.exe"), "-c", "import textual; print(textual.__file__)"],
+            capture_output=True,
+            text=True,
+        )
+        assert proc_import.returncode == 0, f"Textual import failed:\n{proc_import.stderr}"
+
+        # Verify launchers execute from an arbitrary outside working directory
+        proc_doctor_outside = subprocess.run(
+            [str(scripts_dir / "agenticdebugger.exe"), "--doctor"],
+            cwd=str(outside_dir),
+            capture_output=True,
+            text=True,
+        )
+        assert proc_doctor_outside.returncode == 0
+        assert "Status: READY" in proc_doctor_outside.stdout
+
+        proc_version_outside = subprocess.run(
+            [str(scripts_dir / "agentic-debugger.exe"), "--version"],
+            cwd=str(outside_dir),
+            capture_output=True,
+            text=True,
+        )
+        assert proc_version_outside.returncode == 0
+        assert f"agentic-debugger {__version__}" in proc_version_outside.stdout
 
         # Verify app-owned launcher dir was added to User PATH
         with winreg.OpenKey(
@@ -398,8 +445,8 @@ def test_windows_installer_isolated_lifecycle_smoke(tmp_path: Path) -> None:
                 "Bypass",
                 "-File",
                 str(ps1_path),
-                "-InstallDir",
-                str(test_install_dir),
+                "-InstallRoot",
+                str(tmp_path),
             ],
             capture_output=True,
             text=True,
@@ -425,15 +472,15 @@ def test_windows_installer_isolated_lifecycle_smoke(tmp_path: Path) -> None:
                 "Bypass",
                 "-File",
                 str(ps1_path),
-                "-InstallDir",
-                str(test_install_dir),
+                "-InstallRoot",
+                str(tmp_path),
                 "-Uninstall",
             ],
             capture_output=True,
             text=True,
         )
         assert proc_uninstall.returncode == 0, f"Uninstall failed:\n{proc_uninstall.stderr}"
-        assert not test_install_dir.exists()
+        assert not cli_venv.exists()
 
         with winreg.OpenKey(
             winreg.HKEY_CURRENT_USER, "Environment", 0, winreg.KEY_READ
@@ -450,8 +497,8 @@ def test_windows_installer_isolated_lifecycle_smoke(tmp_path: Path) -> None:
                 "Bypass",
                 "-File",
                 str(ps1_path),
-                "-InstallDir",
-                str(test_install_dir),
+                "-InstallRoot",
+                str(tmp_path),
                 "-Uninstall",
             ],
             capture_output=True,
@@ -465,6 +512,69 @@ def test_windows_installer_isolated_lifecycle_smoke(tmp_path: Path) -> None:
             winreg.HKEY_CURRENT_USER, "Environment", 0, winreg.KEY_SET_VALUE
         ) as key:
             winreg.SetValueEx(key, "Path", 0, winreg.REG_SZ, orig_user_path)
+
+
+@pytest.mark.skipif(
+    platform.system() != "Windows",
+    reason="Windows PowerShell installer integration smoke",
+)
+def test_windows_installer_unmarked_directory_protection(tmp_path: Path) -> None:
+    import subprocess
+
+    ps1_path = REPO_ROOT / "scripts" / "install_windows_alias.ps1"
+    unmarked_venv = tmp_path / "AgenticDebugger" / "cli-venv"
+    unmarked_venv.mkdir(parents=True)
+    sentinel = unmarked_venv / "precious_payload.txt"
+    sentinel.write_text("critical user data", encoding="utf-8")
+
+    # 1. Uninstall must refuse to delete an unmarked directory (F8 fail-closed)
+    proc_uninstall = subprocess.run(
+        [
+            "powershell.exe",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(ps1_path),
+            "-InstallRoot",
+            str(tmp_path),
+            "-Uninstall",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert proc_uninstall.returncode != 0
+    uninstall_output = " ".join(
+        (proc_uninstall.stderr + proc_uninstall.stdout).split()
+    )
+    assert "missing the Agentic Debugger ownership marker" in uninstall_output
+    assert unmarked_venv.exists()
+    assert sentinel.is_file()
+    assert sentinel.read_text(encoding="utf-8") == "critical user data"
+
+    # 2. Install must refuse to adopt or overwrite an unmarked directory (F8 fail-closed)
+    proc_install = subprocess.run(
+        [
+            "powershell.exe",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(ps1_path),
+            "-InstallRoot",
+            str(tmp_path),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert proc_install.returncode != 0
+    install_output = " ".join(
+        (proc_install.stderr + proc_install.stdout).split()
+    )
+    assert "lacks the Agentic Debugger ownership marker" in install_output
+    assert unmarked_venv.exists()
+    assert sentinel.is_file()
+    assert sentinel.read_text(encoding="utf-8") == "critical user data"
 
 
 @pytest.mark.skipif(
@@ -487,11 +597,13 @@ def test_windows_installer_active_unrelated_venv_not_persisted_to_path(
 
     ps1_path = REPO_ROOT / "scripts" / "install_windows_alias.ps1"
     unrelated_venv = tmp_path / "project_active_venv"
-    app_owned_venv = tmp_path / "app_owned_venv"
-
+    # Create genuine unrelated virtual environment
+    subprocess.run([sys.executable, "-m", "venv", str(unrelated_venv)], check=True)
     unrelated_scripts = unrelated_venv / "Scripts"
-    unrelated_scripts.mkdir(parents=True)
-    unrelated_python = sys.executable
+    unrelated_python = unrelated_scripts / "python.exe"
+
+    install_root = tmp_path / "install_root"
+    app_owned_scripts = install_root / "AgenticDebugger" / "cli-venv" / "Scripts"
 
     try:
         proc = subprocess.run(
@@ -503,9 +615,9 @@ def test_windows_installer_active_unrelated_venv_not_persisted_to_path(
                 "-File",
                 str(ps1_path),
                 "-Python",
-                unrelated_python,
-                "-InstallDir",
-                str(app_owned_venv),
+                str(unrelated_python),
+                "-InstallRoot",
+                str(install_root),
             ],
             capture_output=True,
             text=True,
@@ -522,8 +634,7 @@ def test_windows_installer_active_unrelated_venv_not_persisted_to_path(
         assert str(unrelated_scripts).lower() not in user_path.lower()
 
         # Prove ONLY the app-owned venv's Scripts directory was persisted
-        app_scripts = app_owned_venv / "Scripts"
-        assert str(app_scripts).lower() in user_path.lower()
+        assert str(app_owned_scripts).lower() in user_path.lower()
 
         # Clean up via installer uninstall
         proc_uninst = subprocess.run(
@@ -534,14 +645,17 @@ def test_windows_installer_active_unrelated_venv_not_persisted_to_path(
                 "Bypass",
                 "-File",
                 str(ps1_path),
-                "-InstallDir",
-                str(app_owned_venv),
+                "-InstallRoot",
+                str(install_root),
                 "-Uninstall",
             ],
             capture_output=True,
             text=True,
         )
         assert proc_uninst.returncode == 0
+
+        # Unrelated venv remains fully intact
+        assert (unrelated_scripts / "python.exe").is_file()
     finally:
         with winreg.OpenKey(
             winreg.HKEY_CURRENT_USER, "Environment", 0, winreg.KEY_SET_VALUE
