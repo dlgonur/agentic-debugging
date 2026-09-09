@@ -17,6 +17,7 @@ with a configured command model (SourceKind.CONFIGURED_MODEL):
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -39,12 +40,14 @@ from agentic_debugger.application.level32_materialization import (
     LEVEL32_INTERNAL_TASK_ID,
     LEVEL32_PUBLIC_F2P,
     LEVEL32_PUBLIC_P2P,
+    LEVEL32_SOURCE_SHA256,
     Level32MaterializationError,
     SourceAcquisitionMode,
     build_level32_interactive_scenario,
     build_level32_official_scenario,
-    default_base_source_cache_dir,
     materialize_level32_task,
+    sha256_file,
+    write_public_scaffold,
 )
 from agentic_debugger.application.model_gateway import (
     ModelGateway,
@@ -57,9 +60,161 @@ from agentic_debugger.application.worker_scenarios import ScenarioContext
 from agentic_debugger.cancellation import CancellationToken
 from agentic_debugger.demo.policies import DemoPolicy
 from agentic_debugger.evaluation.live import LiveModelAdapter, LiveModelConfig
+from agentic_debugger.evaluation.runner import load_task
+from agentic_debugger.runtime.test_runner import TestRunner
+from agentic_debugger.runtime.workspace import TaskWorkspace
 from agentic_debugger.ui.app import LocalApplicationV1
 from agentic_debugger.ui.screens import StartSessionScreen
 from ui_support import run_headless
+
+
+HERMETIC_CONFIG_PY = """# -*- coding: utf-8 -*-
+
+\"\"\"Global configuration handling.\"\"\"
+
+from __future__ import unicode_literals
+import copy
+import logging
+import os
+import io
+
+import poyo
+
+from .exceptions import ConfigDoesNotExistException
+from .exceptions import InvalidConfiguration
+
+
+logger = logging.getLogger(__name__)
+
+USER_CONFIG_PATH = os.path.expanduser('~/.cookiecutterrc')
+
+BUILTIN_ABBREVIATIONS = {
+    'gh': 'https://github.com/{0}.git',
+    'gl': 'https://gitlab.com/{0}.git',
+    'bb': 'https://bitbucket.org/{0}',
+}
+
+DEFAULT_CONFIG = {
+    'cookiecutters_dir': os.path.expanduser('~/.cookiecutters/'),
+    'replay_dir': os.path.expanduser('~/.cookiecutter_replay/'),
+    'default_context': {},
+    'abbreviations': BUILTIN_ABBREVIATIONS,
+}
+
+
+def _expand_path(path):
+    \"\"\"Expand both environment variables and user home in the given path.\"\"\"
+    path = os.path.expandvars(path)
+    path = os.path.expanduser(path)
+    return path
+
+
+def get_config(config_path):
+    \"\"\"Retrieve the config from the specified path, returning a config dict.\"\"\"
+    if not os.path.exists(config_path):
+        raise ConfigDoesNotExistException
+
+    logger.debug('config_path is {0}'.format(config_path))
+    with io.open(config_path, encoding='utf-8') as file_handle:
+        try:
+            yaml_dict = poyo.parse_string(file_handle.read())
+        except poyo.exceptions.PoyoException as e:
+            raise InvalidConfiguration(
+                'Unable to parse YAML file {}. Error: {}'
+                ''.format(config_path, e)
+            )
+
+    config_dict = copy.copy(DEFAULT_CONFIG)
+    config_dict.update(yaml_dict)
+
+    raw_replay_dir = config_dict['replay_dir']
+    config_dict['replay_dir'] = _expand_path(raw_replay_dir)
+
+    raw_cookies_dir = config_dict['cookiecutters_dir']
+    config_dict['cookiecutters_dir'] = _expand_path(raw_cookies_dir)
+
+    return config_dict
+
+
+def get_user_config(config_file=None, default_config=False):
+    \"\"\"Return the user config as a dict.
+
+    If ``default_config`` is True, ignore ``config_file`` and return default
+    values for the config parameters.
+
+    If a path to a ``config_file`` is given, that is different from the default
+    location, load the user config from that.
+
+    Otherwise look up the config file path in the ``COOKIECUTTER_CONFIG``
+    environment variable. If set, load the config from this path. This will
+    raise an error if the specified path is not valid.
+
+    If the environment variable is not set, try the default config file path
+    before falling back to the default config values.
+    \"\"\"
+    # Do NOT load a config. Return defaults instead.
+    if default_config:
+        return copy.copy(DEFAULT_CONFIG)
+
+    # Load the given config file
+    if config_file and config_file is not USER_CONFIG_PATH:
+        return get_config(config_file)
+
+    try:
+        # Does the user set up a config environment variable?
+        env_config_file = os.environ['COOKIECUTTER_CONFIG']
+    except KeyError:
+        # Load an optional user config if it exists
+        # otherwise return the defaults
+        if os.path.exists(USER_CONFIG_PATH):
+            return get_config(USER_CONFIG_PATH)
+        else:
+            return copy.copy(DEFAULT_CONFIG)
+    else:
+        # There is a config environment variable. Try to load it.
+        # Do not check for existence, so invalid file paths raise an error.
+        return get_config(env_config_file)
+"""
+
+
+def _seed_hermetic_level32_source(cache_dir: Path) -> Path:
+    """Populate a hermetic, test-owned Cookiecutter source tree without Docker or host caches."""
+    pkg = cache_dir / "cookiecutter"
+    pkg.mkdir(parents=True, exist_ok=True)
+    (pkg / "__init__.py").write_text(
+        "# -*- coding: utf-8 -*-\n\n__version__ = '1.5.1'\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    (pkg / "exceptions.py").write_text(
+        "# -*- coding: utf-8 -*-\n\n"
+        "class CookiecutterException(Exception):\n    pass\n\n"
+        "class ConfigDoesNotExistException(CookiecutterException):\n    pass\n\n"
+        "class InvalidConfiguration(CookiecutterException):\n    pass\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    config_file = pkg / "config.py"
+    config_file.write_text(
+        HERMETIC_CONFIG_PY,
+        encoding="utf-8",
+        newline="\n",
+    )
+    assert sha256_file(config_file) == LEVEL32_SOURCE_SHA256
+
+    test_config_dir = cache_dir / "tests" / "test-config"
+    test_config_dir.mkdir(parents=True, exist_ok=True)
+    (test_config_dir / "valid-config.yaml").write_text(
+        "default_context:\n"
+        '    full_name: "Firstname Lastname"\n'
+        '    email: "firstname.lastname@gmail.com"\n'
+        '    github_username: "example"\n'
+        'cookiecutters_dir: "/home/example/some-path-to-templates"\n'
+        'replay_dir: "/home/example/some-path-to-replay-files"\n',
+        encoding="utf-8",
+        newline="\n",
+    )
+    return cache_dir
 
 
 def _setup_test_providers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -160,12 +315,15 @@ def test_level32_configured_runtime_end_to_end_materialization_and_model_request
     """
     _setup_test_providers(tmp_path, monkeypatch)
 
-    # Use explicit temporary cache seam rather than implicit global cache
-    explicit_cache = tmp_path / "explicit_cache" / "cookiecutter-967-base-source"
-    shutil.copytree(default_base_source_cache_dir(), explicit_cache)
+    # Point LOCALAPPDATA to nonexistent path to prove no dependency on host caches
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "nonexistent_localappdata"))
+
+    # Use hermetic test cache seam without requiring Docker or host cache
+    hermetic_cache = tmp_path / "hermetic_cache" / "cookiecutter-967-base-source"
+    _seed_hermetic_level32_source(hermetic_cache)
     monkeypatch.setattr(
         "agentic_debugger.application.level32_materialization.default_base_source_cache_dir",
-        lambda: explicit_cache,
+        lambda: hermetic_cache,
     )
 
     # Spy on adapter and controller construction to verify F2 invariants
@@ -300,6 +458,11 @@ sys.stdout.flush()
     assert (staging_fixture / "tests" / "test_pdb_public_config_merge.py").is_file()
     assert (staging_fixture / "poyo.py").is_file()
     assert (staging_fixture / "task.json").is_file()
+    task_manifest = json.loads(
+        (staging_fixture / "task.json").read_text(encoding="utf-8")
+    )
+    assert task_manifest["reproduction"]["argv"][0] == sys.executable
+    assert task_manifest["tests"]["full_suite_argv"][0] == sys.executable
 
     # 2. Verify fake model runner was actually executed
     assert marker_path.is_file()
@@ -408,18 +571,20 @@ def test_interactive_level32_materialization_without_pyarrow(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Interactive Level-32 workspace materialization succeeds when pyarrow is unavailable (F1)."""
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "guaranteed_nonexistent_localappdata"))
+
     # Force pyarrow to be unimportable
     monkeypatch.setitem(sys.modules, "pyarrow", None)
     monkeypatch.setitem(sys.modules, "pyarrow.parquet", None)
 
-    explicit_cache = tmp_path / "cache" / "cookiecutter-967-base-source"
-    shutil.copytree(default_base_source_cache_dir(), explicit_cache)
+    hermetic_cache = tmp_path / "cache" / "cookiecutter-967-base-source"
+    _seed_hermetic_level32_source(hermetic_cache)
 
     staging_root = tmp_path / "staging"
     fixture = materialize_level32_task(
         staging_root,
         mode=SourceAcquisitionMode.INTERACTIVE_CACHE_FIRST,
-        cache_dir=explicit_cache,
+        cache_dir=hermetic_cache,
     )
 
     assert fixture.is_dir()
@@ -432,6 +597,8 @@ def test_interactive_level32_materialization_without_pyarrow(
     assert task_data["task_id"] == LEVEL32_INTERNAL_TASK_ID
     assert task_data["tests"]["fail_to_pass"] == [LEVEL32_PUBLIC_F2P]
     assert task_data["tests"]["pass_to_pass"] == [LEVEL32_PUBLIC_P2P]
+    assert task_data["reproduction"]["argv"][0] == sys.executable
+    assert task_data["tests"]["full_suite_argv"][0] == sys.executable
 
 
 def test_official_versus_interactive_scenario_proof_contracts() -> None:
@@ -444,3 +611,100 @@ def test_official_versus_interactive_scenario_proof_contracts() -> None:
 
     assert interactive.runtime_probe.exact_public_reproduction is False
     assert interactive.runtime_probe.call_source == "get_config('tests/test-config/valid-config.yaml')"
+
+
+def test_level32_hostile_path_reproduction_uses_bound_interpreter(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Hostile PATH regression: interactive task execution uses bound interpreter (sys.executable).
+
+    Proves:
+    1. Interactive task materialization binds task["reproduction"]["argv"][0] and
+       task["tests"]["full_suite_argv"][0] to sys.executable.
+    2. When a hostile fake 'python' executable is placed earlier on PATH,
+       running reproduction via the real TestRunner executes the bound interpreter
+       and does NOT invoke the fake python on PATH.
+    3. Official operator route preserves historical scientific default ("python").
+    """
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "guaranteed_nonexistent_localappdata"))
+
+    # Seed hermetic source cache
+    cache_dir = tmp_path / "hermetic_cache" / "cookiecutter-967-base-source"
+    _seed_hermetic_level32_source(cache_dir)
+
+    # 1. Interactive materialization binds sys.executable
+    staging_interactive = tmp_path / "staging_interactive"
+    fixture = materialize_level32_task(
+        staging_interactive,
+        mode=SourceAcquisitionMode.INTERACTIVE_CACHE_FIRST,
+        cache_dir=cache_dir,
+    )
+    task_data = json.loads((fixture / "task.json").read_text(encoding="utf-8"))
+    assert task_data["reproduction"]["argv"][0] == sys.executable
+    assert task_data["tests"]["full_suite_argv"][0] == sys.executable
+
+    # 2. Hostile PATH environment setup
+    fake_bin = tmp_path / "fake_bin"
+    fake_bin.mkdir(parents=True, exist_ok=True)
+    fake_marker = tmp_path / "fake_python_called.txt"
+
+    if sys.platform == "win32":
+        fake_py = fake_bin / "python.bat"
+        fake_py.write_text(
+            f"@echo off\r\necho called > \"{fake_marker}\"\r\nexit /b 99\r\n",
+            encoding="utf-8",
+        )
+    else:
+        fake_py = fake_bin / "python"
+        fake_py.write_text(
+            f"#!/bin/sh\necho called > \"{fake_marker}\"\nexit 99\n",
+            encoding="utf-8",
+        )
+        fake_py.chmod(0o755)
+
+    monkeypatch.setenv("PATH", f"{fake_bin}{os.pathsep}{os.environ.get('PATH', '')}")
+
+    # Load task and execute reproduction through real TestRunner in real disposable workspace
+    task = load_task(str(fixture / "task.json"))
+    workspaces_dir = tmp_path / "workspaces"
+    workspaces_dir.mkdir(parents=True, exist_ok=True)
+    workspace = TaskWorkspace(str(fixture), parent_dir=str(workspaces_dir))
+    runner = TestRunner(workspace)
+
+    run_result = runner.run_reproduction(task)
+
+    # Prove fake python on PATH was never executed
+    assert not fake_marker.exists()
+    # Unpatched baseline reproduction exits with 1 (expected failure)
+    assert run_result.command_result.exit_code == 1
+    assert run_result.reproduction_match is True
+    assert run_result.passed is False
+
+    # 3. Official operator route preserves historical "python"
+    official_fixture = tmp_path / "official_scaffold"
+    write_public_scaffold(official_fixture, "Official problem statement")
+    official_task_data = json.loads(
+        (official_fixture / "task.json").read_text(encoding="utf-8")
+    )
+    assert official_task_data["reproduction"]["argv"][0] == "python"
+    assert official_task_data["tests"]["full_suite_argv"][0] == "python"
+
+    # Also test materialize_level32_task in official mode with mocked official row
+    official_staging = tmp_path / "official_staging"
+    monkeypatch.setattr(
+        "agentic_debugger.application.level32_materialization.load_official_row",
+        lambda **_kw: {"problem_statement": "Official problem statement"},
+    )
+    monkeypatch.setattr(
+        "agentic_debugger.application.level32_materialization.copy_image_source",
+        lambda *args, **kwargs: None,
+    )
+    official_mat_fixture = materialize_level32_task(
+        official_staging,
+        mode=SourceAcquisitionMode.OFFICIAL_FROZEN_DOCKER_ONLY,
+    )
+    mat_task_data = json.loads(
+        (official_mat_fixture / "task.json").read_text(encoding="utf-8")
+    )
+    assert mat_task_data["reproduction"]["argv"][0] == "python"
+    assert mat_task_data["tests"]["full_suite_argv"][0] == "python"

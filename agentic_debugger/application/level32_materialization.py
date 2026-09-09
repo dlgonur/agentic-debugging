@@ -295,7 +295,12 @@ def copy_image_source(
             pass
 
 
-def write_public_scaffold(fixture: Path, problem_statement: str) -> None:
+def write_public_scaffold(
+    fixture: Path,
+    problem_statement: str,
+    *,
+    python_executable: str = "python",
+) -> None:
     fixture = Path(fixture).resolve()
     fixture.mkdir(parents=True, exist_ok=True)
     (fixture / "tests").mkdir(parents=True, exist_ok=True)
@@ -350,7 +355,7 @@ def write_public_scaffold(fixture: Path, problem_statement: str) -> None:
         "fixture_path": f"agentic_debugger/datasets/curated/{LEVEL32_TASK_ID}",
         "reproduction": {
             "argv": [
-                "python",
+                python_executable,
                 "-m",
                 "pytest",
                 LEVEL32_PUBLIC_F2P,
@@ -368,7 +373,7 @@ def write_public_scaffold(fixture: Path, problem_statement: str) -> None:
             "fail_to_pass": [LEVEL32_PUBLIC_F2P],
             "pass_to_pass": [LEVEL32_PUBLIC_P2P],
             "full_suite_argv": [
-                "python",
+                python_executable,
                 "-m",
                 "pytest",
                 "tests/test_pdb_public_config_merge.py",
@@ -474,6 +479,7 @@ def materialize_level32_task(
     *,
     mode: SourceAcquisitionMode | str = SourceAcquisitionMode.INTERACTIVE_CACHE_FIRST,
     cache_dir: Path | None = None,
+    python_executable: str | None = None,
 ) -> Path:
     """Materialize the complete public Level-32 workspace under staging_root.
 
@@ -481,10 +487,13 @@ def materialize_level32_task(
     - Uses verified local source cache first, falling back to Docker export.
     - Uses the application-owned Level32PublicTaskSpec (exact problem statement)
       without requiring pyarrow or the full SWE-rebench parquet dataset.
+    - Binds task execution commands to the worker/product interpreter (sys.executable)
+      so hostile PATH configurations cannot hijack the runtime.
 
     For official operator sessions (mode=OFFICIAL_FROZEN_DOCKER_ONLY):
     - Exports directly from pinned Docker image with image validation.
     - Loads the authoritative SWE-rebench parquet row via pyarrow.
+    - Retains historical scientific baseline command ("python").
 
     Returns the fixture directory path containing the prepared production source,
     the public poyo compatibility shim, public test suite, and task.json.
@@ -501,7 +510,17 @@ def materialize_level32_task(
         problem_statement = str(row["problem_statement"])
     else:
         problem_statement = LEVEL32_PROBLEM_STATEMENT
-    write_public_scaffold(fixture, problem_statement)
+    if python_executable is None:
+        python_executable = (
+            sys.executable
+            if mode == SourceAcquisitionMode.INTERACTIVE_CACHE_FIRST
+            else "python"
+        )
+    write_public_scaffold(
+        fixture,
+        problem_statement,
+        python_executable=python_executable,
+    )
     return fixture
 
 
