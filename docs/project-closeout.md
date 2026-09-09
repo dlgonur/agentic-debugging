@@ -10,6 +10,7 @@
 intentionally not embedded; post-V2 documentation hygiene closeout complete;
 Session Token Usage Telemetry v1 (Task 34) COMPLETE (2026-09-09);
 Global CLI Launch Alias v1 (Task 41) COMPLETE (2026-09-09);
+Universal Model Execution Eligibility v1 (Task 42) COMPLETE (2026-09-09);
 no subsequent implementation priority selected.)
 **Supersedes:** `outdated/docs-archive/status/project-closeout-2026-08-11.md` (the
 2026-08-11 S9 bounded-negative closeout, preserved unchanged as a historical
@@ -20,6 +21,16 @@ This is the single current reviewer/handoff status document. The historical
 technical narrative covering R1–R6 through 2026-08-13 is `docs/final-report.md`; the
 2026-08-11 scientific snapshot is archived verbatim at
 `outdated/docs-archive/reports/final-report-2026-08-11.md`.
+
+**2026-09-09 post-V2 capability update — Task 42 Universal Model Execution Eligibility v1:**
+Universal Model Execution Eligibility v1 (Task 42) COMPLETE (2026-09-09); no subsequent implementation priority selected.
+Task 42 established the repository-wide hard product invariant that any model configured by the user with executable credentials must be runnable anywhere Agentic Debugger supports model execution, separating execution eligibility from scientific qualification on `fix/universal-model-execution-v1`:
+- **Hard Product Invariant:** "Any model that the user has made genuinely executable through a configured provider/API credential must be runnable anywhere Agentic Debugger supports model execution. Qualification may affect classification of the RESULT. Qualification must NOT control whether the model may EXECUTE."
+- **Level 32 Unlocked:** Capability Ladder Level 32 (`audreyr__cookiecutter-967`) previously blocked all non-qualified models. In Task 42, all executable provider models are enabled (`disabled=False`) in the model picker, show readiness `Ready Yes` with secondary note `"Selected model is outside frozen official Level-32 treatment"`, and dispatch to `SourceKind.CONFIGURED_MODEL`.
+- **Dual Source Dispatch:** Canonical qualified Ollama Cloud models continue to dispatch to `SourceKind.LEVEL32_OPERATOR` under the frozen operator contract (`policy="exact-pdb-level32-frozen"`). Non-qualified executable provider models dispatch to `SourceKind.CONFIGURED_MODEL` (`policy="pdb-on-uncertainty"`) with the Level-32 budget contract (25 model requests, 25 controller steps, 3600s time limit, 1 retry, 2 interactive directive repairs).
+- **Single Controller Architecture Preserved:** Reuses the existing single-controller execution engine, `ModelBinding`, `CredentialVault`, and disposable workspace harness.
+- **Fail-Closed Runtime Blockers:** Concrete runtime impediments (missing API keys, unconfigured providers, offline unreachable endpoints) continue to fail closed and block execution truthfully.
+This is an additive post-V2 product capability, not V3 or a new architecture campaign. No subsequent implementation priority has been selected by repository authority.
 
 **2026-09-09 post-V2 capability update — Task 41 Global CLI Launch Alias v1:**
 Global CLI Launch Alias v1 (Task 41) COMPLETE (2026-09-09); no subsequent implementation priority selected.

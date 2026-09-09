@@ -526,9 +526,12 @@ class LocalApplicationV1(App):
         # displayed selection is authoritative.  A curated offline task must not
         # be executed as a Level-32/Ollama Cloud session via a stale fallback,
         # and a ladder task must not be executed as a local offline demo.
-        if task_id == LEVEL32_TASK_ID and source_kind is not SourceKind.LEVEL32_OPERATOR:
+        if task_id == LEVEL32_TASK_ID and source_kind not in (
+            SourceKind.LEVEL32_OPERATOR,
+            SourceKind.CONFIGURED_MODEL,
+        ):
             raise ValueError(
-                "Level-32 task requires the Level-32 operator source"
+                "Level-32 task requires the Level-32 operator source or configured model source"
             )
         if source_kind is SourceKind.LEVEL32_OPERATOR and task_id != LEVEL32_TASK_ID:
             raise ValueError(

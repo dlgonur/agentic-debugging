@@ -75,6 +75,7 @@ from agentic_debugger.application.level32 import LEVEL32_TASK_ID
 from agentic_debugger.application.ollama_cloud_source import (
     INTERACTIVE_LADDER_DIRECTIVE_REPAIRS,
     LADDER_RUNTIME_CONTRACTS,
+    LadderRuntimeContract,
     ladder_runtime_contract,
 )
 from agentic_debugger.demo.catalog import scenario_for
@@ -287,20 +288,11 @@ def run_configured_session(
         raise ScenarioInputError("configured source requires the shared emitter")
     task_id = ctx.emitter.task_id
 
-    # Defense in depth: Level 32 is strictly qualified-only via the
-    # authoritative Level32OperatorWorker. It must never enter the
-    # configured command source under any circumstances.
-    if task_id == LEVEL32_TASK_ID:
-        raise ScenarioInputError(
-            f"Level-32 task {task_id!r} cannot be executed as a configured session; "
-            "it requires the Level-32 operator source"
-        )
-
-    # Provider-neutral lower-ladder contract: if task_id is an accepted
-    # lower ladder rung, the rung's budget/proof contract must be honored
-    # regardless of which provider is selected. This preserves the task
-    # mechanics while varying only the transport. A contract or scenario
-    # loading failure fails closed immediately.
+    # Provider-neutral ladder contract: if task_id is an accepted
+    # ladder rung, the rung's budget contract must be honored regardless
+    # of which provider is selected. Lower ladder rungs enforce their
+    # public reproduction probe; Level 32 enforces its interactive
+    # budget contract.
     if task_id in LADDER_RUNTIME_CONTRACTS:
         ladder_contract = ladder_runtime_contract(task_id)
         ladder_scenario = scenario_for(task_id)
@@ -309,8 +301,21 @@ def run_configured_session(
                 f"lower ladder task {task_id!r} requires exact public reproduction probe"
             )
         is_lower_ladder = True
+        is_level32 = False
+    elif task_id == LEVEL32_TASK_ID:
+        is_lower_ladder = False
+        is_level32 = True
+        ladder_contract = LadderRuntimeContract(
+            max_model_requests=25,
+            max_controller_steps=25,
+            max_model_phase_seconds=3600,
+            max_retries=1,
+            max_directive_repairs=INTERACTIVE_LADDER_DIRECTIVE_REPAIRS,
+        )
+        ladder_scenario = None
     else:
         is_lower_ladder = False
+        is_level32 = False
         ladder_contract = None
         ladder_scenario = None
 
@@ -319,9 +324,11 @@ def run_configured_session(
     if "provider" in params or "model_id" in params:
         provider, model_id, policy_value = _validate_registry_params(params)
         policy = DemoPolicy(policy_value)
-        # Lower ladder ceiling is task-specific (24), not the general 64
+        # Ladder ceiling is task-specific (24 lower / 25 Level 32), not the general 64
         ceiling = (
-            ladder_contract.max_model_requests if is_lower_ladder else None
+            ladder_contract.max_model_requests
+            if (is_lower_ladder or is_level32) and ladder_contract is not None
+            else None
         )
         live_config, provenance, fingerprint = _resolve_registry_model(
             provider, model_id, logical_call_ceiling=ceiling
@@ -461,13 +468,13 @@ def run_configured_session(
         )
         cwd = profile.cwd
         environment = dict(profile.environment) if profile.environment else None
-    # Lower ladder contract is provider-neutral: same budgets/proof
+    # Ladder contract is provider-neutral: same budgets/proof
     # regardless of whether the model comes from the registry or a
     # store profile. Outside ladder, keep general defaults.
     # Directive repair is an explicit interactive-only concept: these are
     # executable unqualified provider runs, never a qualified scientific
     # treatment (the qualified ladder and Level-32 paths keep zero).
-    if is_lower_ladder and ladder_contract is not None:
+    if (is_lower_ladder or is_level32) and ladder_contract is not None:
         limits = LiveRunLimits(
             max_model_requests=ladder_contract.max_model_requests,
             max_controller_steps=ladder_contract.max_controller_steps,
@@ -555,10 +562,10 @@ def run_configured_session(
         return demo_context.candidate_patch
 
     try:
-        # Lower ladder uses task-specific controller step ceiling
+        # Ladder uses task-specific controller step ceiling
         _max_calls = (
             ladder_contract.max_controller_steps
-            if is_lower_ladder and ladder_contract is not None
+            if (is_lower_ladder or is_level32) and ladder_contract is not None
             else _DEFAULT_MAX_CONTROLLER_STEPS
         )
         run_local_session(

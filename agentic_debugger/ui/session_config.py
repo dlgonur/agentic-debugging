@@ -319,10 +319,9 @@ def model_compatibility(
     concern (``option.available``); this answers contract compatibility
     only, with the exact reason shown in the picker and the pre-flight.
 
-    For the Capability Ladder, interactive runs accept any executable
-    provider model.  Qualification (``ladder_qualified``) is a scientific
-    distinction enforced by readiness for the frozen Level-32 treatment,
-    not a universal runtime allowlist.
+    For the Capability Ladder, any live provider model is executable.
+    Scientific qualification controls result classification/comparability,
+    never user execution eligibility.
     """
     provider = option.provider
     if provider == PROVIDER_OFFLINE:
@@ -486,9 +485,8 @@ def _ladder_readiness(config: SessionConfig, catalog: SessionCatalog):
         )
         return issues, ["Research tasks use the canonical operator contract."]
     is_level32 = config.task_id == LEVEL32_TASK_ID
-    if is_level32:
-        notes = ["Frozen Level-32 official treatment; qualified Ollama Cloud models only."]
-        if not catalog.ladder_models:
+    if config.model.is_offline:
+        if is_level32 and not catalog.ladder_models:
             issues.append(
                 ReadinessIssue(
                     ROW_MODEL,
@@ -497,28 +495,7 @@ def _ladder_readiness(config: SessionConfig, catalog: SessionCatalog):
                     "operator roster is not installed.",
                 )
             )
-            return issues, notes
-        if config.model.is_offline:
-            issues.append(
-                ReadinessIssue(
-                    ROW_MODEL,
-                    SEVERITY_ERROR,
-                    "Ladder runs require a live model — choose a provider model.",
-                )
-            )
-            return issues, notes
-        if catalog.ladder_model(config.model) is None:
-            issues.append(
-                ReadinessIssue(
-                    ROW_MODEL,
-                    SEVERITY_ERROR,
-                    "Choose a qualified Ollama Cloud model for ladder runs.",
-                )
-            )
-        return issues, notes
-    # Lower ladder rungs (6, 12, 18): any executable provider model.
-    notes: list[str] = []
-    if config.model.is_offline:
+            return issues, ["Frozen Level-32 official treatment; qualified Ollama Cloud models only."]
         issues.append(
             ReadinessIssue(
                 ROW_MODEL,
@@ -526,7 +503,13 @@ def _ladder_readiness(config: SessionConfig, catalog: SessionCatalog):
                 "Ladder runs require a live model — choose a provider model.",
             )
         )
-        return issues, ["Research tasks use the canonical operator contract."]
+        return issues, (
+            ["Frozen Level-32 official treatment; qualified Ollama Cloud models only."]
+            if is_level32
+            else ["Research tasks use the canonical operator contract."]
+        )
+
+    notes: list[str] = []
     model = catalog.find_model(config.model)
     ladder_entry = catalog.ladder_model(config.model)
     effective = ladder_entry if ladder_entry is not None else model
@@ -555,21 +538,24 @@ def _ladder_readiness(config: SessionConfig, catalog: SessionCatalog):
             )
         )
     else:
-        # Executable but not qualified: truthfully surface the distinction,
-        # including the interactive-only directive-repair budget (the
-        # qualified ladder and frozen Level-32 treatments remain at zero).
-        if ladder_entry is None:
-            from agentic_debugger.application.ollama_cloud_source import (
-                INTERACTIVE_LADDER_DIRECTIVE_REPAIRS,
-            )
-
-            notes.append(
-                "Interactive ladder execution · directive repair: up to "
-                f"{INTERACTIVE_LADDER_DIRECTIVE_REPAIRS} — not a qualified "
-                "scientific treatment."
-            )
+        if is_level32:
+            if ladder_entry is None:
+                notes.append("Selected model is outside frozen official Level-32 treatment")
+            else:
+                notes.append("Frozen Level-32 official treatment; qualified Ollama Cloud models only.")
         else:
-            notes.append("Research tasks use the canonical operator contract.")
+            if ladder_entry is None:
+                from agentic_debugger.application.ollama_cloud_source import (
+                    INTERACTIVE_LADDER_DIRECTIVE_REPAIRS,
+                )
+
+                notes.append(
+                    "Interactive ladder execution · directive repair: up to "
+                    f"{INTERACTIVE_LADDER_DIRECTIVE_REPAIRS} — not a qualified "
+                    "scientific treatment."
+                )
+            else:
+                notes.append("Research tasks use the canonical operator contract.")
     return issues, notes
 
 

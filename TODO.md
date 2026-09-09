@@ -18,7 +18,9 @@ The post-V2 repository-wide documentation and project-state hygiene closeout
 (Task 31) is complete. Session Token Usage Telemetry v1 (Task 34) is complete
 (2026-09-09) as an additive product telemetry capability. Global CLI Launch
 Alias v1 (Task 41) is complete (2026-09-09) as an additive product usability
-capability. No subsequent implementation priority selected. No V3 or
+capability. Universal Model Execution Eligibility v1 (Task 42) is complete
+(2026-09-09) separating execution eligibility from scientific qualification.
+No subsequent implementation priority selected. No V3 or
 new architecture campaign has been opened.
 
 ## V2 architecture outcomes (completed 2026-09-07)
@@ -119,6 +121,16 @@ failure visibility, and retry.
   argv prog auto-detection in help/version banners; behavioral parity;
   generic `agentic` namespace unclaimed; idempotent Windows helper
   `scripts/install_windows_alias.ps1` deploying to app-owned isolated venv.
+- [x] Task 42 — Universal Model Execution Eligibility v1 (2026-09-09):
+  Repository-wide hard product invariant: any model made executable by user configuration
+  is runnable everywhere execution is supported. Separated scientific qualification
+  (controls benchmark/treatment classification) from execution eligibility (controls runnability);
+  unlocked Level 32 (`audreyr__cookiecutter-967`) for all executable provider models with
+  `Ready Yes`, informational note `"Selected model is outside frozen official Level-32 treatment"`,
+  and dispatch to `SourceKind.CONFIGURED_MODEL` with Level-32 budget contract (25 requests/steps,
+  3600s, 1 retry, 2 directive repairs); preserved frozen `SourceKind.LEVEL32_OPERATOR` for qualified
+  Ollama Cloud models; preserved fail-closed behavior for concrete runtime blockers (missing credentials,
+  offline providers).
 
 ## Active work
 

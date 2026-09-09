@@ -553,31 +553,39 @@ def test_real_model_picker_keeps_provider_groups_visible_across_target_switch(
         qualified_key = f"ollama_cloud:{collision_id}"
         assert by_value[qualified_key].disabled is False
         assert sum(choice.value == qualified_key for choice in ladder_picker.choices) == 1
-        assert by_value["ollama_cloud:glm-5.3-flash:cloud"].disabled is True
-        assert "Scientific ladder contract" in by_value[
+        # Non-qualified live models are executable (disabled is False) with secondary note
+        assert by_value["ollama_cloud:glm-5.3-flash:cloud"].disabled is False
+        assert "not qualified for frozen Level-32 comparison" in by_value[
             "ollama_cloud:glm-5.3-flash:cloud"
-        ].disabled_reason
+        ].secondary
         for key in (
             "opencode_go:opencode-go/glm-5.3",
             f"commandcode_goat:{collision_id}",
             "configured:custom-model",
         ):
-            assert by_value[key].disabled is True
-            assert "Scientific ladder contract" in by_value[key].disabled_reason
+            assert by_value[key].disabled is False
+            assert "not qualified for frozen Level-32 comparison" in by_value[key].secondary
         offline = by_value["offline:"]
         assert offline.disabled is True
         assert "live model" in offline.disabled_reason.lower()
 
-        # A colliding CommandCode model id remains CommandCode and blocked
-        # for the frozen Level-32 treatment; it is not reinterpreted as the
-        # qualified Ollama alias.
+        # A colliding CommandCode model id remains CommandCode (not
+        # reinterpreted as qualified Ollama) and is genuinely executable
+        # for Level 32 under CONFIGURED_MODEL.
         pilot.app.pop_screen()
         await pilot.pause()
         start._choice_selected("model", f"commandcode_goat:{collision_id}")
         assert start._config.model.provider == "commandcode_goat"
-        assert start.start_available is False
+        assert start.start_available is True
+        start_context = start.query_one("#context-summary").render().plain
+        assert "READY  Yes" in start_context
+        assert "outside frozen official Level-32 treatment" in start_context
         start.action_start()
-        assert start_calls == []
+        assert len(start_calls) == 1
+        assert start_calls[0]["task_id"] == "audreyr__cookiecutter-967"
+        assert start_calls[0]["source_kind"] is SourceKind.CONFIGURED_MODEL
+        assert start_calls[0]["profile_id"] == collision_id
+        assert start_calls[0]["model_provider"] == "commandcode_goat"
 
     run_headless(app, scenario, size=(120, 36))
 

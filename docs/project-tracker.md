@@ -6,6 +6,7 @@
 **REPOSITORY-STATE HYGIENE CLOSEOUT — COMPLETE (2026-09-07).**
 **POST-V2 SESSION TOKEN USAGE TELEMETRY V1 (TASK 34) — COMPLETE (2026-09-09).**
 **POST-V2 GLOBAL CLI LAUNCH ALIAS V1 (TASK 41) — COMPLETE (2026-09-09).**
+**POST-V2 UNIVERSAL MODEL EXECUTION ELIGIBILITY V1 (TASK 42) — COMPLETE (2026-09-09).**
 
 - V2 implementation baseline: `e86ac2d25beb5114e9a3c805f6bc468f77905deb`.
 - V2 architecture campaign (Candidates 06–30): logical control/execution plane
@@ -17,7 +18,9 @@
   product capability on `feat/session-token-usage-v1`.
 - Global CLI Launch Alias v1 (Task 41): COMPLETE (2026-09-09) as a post-V2 product
   usability capability on `feat/global-cli-launch-alias-v1`.
-- Next implementation priority: None selected after completion of Task 41. No V3 or
+- Universal Model Execution Eligibility v1 (Task 42): COMPLETE (2026-09-09) as a post-V2
+  product capability establishing repo-wide model execution eligibility on `fix/universal-model-execution-v1`.
+- Next implementation priority: None selected after completion of Task 42. No V3 or
   new architecture campaign opened.
 - Provider-platform integrity convergence: COMPLETE (2026-09-03).
 - Goal-Mode Cycle 3 (shared visual language, welcome redesign, terminal UI polish): COMPLETE (2026-08-29).
@@ -74,6 +77,16 @@
   and startup flows; generic `agentic` global namespace explicitly unclaimed;
   idempotent Windows PowerShell installation helper `scripts/install_windows_alias.ps1`
   deploying to app-owned isolated venv (`%LOCALAPPDATA%\AgenticDebugger\cli-venv`) and safe User PATH.
+- [x] **Task 42 — Universal Model Execution Eligibility v1 (2026-09-09):**
+  Established the repo-wide product invariant: user-configured executable models are runnable
+  anywhere Agentic Debugger supports model execution. Separated scientific qualification
+  (result classification / benchmark comparison) from execution eligibility (model runnability).
+  Unlocked Level 32 (`audreyr__cookiecutter-967`) for all executable provider models:
+  picker entries enabled (`disabled=False`), readiness reported as `Ready Yes` with
+  note `"Selected model is outside frozen official Level-32 treatment"`, and dispatch to
+  `SourceKind.CONFIGURED_MODEL` with Level-32 budget contract (25 model requests, 25 controller steps,
+  3600s, 1 retry, 2 directive repairs). Preserved frozen `SourceKind.LEVEL32_OPERATOR` for qualified
+  Ollama Cloud models. Concrete runtime blockers (missing credentials, offline providers) remain fail-closed.
 
 ## 2026-08-29 goal-mode UI work
 

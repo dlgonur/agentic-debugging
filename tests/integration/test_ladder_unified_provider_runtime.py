@@ -610,30 +610,16 @@ def test_configured_direct_api_uses_ladder_contract_budgets(tmp_path: Path, monk
     assert resolved_ceilings["commandcode_goat:zai-org/glm-5.2"] == 64
 
 
-def test_level32_configured_model_rejected_at_app_boundary(tmp_path: Path) -> None:
-    """Level 32 must reject CONFIGURED_MODEL and non-LEVEL32_OPERATOR sources at the application boundary."""
+def test_level32_configured_model_accepted_at_app_boundary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Level 32 must accept CONFIGURED_MODEL at the application boundary and create worker."""
     app = LocalApplicationV1(history_store=HistoryStore(tmp_path / "history"))
 
-    with pytest.raises(ValueError, match="Level-32 task requires the Level-32 operator source"):
-        app.start_live_session(
-            task_id=LEVEL32_TASK_ID,
-            policy="pdb-on-uncertainty",
-            max_elapsed_seconds=None,
-            source_kind=SourceKind.CONFIGURED_MODEL,
-            profile_id="deepseek/deepseek-v4-flash",
-            model_provider="commandcode_goat",
-        )
-
-    with pytest.raises(ValueError, match="Level-32 task requires the Level-32 operator source"):
-        app.start_live_session(
-            task_id=LEVEL32_TASK_ID,
-            policy="pdb-on-uncertainty",
-            max_elapsed_seconds=None,
-            source_kind=SourceKind.CONFIGURED_MODEL,
-            profile_id="my-custom-profile",
-        )
-
-    with pytest.raises(ValueError, match="Level-32 task requires the Level-32 operator source"):
+    with pytest.raises(
+        ValueError,
+        match="Level-32 task requires the Level-32 operator source or configured model source",
+    ):
         app.start_live_session(
             task_id=LEVEL32_TASK_ID,
             policy="exact-pdb-level32-frozen",
@@ -641,12 +627,110 @@ def test_level32_configured_model_rejected_at_app_boundary(tmp_path: Path) -> No
             source_kind=SourceKind.OFFLINE_DEMO,
         )
 
+    captured_worker: list[Any] = []
 
-def test_configured_source_rejects_level32_task(tmp_path: Path) -> None:
-    """Defense in depth: run_configured_session must reject LEVEL32_TASK_ID directly."""
+    class FakeWorker:
+        def __init__(self, **kwargs: Any) -> None:
+            self.spec = kwargs.get("spec")
+            self.scenario = kwargs.get("scenario")
+            self.scenario_params = kwargs.get("scenario_params")
+            captured_worker.append(self)
+
+    monkeypatch.setattr("agentic_debugger.ui.app.SessionWorkerProcess", FakeWorker)
+
+    class FakeRunner:
+        def __init__(self, worker: Any, **kwargs: Any) -> None:
+            self.worker = worker
+
+        def start(self) -> None:
+            pass
+
+    monkeypatch.setattr("agentic_debugger.ui.app.LiveSessionRunner", FakeRunner)
+    monkeypatch.setattr(app, "push_screen", lambda *args, **kwargs: None)
+    monkeypatch.setattr(app, "switch_screen", lambda *args, **kwargs: None)
+    monkeypatch.setattr(type(app), "screen", property(lambda self: None))
+
+    app.start_live_session(
+        task_id=LEVEL32_TASK_ID,
+        policy="pdb-on-uncertainty",
+        max_elapsed_seconds=None,
+        source_kind=SourceKind.CONFIGURED_MODEL,
+        profile_id="deepseek/deepseek-v4-flash",
+        model_provider="commandcode_goat",
+    )
+    assert len(captured_worker) == 1
+    worker = captured_worker[0]
+    assert worker.spec.task_id == LEVEL32_TASK_ID
+    assert worker.spec.source.kind is SourceKind.CONFIGURED_MODEL
+    assert worker.spec.source.model_config_ref == "commandcode_goat:deepseek/deepseek-v4-flash"
+    assert worker.scenario_params["provider"] == "commandcode_goat"
+    assert worker.scenario_params["model_id"] == "deepseek/deepseek-v4-flash"
+
+
+def test_configured_source_accepts_level32_task(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Level 32 must execute under run_configured_session with the Level 32 budget contract."""
     from agentic_debugger.application.configured_source import run_configured_session
+    import agentic_debugger.application.configured_source as cs
     from agentic_debugger.application.emitter import SessionEventEmitter
     from agentic_debugger.application.journal import SessionEventJournal
+    from agentic_debugger.evaluation.live import LiveRunLimits
+
+    captured_runs: list[dict[str, Any]] = []
+    captured_limits: list[LiveRunLimits] = []
+    real_limits_init = LiveRunLimits.__init__
+
+    def wrapped_limits_init(self: Any, *args: Any, **kwargs: Any) -> None:
+        real_limits_init(self, *args, **kwargs)
+        captured_limits.append(self)
+
+    monkeypatch.setattr(LiveRunLimits, "__init__", wrapped_limits_init)
+
+    def fake_run_local(ctx: Any, **kwargs: Any) -> None:
+        captured_runs.append({
+            "task_id": ctx.emitter.task_id,
+            "max_model_calls": kwargs["max_model_calls"],
+        })
+
+    monkeypatch.setattr(cs, "run_local_session", fake_run_local)
+
+    resolved_ceilings: dict[str, Any] = {}
+
+    pc.set_session_key("commandcode_goat", "ladder-budgets-synthetic-credential-not-real")
+
+    def wrapped_resolve(provider: str, model_id: str, **kwargs: Any):
+        resolved_ceilings[f"{provider}:{model_id}"] = kwargs.get("logical_call_ceiling")
+        from agentic_debugger.evaluation.live import LiveModelConfig
+        cfg = LiveModelConfig(
+            model_name=model_id,
+            command=("echo", "hi"),
+            request_timeout_seconds=30,
+            tool_version="test",
+        )
+        try:
+            from agentic_debugger.application.model_gateway import provider_runtime_identity as _rid_fake
+            from agentic_debugger.application.provider_connections import get_provider_config as _gpc_fake
+            _c = _gpc_fake(provider)
+            _a = _rid_fake(_c) if _c is not None else None
+        except Exception:
+            _a = None
+        if not isinstance(_a, str) or len(_a) != 64:
+            _a = "a" * 64
+        return (
+            cfg,
+            {
+                "display_name": model_id,
+                "route": "direct_api",
+                "api_protocol": "chat_completions",
+                "provider_model_id": model_id,
+                "endpoint": "http://fake",
+                "provider_runtime_identity": _a,
+            },
+            "0" * 64,
+        )
+
+    monkeypatch.setattr(cs, "_resolve_registry_model", wrapped_resolve)
 
     journal = SessionEventJournal(
         tmp_path / "journal.events.jsonl",
@@ -665,11 +749,25 @@ def test_configured_source_rejects_level32_task(tmp_path: Path) -> None:
         emitter=emitter,
         token=CancellationToken(),
     )
-    with pytest.raises(ScenarioInputError, match="Level-32 task"):
-        run_configured_session(
-            ctx,
-            {"provider": "commandcode_goat", "model_id": "deepseek/deepseek-v4-flash", "policy": "pdb-on-uncertainty"},
-        )
+    run_configured_session(
+        ctx,
+        {
+            "provider": "commandcode_goat",
+            "model_id": "deepseek/deepseek-v4-flash",
+            "policy": "pdb-on-uncertainty",
+        },
+    )
+
+    assert len(captured_runs) == 1
+    assert captured_runs[0]["task_id"] == LEVEL32_TASK_ID
+    assert captured_runs[0]["max_model_calls"] == 25
+    assert len(captured_limits) == 1
+    assert captured_limits[0].max_model_requests == 25
+    assert captured_limits[0].max_controller_steps == 25
+    assert captured_limits[0].max_model_phase_seconds == 3600
+    assert captured_limits[0].max_retries == 1
+    assert captured_limits[0].max_directive_repairs == 2
+    assert resolved_ceilings["commandcode_goat:deepseek/deepseek-v4-flash"] == 25
 
 
 def test_lower_ladder_contract_load_fails_closed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

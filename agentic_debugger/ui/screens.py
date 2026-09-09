@@ -3016,28 +3016,7 @@ class StartSessionScreen(Screen):
         for provider, group in groups:
             provider_options = options_by_provider.get(provider, [])
             group_note = ""
-            is_level32 = target == TARGET_LADDER and self._config.task_id == LEVEL32_TASK_ID
-            if is_level32 and provider != PROVIDER_OLLAMA:
-                group_note = "unavailable for Capability Ladder (frozen Level-32 contract)"
-            elif target == TARGET_LADDER and not is_level32:
-                # Interactive lower ladder: any configured provider is executable.
-                # Blanket "unavailable for Capability Ladder" is removed; only
-                # concrete availability determines group status.
-                if provider == PROVIDER_CONFIGURED and self._catalog.configured_error:
-                    group_note = "configuration error"
-                elif provider == PROVIDER_CONFIGURED and not provider_options:
-                    group_note = "none configured"
-                elif provider_options and not any(opt.available for opt in provider_options):
-                    first_reason = provider_options[0].unavailable_reason or ""
-                    if (
-                        "auth store not found" in first_reason.lower()
-                        or "cli not found" in first_reason.lower()
-                        or "no direct api credential" in first_reason.lower()
-                    ):
-                        group_note = "not configured"
-                    else:
-                        group_note = _short_unavailable_reason(first_reason)
-            elif provider == PROVIDER_CONFIGURED and self._catalog.configured_error:
+            if provider == PROVIDER_CONFIGURED and self._catalog.configured_error:
                 group_note = "configuration error"
             elif provider == PROVIDER_CONFIGURED and not provider_options:
                 group_note = "none configured"
@@ -3080,36 +3059,11 @@ class StartSessionScreen(Screen):
                 qualified = self._catalog.ladder_model(option.choice)
                 effective = qualified or option
                 is_level32 = target == TARGET_LADDER and self._config.task_id == LEVEL32_TASK_ID
-                if target == TARGET_LADDER and is_level32:
-                    # Frozen Level-32: only qualified Ollama models are runnable
-                    if provider != PROVIDER_OLLAMA or qualified is None:
-                        compatible = False
-                        compat_reason = (
-                            "Scientific ladder contract: qualified Ollama Cloud models only"
-                            if provider != PROVIDER_OLLAMA
-                            else "Scientific ladder contract: Ollama model is not qualified"
-                        )
-                    else:
-                        compatible, compat_reason = model_compatibility(
-                            target,
-                            effective,
-                            ladder_qualified=True,
-                        )
-                elif target == TARGET_LADDER:
-                    # Interactive lower ladder: any executable provider model
-                    compatible, compat_reason = model_compatibility(
-                        target,
-                        effective,
-                        ladder_qualified=qualified is not None,
-                    )
-                    # model_compatibility now allows any for ladder, so
-                    # qualified distinction does not block execution
-                else:
-                    compatible, compat_reason = model_compatibility(
-                        target,
-                        effective,
-                        ladder_qualified=qualified is not None,
-                    )
+                compatible, compat_reason = model_compatibility(
+                    target,
+                    effective,
+                    ladder_qualified=qualified is not None,
+                )
                 disabled = not effective.available or not compatible
                 if not compatible:
                     reason = compat_reason
@@ -3123,7 +3077,13 @@ class StartSessionScreen(Screen):
                     display_name = format_model_display_name(effective.display or effective.model_id)
                 # Discovered-catalog detail (direct-API protocol family or
                 # the bounded unresolved-protocol note) stays secondary.
-                secondary = effective.detail if effective.available else ""
+                if is_level32 and qualified is None and effective.available and provider != PROVIDER_OFFLINE:
+                    if effective.detail:
+                        secondary = f"{effective.detail} · not qualified for frozen Level-32 comparison"
+                    else:
+                        secondary = "not qualified for frozen Level-32 comparison"
+                else:
+                    secondary = effective.detail if effective.available else ""
                 choices.append(
                     ChoiceOption(
                         self._model_choice_key(effective.choice),
@@ -3645,15 +3605,34 @@ class StartSessionScreen(Screen):
                 # provider_id/model_id survive to the worker.
                 ladder_entry = self._catalog.ladder_model(config.model)
                 if is_level32:
-                    # Frozen Level-32: only qualified Ollama via the
-                    # authoritative operator (readiness enforces qualification)
-                    self.app.start_live_session(
-                        task_id=task_id,
-                        policy="exact-pdb-level32-frozen",
-                        max_elapsed_seconds=None,
-                        source_kind=SourceKind.LEVEL32_OPERATOR,
-                        profile_id=config.model.model_id,
-                    )
+                    if ladder_entry is not None:
+                        # Qualified Ollama model: frozen official Level-32 operator
+                        self.app.start_live_session(
+                            task_id=task_id,
+                            policy="exact-pdb-level32-frozen",
+                            max_elapsed_seconds=None,
+                            source_kind=SourceKind.LEVEL32_OPERATOR,
+                            profile_id=config.model.model_id,
+                        )
+                        return
+                    # Non-qualified executable model on Level 32: routes to CONFIGURED_MODEL
+                    if config.model.provider == PROVIDER_CONFIGURED:
+                        self.app.start_live_session(
+                            task_id=task_id,
+                            policy="pdb-on-uncertainty",
+                            max_elapsed_seconds=None,
+                            source_kind=SourceKind.CONFIGURED_MODEL,
+                            profile_id=config.model.model_id,
+                        )
+                    else:
+                        self.app.start_live_session(
+                            task_id=task_id,
+                            policy="pdb-on-uncertainty",
+                            max_elapsed_seconds=None,
+                            source_kind=SourceKind.CONFIGURED_MODEL,
+                            profile_id=config.model.model_id,
+                            model_provider=config.model.provider,
+                        )
                     return
                 # Lower ladder rungs (6, 12, 18)
                 if ladder_entry is not None:

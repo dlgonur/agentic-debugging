@@ -263,8 +263,9 @@ class TestLadderTarget:
         readiness = derive_readiness(self._ladder(), catalog, _CLEAN)
         # Lower ladder Level 6 with an available Ollama model via
         # find_model is executable even when ladder_models is empty
-        assert readiness.ready is True
-        # Level-32 with empty roster must still report qualification gap
+        # Level-32 with empty qualified roster is executable when an available
+        # provider model is selected, with notes reflecting that it is outside
+        # the frozen official treatment.
         from agentic_debugger.application.level32 import LEVEL32_TASK_ID
 
         level32_catalog = _catalog(
@@ -283,8 +284,22 @@ class TestLadderTarget:
             level32_catalog,
             _CLEAN,
         )
-        assert level32_readiness.ready is False
-        assert any("qualified Ollama" in item.message for item in level32_readiness.issues)
+        assert level32_readiness.ready is True
+        assert any("outside frozen official Level-32 treatment" in note for note in level32_readiness.notes)
+
+        # If an offline model is selected on Level 32 when no qualified models exist,
+        # it fails closed with the domain reason.
+        offline_readiness = derive_readiness(
+            SessionConfig(
+                target=TARGET_LADDER,
+                task_id=LEVEL32_TASK_ID,
+                model=ModelChoice(PROVIDER_OFFLINE, "", "Offline"),
+            ),
+            level32_catalog,
+            _CLEAN,
+        )
+        assert offline_readiness.ready is False
+        assert any("No qualified Ollama models available" in item.message for item in offline_readiness.issues)
 
     def test_non_ollama_model_blocks(self):
         # Lower ladder interactive runs now accept any executable provider
