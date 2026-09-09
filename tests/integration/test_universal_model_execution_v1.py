@@ -160,6 +160,13 @@ def test_scenario_a_level32_with_configured_provider_executable(
         assert "READY  Yes" in context
         assert "Selected model is outside frozen official Level-32 treatment" in context
 
+        # F1 truth: Debugger, Treatment, Evaluation must reflect non-qualified execution
+        assert "Debugger\nOn uncertainty" in context
+        assert "Treatment\nInteractive Level-32 · non-official" in context
+        assert "Evaluation\nIndependent verifier" in context
+        assert "Official SWE-rebench" not in context
+        assert "Treatment\nFrozen Level-32" not in context
+
         # Launch session
         start.action_start()
         assert len(start_calls) == 1
@@ -199,7 +206,9 @@ def test_scenario_b_level32_with_qualified_ollama(
         assert start.start_available is True
         context = start.query_one("#context-summary").render().plain
         assert "READY  Yes" in context
-        assert "Frozen Level-32" in context
+        assert "Debugger\nExact PDB required" in context
+        assert "Treatment\nFrozen Level-32" in context
+        assert "Evaluation\nOfficial SWE-rebench" in context
 
         start.action_start()
         assert len(start_calls) == 1
@@ -252,6 +261,75 @@ def test_scenario_c_same_model_id_different_provider_remains_distinct(
         assert start_calls[0]["source_kind"] is SourceKind.CONFIGURED_MODEL
         assert start_calls[0]["model_provider"] == "commandcode_goat"
         assert start_calls[0]["profile_id"] == collision_id
+
+    run_headless(app, scenario, size=(120, 32))
+
+
+def test_mandatory_regression_c_empty_official_roster_does_not_gate_configured_execution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Mandatory Regression C: Empty official roster does not gate configured execution.
+
+    Prove:
+    1. Offline selection: not ready because Ladder requires live model.
+    2. No qualification-based execution blocker.
+    3. Select live configured model.
+    4. READY Yes.
+    5. Launch through SourceKind.CONFIGURED_MODEL.
+    """
+    _setup_providers()
+    app = make_app(tmp_path)
+    # Empty official roster
+    monkeypatch.setattr(app, "level32_model_profiles", lambda: ())
+    monkeypatch.setattr(app, "ollama_cloud_model_profiles", lambda: ())
+
+    models = (
+        ProviderModel("commandcode_goat", "zai-org/glm-5.2", "GLM 5.2", "CommandCode GOAT", True),
+    )
+    monkeypatch.setattr("agentic_debugger.ui.screens.list_provider_models", lambda **_kwargs: models)
+
+    start_calls: list[dict[str, Any]] = []
+    monkeypatch.setattr(app, "start_live_session", lambda **kw: start_calls.append(kw))
+
+    async def scenario(pilot):
+        await pilot.press("s")
+        start = pilot.app.screen
+        assert isinstance(start, StartSessionScreen)
+
+        # 1. Switch to Ladder target and Level 32 task
+        start._choice_selected("target", "ladder")
+        start._choice_selected("task", LEVEL32_TASK_ID)
+
+        # Initial selection is Offline (default)
+        # 1. Offline selection: not ready because Ladder requires live model
+        assert start.start_available is False
+        status = start.query_one("#start-status").render().plain
+        assert "Ladder runs require a live model" in status
+
+        # 2. No qualification-based execution blocker!
+        assert "qualified Ollama" not in status
+        assert "No qualified Ollama models available" not in status
+
+        # 3. Select live configured model
+        cmd_key = "commandcode_goat:zai-org/glm-5.2"
+        start._choice_selected("model", cmd_key)
+
+        # 4. READY Yes
+        assert start.start_available is True
+        context = start.query_one("#context-summary").render().plain
+        assert "READY  Yes" in context
+        assert "Selected model is outside frozen official Level-32 treatment" in context
+        assert "Treatment\nInteractive Level-32 · non-official" in context
+        assert "Evaluation\nIndependent verifier" in context
+        assert "Official SWE-rebench" not in context
+
+        # 5. Launch through SourceKind.CONFIGURED_MODEL
+        start.action_start()
+        assert len(start_calls) == 1
+        assert start_calls[0]["task_id"] == LEVEL32_TASK_ID
+        assert start_calls[0]["source_kind"] is SourceKind.CONFIGURED_MODEL
+        assert start_calls[0]["model_provider"] == "commandcode_goat"
+        assert start_calls[0]["profile_id"] == "zai-org/glm-5.2"
 
     run_headless(app, scenario, size=(120, 32))
 

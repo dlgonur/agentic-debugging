@@ -2044,11 +2044,14 @@ def live_export_text(
         else view.status.value.replace("_", " ").capitalize()
     )
     try:
-        from agentic_debugger.application.level32 import is_ladder_task, ladder_task_metadata
+        from agentic_debugger.application.level32 import LEVEL32_TASK_ID, is_ladder_task, ladder_task_metadata
         if view.source_kind is SourceKind.LEVEL32_OPERATOR and view.model_provenance and view.model_provenance.treatment_revision is not None:
             treatment = f"V{view.model_provenance.treatment_revision}"
         elif is_ladder_task(view.task_id):
-            treatment = ladder_task_metadata(view.task_id).treatment
+            if view.task_id == LEVEL32_TASK_ID and view.source_kind is not SourceKind.LEVEL32_OPERATOR:
+                treatment = "Interactive Level-32 · non-official"
+            else:
+                treatment = ladder_task_metadata(view.task_id).treatment
         else:
             treatment = "—"
     except Exception:
@@ -2131,11 +2134,14 @@ def activity_export_text(
     )
     # Treatment label: reuse the same derivation as the context panel.
     try:
-        from agentic_debugger.application.level32 import is_ladder_task, ladder_task_metadata
+        from agentic_debugger.application.level32 import LEVEL32_TASK_ID, is_ladder_task, ladder_task_metadata
         if view.source_kind is SourceKind.LEVEL32_OPERATOR and view.model_provenance and view.model_provenance.treatment_revision is not None:
             treatment = f"V{view.model_provenance.treatment_revision}"
         elif is_ladder_task(view.task_id):
-            treatment = ladder_task_metadata(view.task_id).treatment
+            if view.task_id == LEVEL32_TASK_ID and view.source_kind is not SourceKind.LEVEL32_OPERATOR:
+                treatment = "Interactive Level-32 · non-official"
+            else:
+                treatment = ladder_task_metadata(view.task_id).treatment
         else:
             treatment = "—"
     except Exception:
@@ -2178,11 +2184,14 @@ def timeline_export_text(
         else view.status.value.replace("_", " ").capitalize()
     )
     try:
-        from agentic_debugger.application.level32 import is_ladder_task, ladder_task_metadata
+        from agentic_debugger.application.level32 import LEVEL32_TASK_ID, is_ladder_task, ladder_task_metadata
         if view.source_kind is SourceKind.LEVEL32_OPERATOR and view.model_provenance and view.model_provenance.treatment_revision is not None:
             treatment = f"V{view.model_provenance.treatment_revision}"
         elif is_ladder_task(view.task_id):
-            treatment = ladder_task_metadata(view.task_id).treatment
+            if view.task_id == LEVEL32_TASK_ID and view.source_kind is not SourceKind.LEVEL32_OPERATOR:
+                treatment = "Interactive Level-32 · non-official"
+            else:
+                treatment = ladder_task_metadata(view.task_id).treatment
         else:
             treatment = "—"
     except Exception:

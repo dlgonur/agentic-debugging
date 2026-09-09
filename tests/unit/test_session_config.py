@@ -299,7 +299,9 @@ class TestLadderTarget:
             _CLEAN,
         )
         assert offline_readiness.ready is False
-        assert any("No qualified Ollama models available" in item.message for item in offline_readiness.issues)
+        assert any("Ladder runs require a live model" in item.message for item in offline_readiness.issues)
+        assert not any("qualified Ollama" in item.message for item in offline_readiness.issues)
+        assert any("Official frozen Level-32 roster unavailable" in note for note in offline_readiness.notes)
 
     def test_non_ollama_model_blocks(self):
         # Lower ladder interactive runs now accept any executable provider

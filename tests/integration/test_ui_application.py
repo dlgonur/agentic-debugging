@@ -428,7 +428,8 @@ class TestLevel32NewSession:
             start._choice_selected("task", "audreyr__cookiecutter-967")
             assert start.start_available is False
             status = start.query_one("#start-status").render().plain
-            assert "No qualified Ollama models available" in status
+            assert "Ladder runs require a live model" in status
+            assert "qualified Ollama" not in status
             assert start.query_one("#start-session-button").disabled is True
 
         run_headless(make_app(tmp_path), scenario, size=(80, 24))

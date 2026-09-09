@@ -602,7 +602,8 @@ def test_ladder_empty_roster_blocks_start_with_domain_reason(tmp_path: Path, mon
         start._choice_selected("task", "audreyr__cookiecutter-967")
         assert start.start_available is False
         status = start.query_one("#start-status").render().plain
-        assert "No qualified Ollama models available" in status
+        assert "Ladder runs require a live model" in status
+        assert "qualified Ollama" not in status
         assert "custom command profile" not in status.casefold()
 
     run_headless(app, scenario, size=(120, 32))

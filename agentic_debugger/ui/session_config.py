@@ -21,8 +21,10 @@ Design rules that keep the surface coherent:
   (:class:`RowState`), so every control keeps a fixed, predictable place;
 - one option change never silently mutates another selection; the user's
   selections persist and incompatibilities surface as readiness issues;
-- scientific qualification (the capability ladder) disables choices and
-  explains why; it never hides them and never relaxes its contract.
+- runtime executability controls execution eligibility: any model configured
+  with executable credentials may execute across all targets including the
+  Capability Ladder; scientific qualification controls classification and
+  comparability only, never whether a model may run.
 """
 
 from __future__ import annotations
@@ -192,9 +194,11 @@ class ProjectStatus:
 class SessionCatalog:
     """Everything the environment offers, gathered read-only and offline.
 
-    ``models`` is the unified provider list for curated and local-project
-    targets.  ``ladder_models`` is the qualified Ollama Cloud roster the
-    scientific ladder contract allows.
+    ``models`` is the unified provider list of configured models available
+    for execution across all targets.  ``ladder_models`` is the qualified
+    Ollama Cloud roster for canonical scientific treatment; it is NOT the
+    general Ladder execution allowlist (any executable model may run).
+    :meth:`ladder_model` remains the qualification/classification authority.
     """
 
     tasks: Tuple[TaskOption, ...] = ()
@@ -486,16 +490,6 @@ def _ladder_readiness(config: SessionConfig, catalog: SessionCatalog):
         return issues, ["Research tasks use the canonical operator contract."]
     is_level32 = config.task_id == LEVEL32_TASK_ID
     if config.model.is_offline:
-        if is_level32 and not catalog.ladder_models:
-            issues.append(
-                ReadinessIssue(
-                    ROW_MODEL,
-                    SEVERITY_ERROR,
-                    "No qualified Ollama models available — the research "
-                    "operator roster is not installed.",
-                )
-            )
-            return issues, ["Frozen Level-32 official treatment; qualified Ollama Cloud models only."]
         issues.append(
             ReadinessIssue(
                 ROW_MODEL,
@@ -503,11 +497,15 @@ def _ladder_readiness(config: SessionConfig, catalog: SessionCatalog):
                 "Ladder runs require a live model — choose a provider model.",
             )
         )
-        return issues, (
-            ["Frozen Level-32 official treatment; qualified Ollama Cloud models only."]
-            if is_level32
-            else ["Research tasks use the canonical operator contract."]
-        )
+        if is_level32:
+            notes = (
+                ["Official frozen Level-32 roster unavailable; configured executable models can still run non-officially."]
+                if not catalog.ladder_models
+                else ["Frozen Level-32 official treatment; qualified Ollama Cloud models only."]
+            )
+        else:
+            notes = ["Research tasks use the canonical operator contract."]
+        return issues, notes
 
     notes: list[str] = []
     model = catalog.find_model(config.model)

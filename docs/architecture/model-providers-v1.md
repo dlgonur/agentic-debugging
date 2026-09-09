@@ -78,14 +78,18 @@ direct provider-API execution route
     connect provider -> discover live catalog -> GENERAL MODEL CATALOG
         -> direct API general-runtime execution
 
-This is a product/platform capability only. It deliberately does NOT change
-the scientific Capability Ladder: a discovered or user-configured model
-never becomes treatment-eligible and never enters the qualified Ollama
-roster (`is_treatment_eligible` is untouched). Interactive lower ladder
-rungs accept any executable configured provider model; only the frozen
-Level-32 treatment remains bound to the qualified Ollama Cloud roster
-(`model_compatibility` distinguishes the two, and
-`SessionCatalog.ladder_model` binds qualification to provider identity).
+This is a product/platform capability only. It deliberately does NOT alter
+scientific treatment qualification: a discovered or user-configured model
+never automatically becomes scientifically qualified and never enters the
+frozen qualified Ollama roster (`is_treatment_eligible` is untouched).
+However, scientific qualification controls classification and comparability
+only — it does NOT gate user execution. Under Task 42, interactive Capability
+Ladder execution (including Level 32) accepts any genuinely executable
+configured provider model, which dispatches through the configured-model
+route (`SourceKind.CONFIGURED_MODEL`), while the frozen official Level-32
+treatment remains bound to the qualified Ollama Cloud roster
+(`SourceKind.LEVEL32_OPERATOR`; `SessionCatalog.ladder_model` binds
+qualification to provider identity).
 
 ### Provider endpoint facts (verified 2026-08-31 against official docs and
 live catalogs)

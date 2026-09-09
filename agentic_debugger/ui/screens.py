@@ -3371,12 +3371,38 @@ class StartSessionScreen(Screen):
             display = format_model_display_name(choice.display or choice.model_id)
         return display, label
 
+    def _ladder_presentation(self) -> tuple[str, str, str]:
+        """Derive (debugger, treatment, evaluation) presentation for the current ladder selection."""
+        task = self._catalog.find_task(self._config.task_id)
+        if task is None or not task.ladder:
+            return "Frozen contract", "—", "—"
+        meta = ladder_task_metadata(task.task_id)
+        if task.task_id == LEVEL32_TASK_ID:
+            ladder_entry = self._catalog.ladder_model(self._config.model)
+            if ladder_entry is not None:
+                # Qualified official Level-32 route (dispatches to LEVEL32_OPERATOR)
+                return meta.debugger, meta.treatment, meta.evaluation
+            if not self._config.model.is_offline:
+                # Executable non-qualified Level-32 route (dispatches to CONFIGURED_MODEL)
+                return (
+                    POLICY_LABELS.get(POLICY_ON_UNCERTAINTY, "On uncertainty"),
+                    "Interactive Level-32 · non-official",
+                    "Independent verifier",
+                )
+            if not self._catalog.ladder_models:
+                return (
+                    POLICY_LABELS.get(POLICY_ON_UNCERTAINTY, "On uncertainty"),
+                    "Interactive Level-32 · non-official",
+                    "Independent verifier",
+                )
+            return meta.debugger, meta.treatment, meta.evaluation
+        # Lower ladder rungs (Level 6, 12, 18)
+        return meta.debugger, meta.treatment, meta.evaluation
+
     def _debugger_display(self) -> str:
         if self._config.target == TARGET_LADDER:
-            task = self._catalog.find_task(self._config.task_id)
-            if task is not None and task.ladder:
-                return ladder_task_metadata(task.task_id).debugger
-            return "Frozen contract"
+            debugger, _, _ = self._ladder_presentation()
+            return debugger
         if self._config.target == TARGET_LOCAL_PROJECT:
             return POLICY_LABELS[POLICY_ON_UNCERTAINTY]
         return POLICY_LABELS.get(self._config.debugger_policy, self._config.debugger_policy)
@@ -3511,11 +3537,9 @@ class StartSessionScreen(Screen):
         kv("Debugger", self._debugger_display())
         kv("Time limit", "No limit" if config.time_limit_seconds is None else str(config.time_limit_seconds))
         if config.target == TARGET_LADDER:
-            task = self._catalog.find_task(config.task_id)
-            if task is not None and task.ladder:
-                meta = ladder_task_metadata(task.task_id)
-                kv("Treatment", meta.treatment)
-                kv("Evaluation", meta.evaluation)
+            _, treatment, evaluation = self._ladder_presentation()
+            kv("Treatment", treatment)
+            kv("Evaluation", evaluation)
 
         if readiness.issues:
             lines.append("")

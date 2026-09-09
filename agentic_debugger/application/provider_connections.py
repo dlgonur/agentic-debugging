@@ -18,7 +18,9 @@ Concepts that stay separate by contract:
   :mod:`agentic_debugger.application.model_providers`, which selects the
   explicit route (``direct_api`` / ``legacy_cli``) per model.
 - **Capability Ladder qualification** is untouched by this module: adding a
-  generic provider or Ollama connection never changes Capability Ladder eligibility.
+  generic provider or Ollama connection never confers scientific qualification,
+  while any runtime-executable configured model remains executable across the
+  Capability Ladder under Task 42.
 
 Credential security rules:
 
