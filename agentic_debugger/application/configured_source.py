@@ -72,6 +72,10 @@ from agentic_debugger.evaluation.live import (
 )
 
 from agentic_debugger.application.level32 import LEVEL32_TASK_ID
+from agentic_debugger.application.level32_materialization import (
+    build_level32_scenario,
+    materialize_level32_task,
+)
 from agentic_debugger.application.ollama_cloud_source import (
     INTERACTIVE_LADDER_DIRECTIVE_REPAIRS,
     LADDER_RUNTIME_CONTRACTS,
@@ -468,6 +472,28 @@ def run_configured_session(
         )
         cwd = profile.cwd
         environment = dict(profile.environment) if profile.environment else None
+
+    staging_root: Optional[Path] = None
+    fixture_dir: Optional[Path] = None
+    if is_level32:
+        try:
+            staging_root = ctx.work_dir / "level32_staging"
+            fixture_dir = materialize_level32_task(staging_root)
+            ladder_scenario = build_level32_scenario(task_id=task_id)
+        except Exception as exc:
+            ctx.emitter.emit(
+                SessionEventKind.DIAGNOSIS_RECORDED,
+                {
+                    "text": f"Level-32 workspace preparation failed: {exc}",
+                    "file_path": None,
+                    "symbol": None,
+                    "confidence": "observed",
+                },
+            )
+            raise ConfiguredSourceError(
+                f"Level-32 workspace preparation failed: {exc}"
+            ) from exc
+
     # Ladder contract is provider-neutral: same budgets/proof
     # regardless of whether the model comes from the registry or a
     # store profile. Outside ladder, keep general defaults.
@@ -513,8 +539,8 @@ def run_configured_session(
             environment=environment,
         )
         run_id = ctx.run_id or f"{task_id}--{policy_value}"
-        # Lower ladder exact-PDB proof binding (provider-neutral)
-        if is_lower_ladder and ladder_scenario is not None:
+        # Ladder exact-PDB proof binding (provider-neutral)
+        if (is_lower_ladder or is_level32) and ladder_scenario is not None:
             adapter = LiveModelAdapter(
                 task=demo_context.task,
                 policy=policy,
@@ -578,6 +604,9 @@ def run_configured_session(
             fail_on_controller_failure=True,
             max_model_calls=_max_calls,
             registry_pdb_policy=pdb_policy_for(policy),
+            fixture_dir=fixture_dir,
+            scenario=ladder_scenario if is_level32 else None,
+            repository_root=staging_root,
         )
     except ModelExecutionError as exc:
         # Enrich the honest failure with the adapter's bounded transport

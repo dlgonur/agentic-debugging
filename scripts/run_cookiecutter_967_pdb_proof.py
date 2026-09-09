@@ -23,6 +23,10 @@ import time
 from pathlib import Path
 from typing import Any
 
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
 from agentic_debugger.demo.catalog import (
     DemoScenario,
     LocalizationClaim,
@@ -53,15 +57,29 @@ from agentic_debugger.runtime.patcher import (
 )
 
 
-INSTANCE_ID = "audreyr__cookiecutter-967"
-TASK_ID = "swr-audreyr-cookiecutter-967-pdb"
-BASE_COMMIT = "ba5ba8c78e97f5dc7fb4e16c588d7be037e6e5e7"
-IMAGE = "docker.io/swerebenchv2/audreyr-cookiecutter:967-ba5ba8c"
-IMAGE_ID = "sha256:0bad37ac1e0a6d692a9ef417c05753b5ad45dfa8c32fd52b0f3ecabf722af8eb"
-SOURCE_SHA256 = "71de7ea915fee31e4e9104b89259deaa1c83ae0c8d3cbe249c878f5adbd5f6ee"
-DATASET_REVISION = "475dd5e8703bb5fb22dd3c60b5d038b019eba1e0"
-PARQUET_SHA256 = "0e0bf9355f892ad74ae98d4e1c404f39fd6654a8e351ee3e6ab162e4a64cd3ad"
-EVALUATOR_COMMIT = "c71902a8cf8d2b725f63d51f199f4d3e56f68d2d"
+from agentic_debugger.application.level32_materialization import (
+    LEVEL32_BASE_COMMIT as BASE_COMMIT,
+    LEVEL32_DATASET_REVISION as DATASET_REVISION,
+    LEVEL32_EVALUATOR_COMMIT as EVALUATOR_COMMIT,
+    LEVEL32_F2P_COUNT as F2P_COUNT,
+    LEVEL32_IMAGE as IMAGE,
+    LEVEL32_IMAGE_ID as IMAGE_ID,
+    LEVEL32_INSTANCE_ID as INSTANCE_ID,
+    LEVEL32_P2P_COUNT as P2P_COUNT,
+    LEVEL32_PARQUET_SHA256 as PARQUET_SHA256,
+    LEVEL32_PUBLIC_F2P as PUBLIC_F2P,
+    LEVEL32_PUBLIC_P2P as PUBLIC_P2P,
+    LEVEL32_SOURCE_SHA256 as SOURCE_SHA256,
+    LEVEL32_TASK_ID as TASK_ID,
+    ProofError,
+    build_level32_scenario as _scenario,
+    copy_image_source as _copy_image_source,
+    default_parquet_path as _parquet_path,
+    load_official_row as _load_official_row,
+    remove_readonly_tree as _remove_readonly_tree,
+    sha256_file as _sha256,
+    write_public_scaffold as _write_public_scaffold,
+)
 MODEL = "gpt-oss:20b-cloud"
 DEFAULT_MODEL = MODEL
 # Single authority: import the adapter's pinned version so the operator can
@@ -401,15 +419,7 @@ def _require_treatment_eligible(model: str) -> Any:
 def _default_output_dir_for_model(model: str, revision: int = 1) -> Path:
     slug = model.replace(":", "-").replace("/", "-")
     return Path(f"experiments/pdb_capability_ladder/level32-cookiecutter-967-{slug}-v{revision}")
-F2P_COUNT = 5
-P2P_COUNT = 9
-PUBLIC_F2P = "tests/test_pdb_public_config_merge.py::test_builtin_abbreviations_survive_custom_config"
-PUBLIC_P2P = "tests/test_pdb_public_config_merge.py::test_scalar_override_preserves_other_defaults"
 INTEGRITY_GATE_SCHEMA_VERSION = "level32-integrity-gate-v1"
-
-
-class ProofError(RuntimeError):
-    pass
 
 
 class ImageVerificationError(ProofError):
@@ -418,24 +428,6 @@ class ImageVerificationError(ProofError):
     def __init__(self, message: str, evidence: dict[str, Any]) -> None:
         super().__init__(message)
         self.evidence = evidence
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def _remove_readonly_tree(path: Path) -> None:
-    """Remove a task-owned Docker export whose Git objects may be read-only."""
-
-    def make_writable(function: Any, target: str, _error: Any) -> None:
-        os.chmod(target, stat.S_IWRITE)
-        function(target)
-
-    shutil.rmtree(path, onexc=make_writable)
 
 
 def _run(argv: list[str], *, cwd: Path | None = None, timeout: float = 60.0) -> subprocess.CompletedProcess[str]:
@@ -450,44 +442,6 @@ def _run(argv: list[str], *, cwd: Path | None = None, timeout: float = 60.0) -> 
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise ProofError(f"command failed before completion: {argv[0]} ({type(exc).__name__})") from exc
-
-
-def _parquet_path() -> Path:
-    return (
-        Path.home()
-        / "AppData/Local/agentic-debugging/swe_rebench_v2_census_cache"
-        / "datasets--nebius--SWE-rebench-V2/snapshots"
-        / DATASET_REVISION
-        / "data/train-00000-of-00001.parquet"
-    )
-
-
-def _load_official_row() -> dict[str, Any]:
-    path = _parquet_path()
-    if not path.is_file() or _sha256(path) != PARQUET_SHA256:
-        raise ProofError("pinned SWE-rebench parquet is missing or has the wrong SHA-256")
-    try:
-        import pyarrow.parquet as pq
-    except ImportError as exc:
-        raise ProofError("pyarrow is required for the pinned task row") from exc
-    table = pq.read_table(path, filters=[("instance_id", "=", INSTANCE_ID)])
-    rows = table.to_pylist()
-    if len(rows) != 1:
-        raise ProofError("pinned SWE-rebench task row is not unique")
-    row = dict(rows[0])
-    checks = {
-        "base_commit": BASE_COMMIT,
-        "image_name": IMAGE,
-        "instance_id": INSTANCE_ID,
-        "repo": "audreyr/cookiecutter",
-    }
-    if any(row.get(key) != value for key, value in checks.items()):
-        raise ProofError("pinned SWE-rebench task identity does not match the contract")
-    if len(row.get("FAIL_TO_PASS") or ()) != F2P_COUNT or len(row.get("PASS_TO_PASS") or ()) != P2P_COUNT:
-        raise ProofError("official hidden-test counts do not match the frozen contract")
-    if not row.get("patch") or not row.get("test_patch"):
-        raise ProofError("official verifier row is incomplete")
-    return row
 
 
 def _bounded_diagnostic(value: str | None) -> str:
@@ -721,143 +675,7 @@ def _verify_image_and_record(output: Path) -> dict[str, Any] | None:
     return evidence
 
 
-def _copy_image_source(fixture: Path) -> None:
-    fixture.parent.mkdir(parents=True, exist_ok=True)
-    created = _run(
-        ["docker", "create", "--network", "none", "--entrypoint", "/bin/true", IMAGE],
-        timeout=30,
-    )
-    if created.returncode != 0 or not created.stdout.strip():
-        raise ProofError("could not create the source-export container")
-    container_id = created.stdout.strip()
-    try:
-        copied = _run(["docker", "cp", f"{container_id}:/cookiecutter/.", str(fixture)], timeout=120)
-        if copied.returncode != 0:
-            raise ProofError("could not export the pinned source from Docker")
-    finally:
-        _run(["docker", "rm", "-f", container_id], timeout=30)
-    git_dir = fixture / ".git"
-    if git_dir.exists():
-        _remove_readonly_tree(git_dir)
-    source = fixture / "cookiecutter/config.py"
-    if not source.is_file() or _sha256(source) != SOURCE_SHA256:
-        raise ProofError("exported production source does not match the pinned base blob")
 
-
-def _write_public_scaffold(fixture: Path, problem_statement: str) -> None:
-    # The old dependency is already present in the official image.  This tiny
-    # public compatibility shim lets the host-side PDB proof use the installed
-    # PyYAML parser without installing or changing a global environment.
-    (fixture / "poyo.py").write_text(
-        "import yaml\n\n"
-        "class PoyoException(Exception):\n    pass\n\n"
-        "class exceptions:\n    PoyoException = PoyoException\n\n"
-        "def parse_string(text):\n"
-        "    try:\n        return yaml.safe_load(text) or {}\n"
-        "    except yaml.YAMLError as exc:\n        raise PoyoException(str(exc))\n",
-        encoding="utf-8",
-        newline="\n",
-    )
-    test_path = fixture / "tests/test_pdb_public_config_merge.py"
-    test_path.write_text(
-        "from cookiecutter import config\n\n\n"
-        "def test_builtin_abbreviations_survive_custom_config(tmp_path):\n"
-        "    path = tmp_path / 'cookiecutter.yaml'\n"
-        "    path.write_text(\"abbreviations:\\n  local: https://example.invalid/{0}.git\\n\", encoding='utf-8')\n"
-        "    loaded = config.get_config(str(path))\n"
-        "    assert loaded['abbreviations']['local'] == 'https://example.invalid/{0}.git'\n"
-        "    assert loaded['abbreviations']['gh'] == 'https://github.com/{0}.git'\n"
-        "    defaults = {\n"
-        "        'abbreviations': {'gh': 'https://github.com/{0}.git'},\n"
-        "        'default_context': {'project': 'cookiecutter'},\n"
-        "    }\n"
-        "    overrides = {\n"
-        "        'abbreviations': {'local': 'https://example.invalid/{0}.git'},\n"
-        "        'default_context': {'owner': 'onur'},\n"
-        "    }\n"
-        "    merged = config.merge_configs(defaults, overrides)\n"
-        "    assert merged['abbreviations']['gh'] == 'https://github.com/{0}.git'\n"
-        "    assert merged['abbreviations']['local'] == 'https://example.invalid/{0}.git'\n"
-        "    assert merged['default_context']['project'] == 'cookiecutter'\n"
-        "    assert merged['default_context']['owner'] == 'onur'\n\n\n"
-        "def test_scalar_override_preserves_other_defaults(tmp_path):\n"
-        "    path = tmp_path / 'cookiecutter.yaml'\n"
-        "    path.write_text(\"replay_dir: ./replays\\n\", encoding='utf-8')\n"
-        "    loaded = config.get_config(str(path))\n"
-        "    assert loaded['replay_dir'].endswith('replays')\n"
-        "    assert loaded['cookiecutters_dir']\n",
-        encoding="utf-8",
-        newline="\n",
-    )
-    task = {
-        "schema_version": "1.0",
-        "task_id": TASK_ID,
-        "title": "Recursively preserve nested Cookiecutter configuration",
-        "description": problem_statement + "\n\nPublic contract: configuration overlays must recursively preserve unrelated keys in nested mappings while allowing user values to override defaults. The reusable merge behavior is part of the public module contract.",
-        "language": "python",
-        "fixture_path": f"agentic_debugger/datasets/curated/{TASK_ID}",
-        "reproduction": {
-            "argv": [
-                "python", "-m", "pytest", PUBLIC_F2P, "-q", "-p", "no:cacheprovider",
-                "-o", "addopts=",
-            ],
-            "cwd": ".",
-            "timeout_seconds": 20,
-            "expected_exit_code": 1,
-        },
-        "tests": {
-            "fail_to_pass": [PUBLIC_F2P],
-            "pass_to_pass": [PUBLIC_P2P],
-            "full_suite_argv": [
-                "python", "-m", "pytest", "tests/test_pdb_public_config_merge.py",
-                "-q", "-p", "no:cacheprovider", "-o", "addopts=",
-            ],
-            "timeout_seconds": 30,
-        },
-        "constraints": {
-            "allowed_write_paths": ["cookiecutter/config.py"],
-            "denied_write_paths": ["tests", "task.json"],
-            "network_allowed": False,
-            "external_services_allowed": False,
-            "max_patch_attempts": 2,
-            "max_test_runs": 5,
-            "max_pdb_observations": 6,
-        },
-        "oracle": {
-            "bug_category": "nested configuration merge",
-            "target_files": ["cookiecutter/config.py"],
-            "target_symbols": ["get_config", "merge_configs"],
-            "root_cause_summary": "Nested user configuration requires recursive merge behavior rather than a shallow update.",
-            "runtime_evidence_hint": "The get_config frame exposes the parsed override and the resulting nested mapping.",
-        },
-        "tags": ["swe-rebench-v2", "pdb-required", "capability-ladder-32", "oracle-localized"],
-    }
-    (fixture / "task.json").write_text(
-        json.dumps(task, indent=2, ensure_ascii=True) + "\n", encoding="utf-8", newline="\n"
-    )
-
-
-def _scenario() -> DemoScenario:
-    return DemoScenario(
-        task_id=TASK_ID,
-        hypothesis_id="cookiecutter-967-runtime-hypothesis",
-        root_cause_statement="The reproduced nested configuration behavior requires runtime inspection.",
-        localization=LocalizationClaim("cookiecutter/config.py", "get_config"),
-        reference_repair=ReferenceRepair(
-            "cookiecutter/config.py",
-            "config_dict = copy.copy(DEFAULT_CONFIG)",
-            "config_dict = copy.deepcopy(DEFAULT_CONFIG)",
-        ),
-        runtime_probe=RuntimeProbe(
-            module_path="cookiecutter/config.py",
-            focus_function="get_config",
-            call_source="get_config('unused-public-driver-path')",
-            anchor="config_dict.update(yaml_dict)",
-            inspect_expressions=("yaml_dict", "config_dict"),
-            exact_public_reproduction=True,
-            breakpoint_line=54,
-        ),
-    )
 
 
 def _adapter_config(root: Path, *, model: str | None = None, logical_decision_ceiling: int = 25) -> LiveModelConfig:

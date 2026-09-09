@@ -87,7 +87,7 @@ from agentic_debugger.application.worker_scenarios import (
     ScenarioInputError,
 )
 from agentic_debugger.cancellation import CancellationError
-from agentic_debugger.demo.catalog import scenario_for
+from agentic_debugger.demo.catalog import DemoScenario, scenario_for
 from agentic_debugger.demo.isolation import OfflineGuard
 from agentic_debugger.demo.policies import DemoPolicy, pdb_policy_for
 from agentic_debugger.demo.tools import (
@@ -151,6 +151,9 @@ def run_local_session(
     fail_on_controller_failure: bool,
     max_model_calls: int,
     registry_pdb_policy: Optional[PdbPolicy] = None,
+    fixture_dir: Optional[Path] = None,
+    scenario: Optional[DemoScenario] = None,
+    repository_root: Optional[Path] = None,
 ) -> None:
     """Execute one real local debugging session through the shared pipeline.
 
@@ -174,8 +177,11 @@ def run_local_session(
             f"session task {task_name!r}"
         )
 
-    fixture_dir = _curated_fixture_dir(task_id)
-    scenario = scenario_for(task_id)
+    if fixture_dir is None:
+        fixture_dir = _curated_fixture_dir(task_id)
+    if scenario is None:
+        scenario = scenario_for(task_id)
+    repo_root = _repository_root() if repository_root is None else repository_root
     case_parent = ctx.work_dir / f"case-{task_id}-{policy_value}"
     diagnostics: list[str] = []
 
@@ -303,7 +309,7 @@ def run_local_session(
                 )
                 verifier_adapter.started()
                 evaluation = EvaluationVerifier(
-                    str(_repository_root()),
+                    str(repo_root),
                     # Keep verifier workspaces outside the application-owned
                     # session tree.  The UI stores sessions under the
                     # repository's .ui-review directory; placing pytest's
