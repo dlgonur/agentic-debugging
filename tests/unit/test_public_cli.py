@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import platform
+import sys
 import tomllib
 from pathlib import Path
 
@@ -89,22 +91,34 @@ def test_prog_detection_from_sys_argv(monkeypatch) -> None:
     # Explicit prog always wins
     assert ui_cli._detect_prog("custom") == "custom"
 
-    # Auto-detection from sys.argv[0] stems
-    monkeypatch.setattr("sys.argv", ["agenticdebugger", "--help"])
+    # Auto-detection from sys.argv[0] with host-neutral basename parsing
+    # Handles bare commands
+    monkeypatch.setattr("sys.argv", ["agenticdebugger"])
     assert ui_cli._detect_prog() == "agenticdebugger"
 
+    monkeypatch.setattr("sys.argv", ["agenticdebugger.exe"])
+    assert ui_cli._detect_prog() == "agenticdebugger"
+
+    monkeypatch.setattr("sys.argv", ["agentic-debugger"])
+    assert ui_cli._detect_prog() == "agentic-debugger"
+
+    monkeypatch.setattr("sys.argv", ["agentic-debugger.exe"])
+    assert ui_cli._detect_prog() == "agentic-debugger"
+
+    # Windows paths with backslashes (must resolve on POSIX and Windows hosts)
     monkeypatch.setattr(
         "sys.argv", [r"C:\Python314\Scripts\agenticdebugger.exe", "--version"]
     )
     assert ui_cli._detect_prog() == "agenticdebugger"
 
     monkeypatch.setattr(
-        "sys.argv", ["/usr/local/bin/agenticdebugger", "--version"]
+        "sys.argv",
+        [
+            r"C:\Users\User\AppData\Local\AgenticDebugger\cli-venv\Scripts\agenticdebugger.exe",
+            "--help",
+        ],
     )
     assert ui_cli._detect_prog() == "agenticdebugger"
-
-    monkeypatch.setattr("sys.argv", ["agentic-debugger", "--help"])
-    assert ui_cli._detect_prog() == "agentic-debugger"
 
     monkeypatch.setattr(
         "sys.argv", [r"C:\Python314\Scripts\agentic-debugger.exe", "--version"]
@@ -112,8 +126,30 @@ def test_prog_detection_from_sys_argv(monkeypatch) -> None:
     assert ui_cli._detect_prog() == "agentic-debugger"
 
     monkeypatch.setattr(
+        "sys.argv",
+        [
+            r"C:\Users\User\AppData\Local\AgenticDebugger\cli-venv\Scripts\agentic-debugger.exe",
+            "--help",
+        ],
+    )
+    assert ui_cli._detect_prog() == "agentic-debugger"
+
+    # POSIX paths with forward slashes
+    monkeypatch.setattr(
+        "sys.argv", ["/usr/local/bin/agenticdebugger", "--version"]
+    )
+    assert ui_cli._detect_prog() == "agenticdebugger"
+
+    monkeypatch.setattr(
         "sys.argv", ["/usr/local/bin/agentic-debugger", "--version"]
     )
+    assert ui_cli._detect_prog() == "agentic-debugger"
+
+    # Case-insensitive matching
+    monkeypatch.setattr("sys.argv", [r"C:\BIN\AGENTICDEBUGGER.EXE"])
+    assert ui_cli._detect_prog() == "agenticdebugger"
+
+    monkeypatch.setattr("sys.argv", [r"C:\BIN\AGENTIC-DEBUGGER.EXE"])
     assert ui_cli._detect_prog() == "agentic-debugger"
 
     # Fallback to canonical agentic-debugger when called under pytest or python
@@ -278,7 +314,236 @@ def test_powershell_installer_script_contract() -> None:
     # Must contain essential parameters and guards
     assert "[switch]$Uninstall" in content
     assert "agenticdebugger.exe" in content
-    assert "pip install -e" in content
-    assert "[app]" in content
-    assert "sysconfig.get_path('scripts')" in content
+    assert "agentic-debugger.exe" in content
+    assert "-e $repoRoot" in content or "pip install" in content
+
+    # Regression check (F1, F2): Must NOT use caller interpreter's shared sysconfig scripts path
+    assert "sysconfig.get_path" not in content, (
+        "Installer must not write caller interpreter's sysconfig.get_path('scripts') "
+        "into persistent User PATH."
+    )
+
+    # Must target dedicated application-owned venv directory
+    assert "cli-venv" in content
+    assert "AgenticDebugger" in content
+
+    # Must manage User PATH via HKCU\Environment safely without admin
     assert "Environment]::SetEnvironmentVariable('Path'" in content
+
+    # Collision detection must check both alias names against external executables (F3)
+    assert "Aborting installation to prevent collision" in content
+
+    # Uninstall must remove app-owned venv and remove launcher directory without global pip uninstall (F4)
+    assert "Remove-Item -Recurse -Force $cliVenv" in content
+    assert "pip uninstall -y" not in content
+
+
+@pytest.mark.skipif(
+    platform.system() != "Windows",
+    reason="Windows PowerShell installer integration smoke",
+)
+def test_windows_installer_isolated_lifecycle_smoke(tmp_path: Path) -> None:
+    import subprocess
+    import winreg
+
+    # Read current User PATH from registry
+    try:
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER, "Environment", 0, winreg.KEY_READ
+        ) as key:
+            orig_user_path, _ = winreg.QueryValueEx(key, "Path")
+    except FileNotFoundError:
+        orig_user_path = ""
+
+    ps1_path = REPO_ROOT / "scripts" / "install_windows_alias.ps1"
+    test_install_dir = tmp_path / "test_cli_venv"
+
+    try:
+        # 1. Fresh install into isolated test directory
+        proc_install = subprocess.run(
+            [
+                "powershell.exe",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                str(ps1_path),
+                "-InstallDir",
+                str(test_install_dir),
+            ],
+            capture_output=True,
+            text=True,
+        )
+        assert proc_install.returncode == 0, (
+            f"Installer failed:\nSTDOUT:\n{proc_install.stdout}\nSTDERR:\n{proc_install.stderr}"
+        )
+
+        scripts_dir = test_install_dir / "Scripts"
+        assert (scripts_dir / "agenticdebugger.exe").is_file()
+        assert (scripts_dir / "agentic-debugger.exe").is_file()
+
+        # Verify app-owned launcher dir was added to User PATH
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER, "Environment", 0, winreg.KEY_READ
+        ) as key:
+            updated_path, _ = winreg.QueryValueEx(key, "Path")
+        assert str(scripts_dir).lower() in updated_path.lower()
+
+        # 2. Re-run: install twice must succeed without duplicating PATH entry
+        proc_reinstall = subprocess.run(
+            [
+                "powershell.exe",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                str(ps1_path),
+                "-InstallDir",
+                str(test_install_dir),
+            ],
+            capture_output=True,
+            text=True,
+        )
+        assert proc_reinstall.returncode == 0, f"Re-install failed:\n{proc_reinstall.stderr}"
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER, "Environment", 0, winreg.KEY_READ
+        ) as key:
+            recheck_path, _ = winreg.QueryValueEx(key, "Path")
+        entries = [
+            e.strip().rstrip("\\").lower()
+            for e in recheck_path.split(";")
+            if e.strip()
+        ]
+        assert entries.count(str(scripts_dir).lower().rstrip("\\")) == 1
+
+        # 3. Uninstall: must remove app-owned directory and remove launcher from User PATH
+        proc_uninstall = subprocess.run(
+            [
+                "powershell.exe",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                str(ps1_path),
+                "-InstallDir",
+                str(test_install_dir),
+                "-Uninstall",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        assert proc_uninstall.returncode == 0, f"Uninstall failed:\n{proc_uninstall.stderr}"
+        assert not test_install_dir.exists()
+
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER, "Environment", 0, winreg.KEY_READ
+        ) as key:
+            clean_path, _ = winreg.QueryValueEx(key, "Path")
+        assert str(scripts_dir).lower() not in clean_path.lower()
+
+        # 4. Repeated uninstall must be harmless/idempotent
+        proc_uninstall2 = subprocess.run(
+            [
+                "powershell.exe",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                str(ps1_path),
+                "-InstallDir",
+                str(test_install_dir),
+                "-Uninstall",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        assert proc_uninstall2.returncode == 0, f"Second uninstall failed:\n{proc_uninstall2.stderr}"
+
+    finally:
+        # Guarantee restoration of developer's exact original User PATH
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER, "Environment", 0, winreg.KEY_SET_VALUE
+        ) as key:
+            winreg.SetValueEx(key, "Path", 0, winreg.REG_SZ, orig_user_path)
+
+
+@pytest.mark.skipif(
+    platform.system() != "Windows",
+    reason="Windows PowerShell installer integration smoke",
+)
+def test_windows_installer_active_unrelated_venv_not_persisted_to_path(
+    tmp_path: Path,
+) -> None:
+    import subprocess
+    import winreg
+
+    try:
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER, "Environment", 0, winreg.KEY_READ
+        ) as key:
+            orig_user_path, _ = winreg.QueryValueEx(key, "Path")
+    except FileNotFoundError:
+        orig_user_path = ""
+
+    ps1_path = REPO_ROOT / "scripts" / "install_windows_alias.ps1"
+    unrelated_venv = tmp_path / "project_active_venv"
+    app_owned_venv = tmp_path / "app_owned_venv"
+
+    unrelated_scripts = unrelated_venv / "Scripts"
+    unrelated_scripts.mkdir(parents=True)
+    unrelated_python = sys.executable
+
+    try:
+        proc = subprocess.run(
+            [
+                "powershell.exe",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                str(ps1_path),
+                "-Python",
+                unrelated_python,
+                "-InstallDir",
+                str(app_owned_venv),
+            ],
+            capture_output=True,
+            text=True,
+        )
+        assert proc.returncode == 0, f"Installer failed:\n{proc.stderr}"
+
+        # Read User PATH from registry
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER, "Environment", 0, winreg.KEY_READ
+        ) as key:
+            user_path, _ = winreg.QueryValueEx(key, "Path")
+
+        # Prove the active unrelated venv's Scripts is NOT persisted to User PATH
+        assert str(unrelated_scripts).lower() not in user_path.lower()
+
+        # Prove ONLY the app-owned venv's Scripts directory was persisted
+        app_scripts = app_owned_venv / "Scripts"
+        assert str(app_scripts).lower() in user_path.lower()
+
+        # Clean up via installer uninstall
+        proc_uninst = subprocess.run(
+            [
+                "powershell.exe",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                str(ps1_path),
+                "-InstallDir",
+                str(app_owned_venv),
+                "-Uninstall",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        assert proc_uninst.returncode == 0
+    finally:
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER, "Environment", 0, winreg.KEY_SET_VALUE
+        ) as key:
+            winreg.SetValueEx(key, "Path", 0, winreg.REG_SZ, orig_user_path)

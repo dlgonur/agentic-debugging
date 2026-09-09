@@ -20,13 +20,13 @@ research harness.
 ## Quick start
 
 ```powershell
-python -m pip install -e ".[app,test]"  # install once
+.\scripts\install_windows_alias.ps1     # install app-owned launcher once (Windows)
 agenticdebugger                         # launch from anywhere (PowerShell or CMD)
 agenticdebugger --doctor                # reports readiness; first curated task is offline demo
 ```
 
-`agenticdebugger` and canonical `agentic-debugger` share one entry point with Python's
-`Scripts` on `PATH` (Windows helper: `scripts/install_windows_alias.ps1`; `agentic debugger` unclaimed to avoid reserving `agentic`).
+`agenticdebugger` and canonical `agentic-debugger` share one entry point via an
+app-owned venv on User `PATH` (`pip install -e ".[app]"` also supported; `agentic debugger` unclaimed to avoid reserving `agentic`).
 
 Run the scientific demo directly:
 

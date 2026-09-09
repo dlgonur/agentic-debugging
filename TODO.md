@@ -118,7 +118,7 @@ failure visibility, and retry.
   mapping to `agentic_debugger.ui.__main__:main`; single launch authority;
   argv prog auto-detection in help/version banners; behavioral parity;
   generic `agentic` namespace unclaimed; idempotent Windows helper
-  `scripts/install_windows_alias.ps1`.
+  `scripts/install_windows_alias.ps1` deploying to app-owned isolated venv.
 
 ## Active work
 

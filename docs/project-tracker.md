@@ -72,7 +72,8 @@
   mapping to `agentic_debugger.ui.__main__:main`; single launch authority; dynamic
   prog detection in `--help` and `--version`; behavioral parity across all options
   and startup flows; generic `agentic` global namespace explicitly unclaimed;
-  idempotent Windows PowerShell installation helper `scripts/install_windows_alias.ps1`.
+  idempotent Windows PowerShell installation helper `scripts/install_windows_alias.ps1`
+  deploying to app-owned isolated venv (`%LOCALAPPDATA%\AgenticDebugger\cli-venv`) and safe User PATH.
 
 ## 2026-08-29 goal-mode UI work
 

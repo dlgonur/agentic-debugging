@@ -29,7 +29,7 @@ Task 41 established global command-line launch ergonomics on Windows across Powe
 - Dynamic display name detection (`_detect_prog`) preserving canonical `agentic-debugger` default while reflecting the invoked command name in `--help` and `--version`;
 - Behavioral parity across all flags (`--help`, `--version`, `--doctor`, `--list-sessions`, `--export-session`, `--root`, `--project`, and interactive Textual TUI launch);
 - Explicit decision not to claim the generic global `agentic` executable namespace in v1 to avoid collisions with unrelated developer tools;
-- Idempotent Windows helper `scripts/install_windows_alias.ps1` providing non-admin User PATH management and clean uninstall/reversal.
+- Idempotent Windows helper `scripts/install_windows_alias.ps1` deploying an app-owned isolated virtual environment (`%LOCALAPPDATA%\AgenticDebugger\cli-venv`), non-admin User PATH management, and clean bounded uninstall/reversal.
 This is a post-V2 product usability capability, not V3 or a new architecture campaign. No subsequent implementation priority has been selected by repository authority.
 
 **2026-09-09 post-V2 capability update — Task 34 Session Token Usage Telemetry v1:**

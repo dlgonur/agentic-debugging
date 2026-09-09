@@ -91,7 +91,7 @@ def render_diagnostics(diagnostics: dict[str, object]) -> int:
     print(f"Python: {diagnostics['python_version']} ({python_status})")
     print(f"Textual: {textual_status}")
     print(f"Curated task manifests: {curated_tasks} ({task_status})")
-    for kind, available, reason in diagnostics.get("providers", []):  # type: ignore[union-attr]
+    for kind, available, reason in diagnostics["providers"]:  # type: ignore[union-attr]
         if available:
             print(f"Model provider {kind}: ready")
         else:
@@ -106,15 +106,21 @@ def _detect_prog(prog: Optional[str] = None) -> str:
     """Resolve the display command name for help and version banners.
 
     Honors an explicit command name first. When unstated, checks ``sys.argv[0]``
-    to reflect whichever launcher invoked the entry point (``agenticdebugger`` or
-    ``agentic-debugger``), defaulting to canonical ``agentic-debugger``.
+    using a host-neutral basename parser (handling both '/' and '\\' path
+    separators across platforms) to reflect whichever launcher invoked the entry
+    point (``agenticdebugger`` or ``agentic-debugger``), defaulting to canonical
+    ``agentic-debugger``.
     """
     if prog:
         return prog
     if sys.argv:
-        stem = Path(sys.argv[0]).stem.lower()
-        if stem in ("agenticdebugger", "agentic-debugger"):
-            return stem
+        raw = sys.argv[0]
+        name = raw.replace("\\", "/").rsplit("/", 1)[-1]
+        if name.lower().endswith(".exe"):
+            name = name[:-4]
+        name_lower = name.lower()
+        if name_lower in ("agenticdebugger", "agentic-debugger"):
+            return name_lower
     return "agentic-debugger"
 
 
