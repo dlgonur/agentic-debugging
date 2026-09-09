@@ -5,6 +5,7 @@
 **V2 ARCHITECTURE CAMPAIGN COMPLETE & CLOSED (2026-09-07).**
 **REPOSITORY-STATE HYGIENE CLOSEOUT COMPLETE (2026-09-07).**
 **POST-V2 SESSION TOKEN USAGE TELEMETRY V1 (TASK 34) COMPLETE (2026-09-09).**
+**POST-V2 GLOBAL CLI LAUNCH ALIAS V1 (TASK 41) COMPLETE (2026-09-09).**
 
 Release tag `v0.1.0` exists at `d01f7a5`; cycle 1 closed at
 `docs/project-closeout.md`. The V2 architecture campaign (Candidates 06–30)
@@ -15,8 +16,9 @@ V2 implementation baseline: `e86ac2d`.
 
 The post-V2 repository-wide documentation and project-state hygiene closeout
 (Task 31) is complete. Session Token Usage Telemetry v1 (Task 34) is complete
-(2026-09-09) as an additive product telemetry capability. No next
-implementation priority has been selected by repository authority. No V3 or
+(2026-09-09) as an additive product telemetry capability. Global CLI Launch
+Alias v1 (Task 41) is complete (2026-09-09) as an additive product usability
+capability. No subsequent implementation priority selected. No V3 or
 new architecture campaign has been opened.
 
 ## V2 architecture outcomes (completed 2026-09-07)
@@ -111,10 +113,16 @@ failure visibility, and retry.
   provider-reported token usage tracking across live and replay, per-logical-call
   retry/repair aggregation, coverage-aware arithmetic and lower bounds, and
   live/replay UI widgets.
+- [x] Task 41 — Global CLI Launch Alias v1 (2026-09-09): dual console-script
+  entry point (`agenticdebugger` alongside canonical `agentic-debugger`)
+  mapping to `agentic_debugger.ui.__main__:main`; single launch authority;
+  argv prog auto-detection in help/version banners; behavioral parity;
+  generic `agentic` namespace unclaimed; idempotent Windows helper
+  `scripts/install_windows_alias.ps1`.
 
 ## Active work
 
-No next implementation priority has been selected yet by repository authority.
+No subsequent implementation priority selected.
 No V3 or new architecture campaign has been opened.
 
 ## Product backlog

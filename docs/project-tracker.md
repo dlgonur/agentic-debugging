@@ -5,6 +5,7 @@
 **V2 ARCHITECTURE CAMPAIGN — COMPLETE & CLOSED (2026-09-07).**
 **REPOSITORY-STATE HYGIENE CLOSEOUT — COMPLETE (2026-09-07).**
 **POST-V2 SESSION TOKEN USAGE TELEMETRY V1 (TASK 34) — COMPLETE (2026-09-09).**
+**POST-V2 GLOBAL CLI LAUNCH ALIAS V1 (TASK 41) — COMPLETE (2026-09-09).**
 
 - V2 implementation baseline: `e86ac2d25beb5114e9a3c805f6bc468f77905deb`.
 - V2 architecture campaign (Candidates 06–30): logical control/execution plane
@@ -14,7 +15,9 @@
 - Repository-state and documentation hygiene closeout (Task 31): COMPLETE (2026-09-07).
 - Session Token Usage Telemetry v1 (Task 34): COMPLETE (2026-09-09) as an additive
   product capability on `feat/session-token-usage-v1`.
-- Next implementation priority: None selected after completion of Task 34. No V3 or
+- Global CLI Launch Alias v1 (Task 41): COMPLETE (2026-09-09) as a post-V2 product
+  usability capability on `feat/global-cli-launch-alias-v1`.
+- Next implementation priority: None selected after completion of Task 41. No V3 or
   new architecture campaign opened.
 - Provider-platform integrity convergence: COMPLETE (2026-09-03).
 - Goal-Mode Cycle 3 (shared visual language, welcome redesign, terminal UI polish): COMPLETE (2026-08-29).
@@ -64,6 +67,12 @@
   `LiveModelMetrics` and `_LogicalRequestUsage`; F6 cache-only lower-bound aggregation;
   F7 fail-closed contradictory exact total handling and coverage consistency;
   F9 exact total sealing; live/replay UI rendering with trailing `+` partial indicators.
+- [x] **Task 41 — Global CLI Launch Alias v1 (2026-09-09):**
+  Dual console-script entry point (`agenticdebugger` and canonical `agentic-debugger`)
+  mapping to `agentic_debugger.ui.__main__:main`; single launch authority; dynamic
+  prog detection in `--help` and `--version`; behavioral parity across all options
+  and startup flows; generic `agentic` global namespace explicitly unclaimed;
+  idempotent Windows PowerShell installation helper `scripts/install_windows_alias.ps1`.
 
 ## 2026-08-29 goal-mode UI work
 

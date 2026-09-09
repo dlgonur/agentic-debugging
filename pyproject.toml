@@ -22,6 +22,7 @@ classifiers = [
 
 [project.scripts]
 agentic-debugger = "agentic_debugger.ui.__main__:main"
+agenticdebugger = "agentic_debugger.ui.__main__:main"
 
 [project.optional-dependencies]
 test = ["pytest"]

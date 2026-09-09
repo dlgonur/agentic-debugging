@@ -8,7 +8,9 @@
 (earlier historical baselines: 2026-08-28 release tag `v0.1.0` at `d01f7a5`,
 2026-08-27 `8fbea883212d3fe4ad6434a366ca0898fbea68f1`; current repository HEAD
 intentionally not embedded; post-V2 documentation hygiene closeout complete;
-Session Token Usage Telemetry v1 (Task 34) COMPLETE (2026-09-09); no subsequent implementation priority selected.)
+Session Token Usage Telemetry v1 (Task 34) COMPLETE (2026-09-09);
+Global CLI Launch Alias v1 (Task 41) COMPLETE (2026-09-09);
+no subsequent implementation priority selected.)
 **Supersedes:** `outdated/docs-archive/status/project-closeout-2026-08-11.md` (the
 2026-08-11 S9 bounded-negative closeout, preserved unchanged as a historical
 snapshot) and the earlier `outdated/docs-archive/reports/final-report-v1.md`
@@ -18,6 +20,17 @@ This is the single current reviewer/handoff status document. The historical
 technical narrative covering R1–R6 through 2026-08-13 is `docs/final-report.md`; the
 2026-08-11 scientific snapshot is archived verbatim at
 `outdated/docs-archive/reports/final-report-2026-08-11.md`.
+
+**2026-09-09 post-V2 capability update — Task 41 Global CLI Launch Alias v1:**
+Global CLI Launch Alias v1 (Task 41) COMPLETE (2026-09-09); no subsequent implementation priority selected.
+Task 41 established global command-line launch ergonomics on Windows across PowerShell and CMD from any working directory on `feat/global-cli-launch-alias-v1`:
+- Dual console-script alias in `pyproject.toml` (`[project.scripts]` exposes both `agenticdebugger` and canonical `agentic-debugger` mapping to the identical `agentic_debugger.ui.__main__:main` entry point);
+- Single launch authority: no separate or duplicate launcher logic;
+- Dynamic display name detection (`_detect_prog`) preserving canonical `agentic-debugger` default while reflecting the invoked command name in `--help` and `--version`;
+- Behavioral parity across all flags (`--help`, `--version`, `--doctor`, `--list-sessions`, `--export-session`, `--root`, `--project`, and interactive Textual TUI launch);
+- Explicit decision not to claim the generic global `agentic` executable namespace in v1 to avoid collisions with unrelated developer tools;
+- Idempotent Windows helper `scripts/install_windows_alias.ps1` providing non-admin User PATH management and clean uninstall/reversal.
+This is a post-V2 product usability capability, not V3 or a new architecture campaign. No subsequent implementation priority has been selected by repository authority.
 
 **2026-09-09 post-V2 capability update — Task 34 Session Token Usage Telemetry v1:**
 Session Token Usage Telemetry v1 (Task 34) COMPLETE (2026-09-09); no subsequent implementation priority selected.

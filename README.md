@@ -20,12 +20,13 @@ research harness.
 ## Quick start
 
 ```powershell
-python -m pip install -e ".[app,test]"
-python -m agentic_debugger.ui --doctor
-python -m agentic_debugger.ui
+python -m pip install -e ".[app,test]"  # install once
+agenticdebugger                         # launch from anywhere (PowerShell or CMD)
+agenticdebugger --doctor                # reports readiness; first curated task is offline demo
 ```
 
-`--doctor` reports application and provider readiness; the first curated task is an offline deterministic demo.
+`agenticdebugger` and canonical `agentic-debugger` share one entry point with Python's
+`Scripts` on `PATH` (Windows helper: `scripts/install_windows_alias.ps1`; `agentic debugger` unclaimed to avoid reserving `agentic`).
 
 Run the scientific demo directly:
 
@@ -36,8 +37,8 @@ python -m agentic_debugger.demo --output-dir demo-out --task-id curated-off-by-o
 List or export session history without opening the UI:
 
 ```powershell
-agentic-debugger --list-sessions
-agentic-debugger --export-session SESSION_ID --output session-report.md
+agenticdebugger --list-sessions
+agenticdebugger --export-session SESSION_ID --output session-report.md
 ```
 
 ## How it works

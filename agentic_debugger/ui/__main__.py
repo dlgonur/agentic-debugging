@@ -2,10 +2,11 @@
 
 Usage::
 
+    agenticdebugger [--root DIR] [--project DIR]
     agentic-debugger [--root DIR] [--project DIR]
-    agentic-debugger --doctor
-    agentic-debugger --list-sessions [--root DIR]
-    agentic-debugger --export-session SESSION_ID [--output REPORT.md] [--root DIR]
+    agenticdebugger --doctor
+    agenticdebugger --list-sessions [--root DIR]
+    agenticdebugger --export-session SESSION_ID [--output REPORT.md] [--root DIR]
 
 ``--root`` selects the application-owned history root (default:
 ``%LOCALAPPDATA%\\AgenticDebugger`` on Windows, ``~/AgenticDebugger``
@@ -22,6 +23,7 @@ instruction instead of an import traceback.
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 import platform
 import sys
 from importlib.metadata import (
@@ -89,7 +91,7 @@ def render_diagnostics(diagnostics: dict[str, object]) -> int:
     print(f"Python: {diagnostics['python_version']} ({python_status})")
     print(f"Textual: {textual_status}")
     print(f"Curated task manifests: {curated_tasks} ({task_status})")
-    for kind, available, reason in diagnostics["providers"]:  # type: ignore[union-attr]
+    for kind, available, reason in diagnostics.get("providers", []):  # type: ignore[union-attr]
         if available:
             print(f"Model provider {kind}: ready")
         else:
@@ -100,9 +102,25 @@ def render_diagnostics(diagnostics: dict[str, object]) -> int:
     return 0 if diagnostics["ready"] else 2
 
 
-def build_parser() -> argparse.ArgumentParser:
+def _detect_prog(prog: Optional[str] = None) -> str:
+    """Resolve the display command name for help and version banners.
+
+    Honors an explicit command name first. When unstated, checks ``sys.argv[0]``
+    to reflect whichever launcher invoked the entry point (``agenticdebugger`` or
+    ``agentic-debugger``), defaulting to canonical ``agentic-debugger``.
+    """
+    if prog:
+        return prog
+    if sys.argv:
+        stem = Path(sys.argv[0]).stem.lower()
+        if stem in ("agenticdebugger", "agentic-debugger"):
+            return stem
+    return "agentic-debugger"
+
+
+def build_parser(prog: Optional[str] = None) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="agentic-debugger",
+        prog=_detect_prog(prog),
         description=(
             "Launch the Agentic Debugger terminal application over local "
             "session history, deterministic "
@@ -179,16 +197,17 @@ def _require_textual() -> None:
         raise SystemExit(2) from None
 
 
-def main(argv: Optional[Sequence[str]] = None) -> int:
-    parser = build_parser()
+def main(
+    argv: Optional[Sequence[str]] = None,
+    prog: Optional[str] = None,
+) -> int:
+    parser = build_parser(prog=prog)
     args = parser.parse_args(argv)
     if args.output is not None and args.export_session is None:
         parser.error("--output requires --export-session")
     if args.doctor:
         return render_diagnostics(collect_diagnostics())
     if args.list_sessions or args.export_session is not None:
-        from pathlib import Path
-
         from agentic_debugger import AgenticDebuggerError
         from agentic_debugger.application.history import (
             HistoryStore,
