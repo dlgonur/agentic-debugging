@@ -4,7 +4,7 @@
 
 **V2 ARCHITECTURE CAMPAIGN — COMPLETE & CLOSED (2026-09-07).**
 **REPOSITORY-STATE HYGIENE CLOSEOUT — COMPLETE (2026-09-07).**
-**POST-V2 SESSION TOKEN USAGE TELEMETRY V1 (TASK 34) — COMPLETE (2026-09-08).**
+**POST-V2 SESSION TOKEN USAGE TELEMETRY V1 (TASK 34) — COMPLETE (2026-09-09).**
 
 - V2 implementation baseline: `e86ac2d25beb5114e9a3c805f6bc468f77905deb`.
 - V2 architecture campaign (Candidates 06–30): logical control/execution plane
@@ -12,7 +12,7 @@
   ModelGateway, CredentialVault, and formal V2-05 verifier process-isolation
   trigger evaluation (NOT JUSTIFIED / DEFERRED). Campaign closed.
 - Repository-state and documentation hygiene closeout (Task 31): COMPLETE (2026-09-07).
-- Session Token Usage Telemetry v1 (Task 34): COMPLETE (2026-09-08) as an additive
+- Session Token Usage Telemetry v1 (Task 34): COMPLETE (2026-09-09) as an additive
   product capability on `feat/session-token-usage-v1`.
 - Next implementation priority: None selected after completion of Task 34. No V3 or
   new architecture campaign opened.
@@ -57,13 +57,13 @@
   Reconciled repository-wide documentation, project-state authorities, security
   boundaries, and stale references post-V2 closeout; preserved historical records
   in place; confirmed zero active engineering campaigns.
-- [x] **Task 34 — Session Token Usage Telemetry v1 (2026-09-08):**
+- [x] **Task 34 — Session Token Usage Telemetry v1 (2026-09-09):**
   Truthful provider-reported token usage tracking across live and replay;
   counts-only SAFE contract (`TokenUsage`, `TokenUsageCoverage`); unified
   per-attempt accounting (`_compute_attempt_usage`) with strict parity between
   `LiveModelMetrics` and `_LogicalRequestUsage`; F6 cache-only lower-bound aggregation;
   F7 fail-closed contradictory exact total handling and coverage consistency;
-  live/replay UI rendering with trailing `+` partial indicators.
+  F9 exact total sealing; live/replay UI rendering with trailing `+` partial indicators.
 
 ## 2026-08-29 goal-mode UI work
 

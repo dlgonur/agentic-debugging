@@ -1,8 +1,8 @@
 # Session Token Usage Telemetry v1
 
-Accepted capability record (Task 34, COMPLETE 2026-09-09 on
-`feat/session-token-usage-v1` at Candidate 39; additive on top of the post-V2 closeout
-baseline `9e658ea`). This is a product telemetry capability, not a new
+Capability record — Task 34, implementation complete 2026-09-09 on
+`feat/session-token-usage-v1` through the accepted Candidate-39 implementation lineage
+(additive on top of the post-V2 closeout baseline `9e658ea`). This is a product telemetry capability, not a new
 architecture campaign.
 
 ## What it is
