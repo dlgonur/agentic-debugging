@@ -54,6 +54,10 @@ from agentic_debugger.agent.observer import (
     ControllerObserver,
 )
 from agentic_debugger.agent.state_machine import ControllerState
+from agentic_debugger.agent.token_usage import (
+    coverage_from_payload,
+    usage_from_payload,
+)
 from agentic_debugger.application import ApplicationContractError, ApplicationInputError
 from agentic_debugger.application.events import (
     contains_credential_shape,
@@ -450,14 +454,25 @@ class ControllerSessionEventAdapter(ControllerObserver):
                     usage_block = observation.token_usage.to_payload(
                         coverage=observation.token_usage_coverage
                     )
+                    cov_block = (
+                        observation.token_usage_coverage.to_payload(for_fields=usage_block)
+                        if observation.token_usage_coverage is not None and usage_block
+                        else None
+                    )
+                    if usage_block:
+                        cov = (
+                            coverage_from_payload(cov_block, usage_block)
+                            if cov_block is not None
+                            else None
+                        )
+                        usage_from_payload(usage_block, coverage=cov)
                 except ValueError:
                     usage_block = None
+                    cov_block = None
                 if usage_block:
                     payload["token_usage"] = usage_block
-                    if observation.token_usage_coverage is not None:
-                        payload["token_usage_coverage"] = (
-                            observation.token_usage_coverage.to_payload(for_fields=usage_block)
-                        )
+                    if cov_block:
+                        payload["token_usage_coverage"] = cov_block
             self._emit(
                 SessionEventKind.MODEL_REQUEST_COMPLETED,
                 payload,

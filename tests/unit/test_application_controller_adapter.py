@@ -1008,3 +1008,133 @@ class TestContextValidation:
             ControllerSessionEventAdapter(
                 context(), clock="not-callable"  # type: ignore[arg-type]
             )
+
+
+class TestControllerSessionEventAdapterTokenUsage:
+    def _create_adapter(self):
+        events = []
+        adapter = adapter_for(sink=events)
+        return adapter, events
+
+    def test_adapter_preserves_partial_input_without_fabricating_total_f9(self):
+        """F9: Partial input + missing total + total marked complete emits
+        MODEL_REQUEST_COMPLETED without manufacturing an exact total."""
+        adapter, events = self._create_adapter()
+        adapter.notify(
+            ControllerObservation(
+                kind=ControllerObservationKind.MODEL_REQUEST_COMPLETED,
+                task_id=TASK_ID,
+                run_id=RUN_ID,
+                model_call_index=0,
+                request_status="ok",
+                token_usage=TokenUsage(input_tokens=100, output_tokens=None, total_tokens=None),
+                token_usage_coverage=TokenUsageCoverage(input_tokens=False, output_tokens=False, total_tokens=True),
+            )
+        )
+        assert len(events) == 1
+        assert events[0].event_kind is SessionEventKind.MODEL_REQUEST_COMPLETED
+        payload = dict(events[0].payload)
+        assert dict(payload["token_usage"]) == {"input_tokens": 100}
+        assert dict(payload["token_usage_coverage"]) == {"input_tokens": False}
+        assert "total_tokens" not in dict(payload["token_usage"])
+        assert "total_tokens" not in dict(payload["token_usage_coverage"])
+
+    def test_adapter_derives_exact_total_when_components_complete(self):
+        """Case C: Complete input + complete output with missing total derives
+        exact total 120 and self-consistent complete coverage."""
+        adapter, events = self._create_adapter()
+        adapter.notify(
+            ControllerObservation(
+                kind=ControllerObservationKind.MODEL_REQUEST_COMPLETED,
+                task_id=TASK_ID,
+                run_id=RUN_ID,
+                model_call_index=0,
+                request_status="ok",
+                token_usage=TokenUsage(input_tokens=100, output_tokens=20, total_tokens=None),
+                token_usage_coverage=TokenUsageCoverage(input_tokens=True, output_tokens=True, total_tokens=True),
+            )
+        )
+        assert len(events) == 1
+        assert events[0].event_kind is SessionEventKind.MODEL_REQUEST_COMPLETED
+        payload = dict(events[0].payload)
+        assert dict(payload["token_usage"]) == {
+            "input_tokens": 100,
+            "output_tokens": 20,
+            "total_tokens": 120,
+        }
+        assert dict(payload["token_usage_coverage"]) == {
+            "input_tokens": True,
+            "output_tokens": True,
+            "total_tokens": True,
+        }
+
+    def test_adapter_drops_telemetry_and_preserves_lifecycle_when_coverage_contradicts(self):
+        """Regression 3: Complete input + complete output with partial total coverage
+        drops contradictory telemetry while preserving MODEL_REQUEST_COMPLETED."""
+        adapter, events = self._create_adapter()
+        adapter.notify(
+            ControllerObservation(
+                kind=ControllerObservationKind.MODEL_REQUEST_COMPLETED,
+                task_id=TASK_ID,
+                run_id=RUN_ID,
+                model_call_index=0,
+                request_status="ok",
+                token_usage=TokenUsage(input_tokens=100, output_tokens=20, total_tokens=None),
+                token_usage_coverage=TokenUsageCoverage(input_tokens=True, output_tokens=True, total_tokens=False),
+            )
+        )
+        assert len(events) == 1
+        assert events[0].event_kind is SessionEventKind.MODEL_REQUEST_COMPLETED
+        payload = dict(events[0].payload)
+        assert "token_usage" not in payload
+        assert "token_usage_coverage" not in payload
+
+    def test_adapter_drops_telemetry_and_preserves_lifecycle_when_exact_total_contradicts(self):
+        """F7: Contradictory reported exact total drops telemetry while preserving
+        MODEL_REQUEST_COMPLETED."""
+        adapter, events = self._create_adapter()
+        adapter.notify(
+            ControllerObservation(
+                kind=ControllerObservationKind.MODEL_REQUEST_COMPLETED,
+                task_id=TASK_ID,
+                run_id=RUN_ID,
+                model_call_index=0,
+                request_status="ok",
+                token_usage=TokenUsage(input_tokens=100, output_tokens=20, total_tokens=50),
+                token_usage_coverage=TokenUsageCoverage(input_tokens=False, output_tokens=False, total_tokens=True),
+            )
+        )
+        assert len(events) == 1
+        assert events[0].event_kind is SessionEventKind.MODEL_REQUEST_COMPLETED
+        payload = dict(events[0].payload)
+        assert "token_usage" not in payload
+        assert "token_usage_coverage" not in payload
+
+    def test_adapter_preserves_exact_total_with_partial_components_f5(self):
+        """F5: Valid exact total with partial components preserves complete total coverage."""
+        adapter, events = self._create_adapter()
+        adapter.notify(
+            ControllerObservation(
+                kind=ControllerObservationKind.MODEL_REQUEST_COMPLETED,
+                task_id=TASK_ID,
+                run_id=RUN_ID,
+                model_call_index=0,
+                request_status="ok",
+                token_usage=TokenUsage(input_tokens=100, output_tokens=20, total_tokens=270),
+                token_usage_coverage=TokenUsageCoverage(input_tokens=False, output_tokens=False, total_tokens=True),
+            )
+        )
+        assert len(events) == 1
+        assert events[0].event_kind is SessionEventKind.MODEL_REQUEST_COMPLETED
+        payload = dict(events[0].payload)
+        assert dict(payload["token_usage"]) == {
+            "input_tokens": 100,
+            "output_tokens": 20,
+            "total_tokens": 270,
+        }
+        assert dict(payload["token_usage_coverage"]) == {
+            "input_tokens": False,
+            "output_tokens": False,
+            "total_tokens": True,
+        }
+

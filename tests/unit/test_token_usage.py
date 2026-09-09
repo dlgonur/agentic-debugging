@@ -395,4 +395,64 @@ class TestCoverageAwareArithmetic:
                 usage_block={"input_tokens": 100, "output_tokens": 20, "total_tokens": 120},
             )
 
+    def test_canonical_does_not_manufacture_exact_total_from_partial_components_f9(self):
+        """F9 / Case B: Partial input + missing total + total marked complete
+        must NOT manufacture an exact total. Total remains absent, and no
+        total_tokens=True coverage claim is serialized for an absent total."""
+        usage = TokenUsage(input_tokens=100, output_tokens=None, total_tokens=None)
+        cov = TokenUsageCoverage(input_tokens=False, output_tokens=False, total_tokens=True)
+
+        canonical = usage.canonical(coverage=cov)
+        assert canonical.input_tokens == 100
+        assert canonical.output_tokens is None
+        assert canonical.total_tokens is None
+
+        payload = usage.to_payload(coverage=cov)
+        assert "total_tokens" not in payload
+        assert payload == {"input_tokens": 100}
+
+        cov_payload = cov.to_payload(for_fields=payload)
+        assert "total_tokens" not in cov_payload
+        assert cov_payload == {"input_tokens": False}
+
+    def test_canonical_derives_exact_total_when_components_complete_and_total_absent(self):
+        """Case C: Complete input (100) + complete output (20) + absent total
+        safely derives exact total 120 and self-consistent complete coverage."""
+        usage = TokenUsage(input_tokens=100, output_tokens=20, total_tokens=None)
+        cov = TokenUsageCoverage(input_tokens=True, output_tokens=True, total_tokens=True)
+
+        canonical = usage.canonical(coverage=cov)
+        assert canonical.input_tokens == 100
+        assert canonical.output_tokens == 20
+        assert canonical.total_tokens == 120
+
+        payload = usage.to_payload(coverage=cov)
+        assert payload == {"input_tokens": 100, "output_tokens": 20, "total_tokens": 120}
+
+        cov_payload = cov.to_payload(for_fields=payload)
+        assert cov_payload == {"input_tokens": True, "output_tokens": True, "total_tokens": True}
+
+    def test_canonical_rejects_partial_total_when_components_complete_and_total_absent(self):
+        """Case C / Regression 3: Complete input + complete output with incoming
+        total coverage partial fails closed even when total is absent."""
+        usage = TokenUsage(input_tokens=100, output_tokens=20, total_tokens=None)
+        cov = TokenUsageCoverage(input_tokens=True, output_tokens=True, total_tokens=False)
+        with pytest.raises(
+            ValueError,
+            match="total_tokens coverage cannot be partial when both input_tokens and output_tokens are complete",
+        ):
+            usage.canonical(coverage=cov)
+
+    def test_coverage_from_payload_rejects_partial_total_without_usage_block(self):
+        """coverage_from_payload fails closed on complete components with partial total
+        even when called without usage_block."""
+        with pytest.raises(
+            ValueError,
+            match="total_tokens coverage cannot be partial when both input_tokens and output_tokens are complete",
+        ):
+            coverage_from_payload(
+                {"input_tokens": True, "output_tokens": True, "total_tokens": False}
+            )
+
+
 

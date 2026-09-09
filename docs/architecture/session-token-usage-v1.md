@@ -1,7 +1,7 @@
 # Session Token Usage Telemetry v1
 
-Accepted capability record (Task 34, COMPLETE 2026-09-08 on
-`feat/session-token-usage-v1` at Candidate 38; additive on top of the post-V2 closeout
+Accepted capability record (Task 34, COMPLETE 2026-09-09 on
+`feat/session-token-usage-v1` at Candidate 39; additive on top of the post-V2 closeout
 baseline `9e658ea`). This is a product telemetry capability, not a new
 architecture campaign.
 
@@ -58,8 +58,8 @@ When a logical call spans multiple provider attempts:
   while Input (100) and Output (20) are partial lower bounds (coverage `False`).
 - Exact totals contradicting component lower bounds (`total_tokens < min_components` with exact total)
   fail closed in `canonical` and drop telemetry at `ControllerSessionEventAdapter` while preserving lifecycle events.
-- Coverage contradictions (`Input complete + Output complete + Total reported + Total coverage partial`)
-  are rejected as impossible at the coverage/event boundary.
+- Coverage contradictions (`Input complete + Output complete + Total coverage partial`, whether Total was reported or derived)
+  are rejected as impossible at the coverage/event boundary. When Total is absent and components are partial, complete Total coverage does not manufacture an exact Total (Total remains absent and unasserted).
 
 Coverage is tracked per-dimension across the session:
 - A dimension is complete only when reported and complete on every completed request.
