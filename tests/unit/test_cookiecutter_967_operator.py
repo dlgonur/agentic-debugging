@@ -1051,3 +1051,91 @@ def test_integrity_gate_is_provider_free_and_requires_all_controls(tmp_path, mon
     assert report["status"] == "PASS"
     assert report["provider_model_execution_started"] is False
     assert report["control_acceptance"] == {"baseline": True, "reference": True, "intentionally_bad": True}
+
+
+def test_official_operator_source_acquisition_requests_frozen_docker_only(monkeypatch):
+    """The official operator must explicitly request frozen Docker-only source acquisition."""
+    captured_modes = []
+
+    def fake_copy(fixture, *, mode=None, **kwargs):
+        captured_modes.append(mode)
+
+    monkeypatch.setattr(operator, "copy_image_source", fake_copy)
+    dummy_path = Path("/dummy/fixture")
+    operator._copy_image_source(dummy_path)
+
+    assert len(captured_modes) == 1
+    assert captured_modes[0] == operator.SourceAcquisitionMode.OFFICIAL_FROZEN_DOCKER_ONLY
+
+
+def test_copy_image_source_official_mode_bypasses_cache(tmp_path, monkeypatch):
+    """In OFFICIAL_FROZEN_DOCKER_ONLY mode, copy_image_source never uses the cache."""
+    from agentic_debugger.application.level32_materialization import (
+        LEVEL32_SOURCE_SHA256,
+        SourceAcquisitionMode,
+        copy_image_source,
+    )
+
+    fake_cache = tmp_path / "cache"
+    fake_config = fake_cache / "cookiecutter" / "config.py"
+    fake_config.parent.mkdir(parents=True)
+    fake_config.write_text("dummy config", encoding="utf-8")
+    monkeypatch.setattr(
+        "agentic_debugger.application.level32_materialization.sha256_file",
+        lambda p: LEVEL32_SOURCE_SHA256,
+    )
+
+    docker_invoked = []
+
+    def fake_run(argv, **kwargs):
+        docker_invoked.append(argv)
+        return subprocess.CompletedProcess(argv, 1, stdout="", stderr="simulated docker failure")
+
+    monkeypatch.setattr(
+        "agentic_debugger.application.level32_materialization._run_cmd",
+        fake_run,
+    )
+
+    fixture = tmp_path / "fixture"
+    with pytest.raises(operator.ProofError, match="could not create the source-export container"):
+        copy_image_source(
+            fixture,
+            mode=SourceAcquisitionMode.OFFICIAL_FROZEN_DOCKER_ONLY,
+            cache_dir=fake_cache,
+        )
+
+    # Proves docker was invoked and cache was not copied
+    assert len(docker_invoked) >= 1
+    assert not (fixture / "cookiecutter" / "config.py").exists()
+
+
+def test_level32_problem_statement_integrity():
+    """Application-owned Level-32 problem statement matches accepted repository hash."""
+    from agentic_debugger.application.level32_materialization import (
+        LEVEL32_PROBLEM_STATEMENT,
+        LEVEL32_PROBLEM_STATEMENT_SHA256,
+        LEVEL32_PUBLIC_TASK_SPEC,
+    )
+
+    digest = hashlib.sha256(LEVEL32_PROBLEM_STATEMENT.encode("utf-8")).hexdigest()
+    assert digest == LEVEL32_PROBLEM_STATEMENT_SHA256
+    assert LEVEL32_PUBLIC_TASK_SPEC.problem_statement == LEVEL32_PROBLEM_STATEMENT
+    assert LEVEL32_PUBLIC_TASK_SPEC.problem_statement_sha256 == LEVEL32_PROBLEM_STATEMENT_SHA256
+
+
+def test_official_versus_interactive_scenario_proof_invariants():
+    """Official scenario enforces exact PDB proof; interactive scenario disables it."""
+    from agentic_debugger.application.level32_materialization import (
+        build_level32_interactive_scenario,
+        build_level32_official_scenario,
+    )
+
+    official = build_level32_official_scenario()
+    interactive = build_level32_interactive_scenario()
+
+    assert official.runtime_probe.exact_public_reproduction is True
+    assert official.runtime_probe.call_source == "get_config('unused-public-driver-path')"
+
+    assert interactive.runtime_probe.exact_public_reproduction is False
+    assert interactive.runtime_probe.call_source == "get_config('tests/test-config/valid-config.yaml')"
+

@@ -317,7 +317,7 @@ def test_powershell_installer_script_contract() -> None:
     assert "$InstallDir" not in content
     assert "agenticdebugger.exe" in content
     assert "agentic-debugger.exe" in content
-    assert 'pip install -e "$repoRoot[app]"' in content
+    assert 'pip install -e "$repoRoot[app,runtime]"' in content
 
     # Regression check (F7): Must NOT use --system-site-packages or --no-deps
     assert "--system-site-packages" not in content

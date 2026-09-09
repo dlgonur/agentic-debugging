@@ -72,14 +72,24 @@ from agentic_debugger.application.level32_materialization import (
     LEVEL32_SOURCE_SHA256 as SOURCE_SHA256,
     LEVEL32_TASK_ID as TASK_ID,
     ProofError,
-    build_level32_scenario as _scenario,
-    copy_image_source as _copy_image_source,
+    SourceAcquisitionMode,
+    build_level32_official_scenario as _scenario,
+    copy_image_source,
     default_parquet_path as _parquet_path,
     load_official_row as _load_official_row,
     remove_readonly_tree as _remove_readonly_tree,
     sha256_file as _sha256,
     write_public_scaffold as _write_public_scaffold,
 )
+
+
+def _copy_image_source(fixture: Path) -> None:
+    """Official operator source acquisition: pinned Docker export only (no product cache)."""
+    copy_image_source(
+        fixture,
+        mode=SourceAcquisitionMode.OFFICIAL_FROZEN_DOCKER_ONLY,
+    )
+
 MODEL = "gpt-oss:20b-cloud"
 DEFAULT_MODEL = MODEL
 # Single authority: import the adapter's pinned version so the operator can

@@ -2,8 +2,10 @@
 
 Provides truthful, reusable preparation of the pinned Level-32 execution
 environment: exports the pinned base production source from Docker (with local
-caching), loads the authoritative SWE-rebench parquet row, writes the public
-test scaffold and task manifest, and builds the canonical exact-PDB probe scenario.
+caching for interactive sessions and frozen Docker-only acquisition for official
+runs), loads the authoritative SWE-rebench parquet row or typed public task spec,
+writes the public test scaffold and task manifest, and builds the canonical
+interactive and official probe scenarios.
 """
 
 from __future__ import annotations
@@ -15,6 +17,8 @@ import shutil
 import stat
 import subprocess
 import sys
+from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Any, Optional
 
@@ -27,6 +31,7 @@ from agentic_debugger.demo.catalog import (
 
 LEVEL32_INSTANCE_ID = "audreyr__cookiecutter-967"
 LEVEL32_TASK_ID = "swr-audreyr-cookiecutter-967-pdb"
+LEVEL32_INTERNAL_TASK_ID = LEVEL32_TASK_ID
 LEVEL32_BASE_COMMIT = "ba5ba8c78e97f5dc7fb4e16c588d7be037e6e5e7"
 LEVEL32_IMAGE = "docker.io/swerebenchv2/audreyr-cookiecutter:967-ba5ba8c"
 LEVEL32_IMAGE_ID = "sha256:0bad37ac1e0a6d692a9ef417c05753b5ad45dfa8c32fd52b0f3ecabf722af8eb"
@@ -38,6 +43,56 @@ LEVEL32_F2P_COUNT = 5
 LEVEL32_P2P_COUNT = 9
 LEVEL32_PUBLIC_F2P = "tests/test_pdb_public_config_merge.py::test_builtin_abbreviations_survive_custom_config"
 LEVEL32_PUBLIC_P2P = "tests/test_pdb_public_config_merge.py::test_scalar_override_preserves_other_defaults"
+
+# Exact public SWE-rebench problem statement for audreyr__cookiecutter-967.
+# Verified byte-for-byte against the authoritative pinned parquet dataset row.
+LEVEL32_PROBLEM_STATEMENT = (
+    "gh: prefix doesn't work anymore\n"
+    "* Cookiecutter version: 1.5.1\r\n"
+    "* Template project url: `gh:*`\r\n"
+    "* Python version: 2.7.13\r\n"
+    "* Operating System: Linux\r\n"
+    "\r\n"
+    "### Description:\r\n"
+    "\r\n"
+    "cookiecutter does not honor prefixes anymore.\r\n"
+    "\r\n"
+    "### What I've run:\r\n"
+    "\r\n"
+    "Simply testing the example from the README doesn't work as expected:\r\n"
+    "\r\n"
+    "``` bash\r\n"
+    "$ cookiecutter gh:audreyr/cookiecutter-pypackage\r\nA valid repository for \"gh:audreyr/cookiecutter-pypackage\" could not be found in the following locations:\r\ngh:audreyr/cookiecutter-pypackage\r\n/home/me/.cookiecutters/gh:audreyr/cookiecutter-pypackage\r\n```\r\nThe same commands using the full repository path works as expected:\r\n\r\n```bash\r\n$ cookiecutter https://github.com/audreyr/cookiecutter-pypackage\r\n```\r\n"
+)
+LEVEL32_PROBLEM_STATEMENT_SHA256 = (
+    "b3381a6f3f5cb16c849514751cc7cb11da3d40c5bad7d83a67cb788c2fb07047"
+)
+
+
+class SourceAcquisitionMode(str, Enum):
+    """Explicit source acquisition strategy distinguishing interactive from official runs."""
+
+    INTERACTIVE_CACHE_FIRST = "interactive_cache_first"
+    OFFICIAL_FROZEN_DOCKER_ONLY = "official_frozen_docker_only"
+
+
+@dataclass(frozen=True)
+class Level32PublicTaskSpec:
+    """Public task projection owned by the application for interactive execution."""
+
+    instance_id: str = LEVEL32_INSTANCE_ID
+    task_id: str = LEVEL32_TASK_ID
+    base_commit: str = LEVEL32_BASE_COMMIT
+    image: str = LEVEL32_IMAGE
+    image_id: str = LEVEL32_IMAGE_ID
+    source_sha256: str = LEVEL32_SOURCE_SHA256
+    problem_statement: str = LEVEL32_PROBLEM_STATEMENT
+    problem_statement_sha256: str = LEVEL32_PROBLEM_STATEMENT_SHA256
+    public_f2p: str = LEVEL32_PUBLIC_F2P
+    public_p2p: str = LEVEL32_PUBLIC_P2P
+
+
+LEVEL32_PUBLIC_TASK_SPEC = Level32PublicTaskSpec()
 
 
 class Level32MaterializationError(RuntimeError):
@@ -111,6 +166,7 @@ def _run_cmd(
 
 
 def load_official_row(*, parquet_path: Path | None = None) -> dict[str, Any]:
+    """Load authoritative SWE-rebench parquet task row. Requires pyarrow."""
     path = parquet_path or default_parquet_path()
     if not path.is_file() or sha256_file(path) != LEVEL32_PARQUET_SHA256:
         raise Level32MaterializationError(
@@ -152,16 +208,34 @@ def load_official_row(*, parquet_path: Path | None = None) -> dict[str, Any]:
 def copy_image_source(
     fixture: Path,
     *,
+    mode: SourceAcquisitionMode | str = SourceAcquisitionMode.INTERACTIVE_CACHE_FIRST,
     cache_dir: Path | None = None,
-    use_cache: bool = True,
+    use_cache: bool | None = None,
 ) -> None:
+    """Acquire base source for Cookiecutter #967.
+
+    In INTERACTIVE_CACHE_FIRST mode (default):
+      Checks verified local cache first; if absent, exports from Docker and populates cache.
+
+    In OFFICIAL_FROZEN_DOCKER_ONLY mode:
+      Strictly exports from pinned Docker image with accepted image verification;
+      never reads from or writes to the local cache.
+    """
+    if use_cache is not None:
+        mode = (
+            SourceAcquisitionMode.INTERACTIVE_CACHE_FIRST
+            if use_cache
+            else SourceAcquisitionMode.OFFICIAL_FROZEN_DOCKER_ONLY
+        )
+    mode = SourceAcquisitionMode(mode)
+
     fixture = Path(fixture).resolve()
     fixture.parent.mkdir(parents=True, exist_ok=True)
     target_cache = (
         cache_dir if cache_dir is not None else default_base_source_cache_dir()
     )
 
-    if use_cache and target_cache is not None:
+    if mode == SourceAcquisitionMode.INTERACTIVE_CACHE_FIRST and target_cache is not None:
         cached_config = target_cache / "cookiecutter/config.py"
         if (
             cached_config.is_file()
@@ -211,7 +285,7 @@ def copy_image_source(
             "exported production source does not match the pinned base blob"
         )
 
-    if use_cache and target_cache is not None:
+    if mode == SourceAcquisitionMode.INTERACTIVE_CACHE_FIRST and target_cache is not None:
         try:
             target_cache.parent.mkdir(parents=True, exist_ok=True)
             if target_cache.exists():
@@ -336,9 +410,10 @@ def write_public_scaffold(fixture: Path, problem_statement: str) -> None:
     )
 
 
-def build_level32_scenario(
+def build_level32_official_scenario(
     task_id: str = LEVEL32_TASK_ID,
 ) -> DemoScenario:
+    """Canonical exact-PDB probe scenario for official research operator runs."""
     return DemoScenario(
         task_id=task_id,
         hypothesis_id="cookiecutter-967-runtime-hypothesis",
@@ -361,20 +436,72 @@ def build_level32_scenario(
     )
 
 
-def materialize_level32_task(staging_root: Path) -> Path:
+def build_level32_interactive_scenario(
+    task_id: str = LEVEL32_TASK_ID,
+) -> DemoScenario:
+    """Interactive scenario for configured live model runs (policy: pdb-on-uncertainty)."""
+    return DemoScenario(
+        task_id=task_id,
+        hypothesis_id="cookiecutter-967-runtime-hypothesis",
+        root_cause_statement="The reproduced nested configuration behavior requires runtime inspection.",
+        localization=LocalizationClaim("cookiecutter/config.py", "get_config"),
+        reference_repair=ReferenceRepair(
+            "cookiecutter/config.py",
+            "config_dict = copy.copy(DEFAULT_CONFIG)",
+            "config_dict = copy.deepcopy(DEFAULT_CONFIG)",
+        ),
+        runtime_probe=RuntimeProbe(
+            module_path="cookiecutter/config.py",
+            focus_function="get_config",
+            call_source="get_config('tests/test-config/valid-config.yaml')",
+            anchor="config_dict.update(yaml_dict)",
+            inspect_expressions=("yaml_dict", "config_dict"),
+            exact_public_reproduction=False,
+            breakpoint_line=54,
+        ),
+    )
+
+
+def build_level32_scenario(
+    task_id: str = LEVEL32_TASK_ID,
+) -> DemoScenario:
+    """Scenario builder backward-compatibility alias defaulting to official scenario."""
+    return build_level32_official_scenario(task_id=task_id)
+
+
+def materialize_level32_task(
+    staging_root: Path,
+    *,
+    mode: SourceAcquisitionMode | str = SourceAcquisitionMode.INTERACTIVE_CACHE_FIRST,
+    cache_dir: Path | None = None,
+) -> Path:
     """Materialize the complete public Level-32 workspace under staging_root.
+
+    For interactive sessions (default mode=INTERACTIVE_CACHE_FIRST):
+    - Uses verified local source cache first, falling back to Docker export.
+    - Uses the application-owned Level32PublicTaskSpec (exact problem statement)
+      without requiring pyarrow or the full SWE-rebench parquet dataset.
+
+    For official operator sessions (mode=OFFICIAL_FROZEN_DOCKER_ONLY):
+    - Exports directly from pinned Docker image with image validation.
+    - Loads the authoritative SWE-rebench parquet row via pyarrow.
 
     Returns the fixture directory path containing the prepared production source,
     the public poyo compatibility shim, public test suite, and task.json.
     """
+    mode = SourceAcquisitionMode(mode)
     staging_root = Path(staging_root).resolve()
     staging_root.mkdir(parents=True, exist_ok=True)
     fixture = (
         staging_root / "agentic_debugger" / "datasets" / "curated" / LEVEL32_TASK_ID
     )
-    copy_image_source(fixture)
-    row = load_official_row()
-    write_public_scaffold(fixture, str(row["problem_statement"]))
+    copy_image_source(fixture, mode=mode, cache_dir=cache_dir)
+    if mode == SourceAcquisitionMode.OFFICIAL_FROZEN_DOCKER_ONLY:
+        row = load_official_row()
+        problem_statement = str(row["problem_statement"])
+    else:
+        problem_statement = LEVEL32_PROBLEM_STATEMENT
+    write_public_scaffold(fixture, problem_statement)
     return fixture
 
 
@@ -386,14 +513,22 @@ __all__ = [
     "LEVEL32_IMAGE",
     "LEVEL32_IMAGE_ID",
     "LEVEL32_INSTANCE_ID",
+    "LEVEL32_INTERNAL_TASK_ID",
     "LEVEL32_P2P_COUNT",
     "LEVEL32_PARQUET_SHA256",
+    "LEVEL32_PROBLEM_STATEMENT",
+    "LEVEL32_PROBLEM_STATEMENT_SHA256",
     "LEVEL32_PUBLIC_F2P",
     "LEVEL32_PUBLIC_P2P",
+    "LEVEL32_PUBLIC_TASK_SPEC",
     "LEVEL32_SOURCE_SHA256",
     "LEVEL32_TASK_ID",
     "Level32MaterializationError",
+    "Level32PublicTaskSpec",
     "ProofError",
+    "SourceAcquisitionMode",
+    "build_level32_interactive_scenario",
+    "build_level32_official_scenario",
     "build_level32_scenario",
     "copy_image_source",
     "default_base_source_cache_dir",

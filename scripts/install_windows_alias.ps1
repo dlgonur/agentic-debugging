@@ -187,29 +187,29 @@ if (-not (Test-Path $venvPython)) {
     exit 1
 }
 
-# 4. Install Agentic Debugger with [app] dependencies into app-owned environment
+# 4. Install Agentic Debugger with [app,runtime] dependencies into app-owned environment
 # Editable install links the app-owned launcher to this repository source tree
-Write-Host "Installing Agentic Debugger with [app] dependencies into app-owned environment from '$repoRoot'..."
-& $venvPython -m pip install -e "$repoRoot[app]"
+Write-Host "Installing Agentic Debugger with [app,runtime] dependencies into app-owned environment from '$repoRoot'..."
+& $venvPython -m pip install -e "$repoRoot[app,runtime]"
 if ($LASTEXITCODE -ne 0) {
     Write-Error "pip installation failed with exit code $LASTEXITCODE."
     exit $LASTEXITCODE
 }
 
-# 5. Verification Gate: launchers, Textual import, and doctor readiness
+# 5. Verification Gate: launchers, Textual/runtime import, and doctor readiness
 if (-not (Test-Path $targetUnhyphenated) -or -not (Test-Path $targetHyphenated)) {
     Write-Error "Expected launchers ('agenticdebugger.exe' and 'agentic-debugger.exe') were not found in '$launcherDir' after installation."
     exit 1
 }
 
 try {
-    & $venvPython -c "import textual"
+    & $venvPython -c "import textual, pytest, yaml"
 } catch {
-    Write-Error "Textual dependency verification failed in app-owned environment: $_"
+    Write-Error "Dependency verification failed in app-owned environment: $_"
     exit 1
 }
 if ($LASTEXITCODE -ne 0) {
-    Write-Error "Textual dependency verification failed in app-owned environment."
+    Write-Error "Dependency verification failed in app-owned environment."
     exit 1
 }
 

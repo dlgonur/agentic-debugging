@@ -26,9 +26,17 @@ agenticdebugger = "agentic_debugger.ui.__main__:main"
 
 [project.optional-dependencies]
 test = ["pytest"]
-# Textual terminal application. The scientific core and non-UI command paths
-# do not require this extra.
-app = ["textual>=8,<9"]
+# Product execution runtime dependencies for built-in task reproduction and verification.
+runtime = [
+    "pytest",
+    "PyYAML",
+]
+# Textual terminal application and built-in interactive execution dependencies.
+app = [
+    "textual>=8,<9",
+    "pytest",
+    "PyYAML",
+]
 
 # The repository is a flat layout with many top-level research/operator
 # directories; discovery is pinned to the one installable package so the

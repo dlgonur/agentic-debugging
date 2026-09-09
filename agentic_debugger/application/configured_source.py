@@ -73,7 +73,8 @@ from agentic_debugger.evaluation.live import (
 
 from agentic_debugger.application.level32 import LEVEL32_TASK_ID
 from agentic_debugger.application.level32_materialization import (
-    build_level32_scenario,
+    SourceAcquisitionMode,
+    build_level32_interactive_scenario,
     materialize_level32_task,
 )
 from agentic_debugger.application.ollama_cloud_source import (
@@ -478,8 +479,11 @@ def run_configured_session(
     if is_level32:
         try:
             staging_root = ctx.work_dir / "level32_staging"
-            fixture_dir = materialize_level32_task(staging_root)
-            ladder_scenario = build_level32_scenario(task_id=task_id)
+            fixture_dir = materialize_level32_task(
+                staging_root,
+                mode=SourceAcquisitionMode.INTERACTIVE_CACHE_FIRST,
+            )
+            ladder_scenario = build_level32_interactive_scenario(task_id=task_id)
         except Exception as exc:
             ctx.emitter.emit(
                 SessionEventKind.DIAGNOSIS_RECORDED,
@@ -539,8 +543,11 @@ def run_configured_session(
             environment=environment,
         )
         run_id = ctx.run_id or f"{task_id}--{policy_value}"
-        # Ladder exact-PDB proof binding (provider-neutral)
-        if (is_lower_ladder or is_level32) and ladder_scenario is not None:
+        # Lower-ladder exact-PDB proof binding (provider-neutral).
+        # Interactive Level-32 uses standard pdb-on-uncertainty without mandatory
+        # proof gating (LiveModelAdapter.proof_required=False,
+        # ControllerRunConfig.require_pdb_evidence_before_patch=False).
+        if is_lower_ladder and ladder_scenario is not None:
             adapter = LiveModelAdapter(
                 task=demo_context.task,
                 policy=policy,
