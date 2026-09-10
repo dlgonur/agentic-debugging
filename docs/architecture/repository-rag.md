@@ -108,9 +108,12 @@ excluded). Two mappings:
 * `to_record_mapping()` — compact case/attempt evidence (identities,
   locations, byte counts, latency) without the chunk text.
 
-`PUBLIC_REQUEST_BYTE_BUDGET = 20 000` mirrors the frozen transport
-public-evidence budget; the live adapter enforces request-plus-context
-before any transport call.
+`PUBLIC_REQUEST_BYTE_BUDGET = 20 000` is a retained historical mirror of
+the former frozen transport public-evidence budget.  Since Task 43
+(provider-owned request size) it is never enforced: the live adapter
+hands the request-plus-context to the configured transport at whatever
+size the controller produced.  A provider that rejects an oversized
+request surfaces a provider failure truthfully.
 
 ## 8. Determinism evidence
 

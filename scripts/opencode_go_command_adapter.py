@@ -9,7 +9,8 @@ Responsibilities:
 3. Enforce the 25-logical-call micro-run envelope (``protocol.logical_model_call_index``).
 4. Enforce the exact model identity: ``deepseek-v4-pro`` / ``opencode-go/deepseek-v4-pro``.
 5. Construct a compact, instruction-wrapped prompt embedding the canonical public request
-   (bounded by the Local-Application-specific ``MAX_PUBLIC_REQUEST_BYTES`` ceiling).
+   (request size is provider-owned: the complete request is embedded at
+   whatever size the controller produced, never truncated or rejected).
 6. Resolve and prove the explicit OpenCode executable identity (absolute verified launcher
    on Windows, absolute verified executable elsewhere; never a bare PATH lookup).
 7. Execute ONE bounded non-interactive ``opencode run`` inference in a fresh isolated
@@ -64,15 +65,12 @@ ALLOWED_MODEL_IDENTIFIERS = frozenset({"deepseek-v4-pro", "opencode-go/deepseek-
 
 DEFAULT_TIMEOUT_SECONDS = 20.0
 MAX_RAW_RESPONSE_BYTES = 64 * 1024  # 64 KiB
-#: The Local-Application-specific bounded canonical public request ceiling.
-#: Distinct from the historical QuixBugs campaign 20,000-byte
-#: ``max_public_evidence_bytes`` budget; this ceiling admits the complete
-#: measured ``curated-none-handling-001`` pdb-on-uncertainty reference
-#: trajectory (21 requests, max 23,824 canonical bytes) while the exact
-#: constructed prompt plus the Windows command line stays below the
-#: separate 30,000-character native command-line guard.
+#: Historical Local Application canonical-request size value (25,000).
+#: Retained for provenance/evidence compatibility only; it is NEVER
+#: enforced.  Model request size is provider-owned (Task 43): the
+#: intended request is shaped and handed to the provider at whatever
+#: size the controller produced.
 MAX_PUBLIC_REQUEST_BYTES = 25_000
-MAX_NATIVE_COMMAND_LINE_CHARS = 30_000  # Conservative Windows limit (< 32,767)
 
 #: The planned micro-run hard bound: maximum logical model calls = 25.
 DEFAULT_MAX_LOGICAL_MODEL_CALLS = 25
@@ -427,7 +425,13 @@ SYSTEM_PROMPT = (
 
 
 def canonical_public_request(request: Mapping[str, Any]) -> str:
-    """Serialize the request to compact, deterministic canonical JSON."""
+    """Serialize the request to compact, deterministic canonical JSON.
+
+    Request size is provider-owned (Task 43): the complete canonical
+    serialization is always returned, never truncated or rejected for
+    size.  ``MAX_PUBLIC_REQUEST_BYTES`` is a retained historical value,
+    never enforced.
+    """
     return json.dumps(
         request,
         sort_keys=True,
@@ -438,15 +442,14 @@ def canonical_public_request(request: Mapping[str, Any]) -> str:
 
 
 def build_protocol_message(request: Mapping[str, Any]) -> str:
-    """Build the single user message carrying the instructions and public request."""
+    """Build the single user message carrying the instructions and public request.
+
+    Request size is provider-owned (Task 43): the complete canonical
+    request is always embedded, never truncated or rejected for size.
+    """
     if not isinstance(request, Mapping):
         raise ValueError("protocol request must be a JSON object")
     canonical = canonical_public_request(request)
-    byte_count = len(canonical.encode("utf-8"))
-    if byte_count > MAX_PUBLIC_REQUEST_BYTES:
-        raise ValueError(
-            f"canonical public request exceeds the Local Application ceiling ({byte_count} > {MAX_PUBLIC_REQUEST_BYTES} bytes)"
-        )
     return (
         f"{SYSTEM_PROMPT}\n\n"
         f"{PUBLIC_REQUEST_START}\n"
@@ -1011,10 +1014,11 @@ def execute_inference(
         if variant:
             command.extend(["--variant", variant])
 
-        command_line = subprocess.list2cmdline(command)
-        if len(command_line) > MAX_NATIVE_COMMAND_LINE_CHARS:
-            raise ValueError(f"command line exceeds bound ({len(command_line)} > {MAX_NATIVE_COMMAND_LINE_CHARS})")
-
+        # Provider-owned request size (Task 43): no Agentic-Debugger-owned
+        # command-line ceiling is enforced here.  If the host OS cannot
+        # represent the argv, process creation itself fails and that OS
+        # truth surfaces as a launch failure — never as an
+        # Agentic-Debugger policy rejection.
         stdout_capture = _BoundedCapture(max_response_bytes)
         stderr_capture = _BoundedCapture(max_response_bytes)
 

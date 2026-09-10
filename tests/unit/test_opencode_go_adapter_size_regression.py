@@ -1,15 +1,14 @@
-"""Blocker A mandatory regression: the Local Application request ceiling.
+"""Provider-owned request size regression for the OpenCode Go command adapter.
 
-The historical QuixBugs campaign 20,000-byte public-evidence budget must not
-be silently inherited into Local Application V1.  Two independent proofs:
+The historical QuixBugs campaign 20,000-byte public-evidence budget was never
+silently inherited into Local Application V1, and since Task 43 no internal
+request-size ceiling is enforced at all.  Two independent proofs:
 
 1. The measured ``curated-none-handling-001`` ``pdb-on-uncertainty``
    reference trajectory (21 Local Application model requests, canonical
    compact JSON sizes measured independently) is reconstructed
-   deterministically with EXACT byte counts and must be fully admitted by
-   the Local Application ceiling ``MAX_PUBLIC_REQUEST_BYTES`` (25,000),
-   while the exact constructed prompt plus the simulated Windows command
-   line stays below the separate 30,000-character guard.
+   deterministically with EXACT byte counts; every request constructs its
+   complete prompt and command unchanged.
 
 2. The REAL deterministic configured-command trajectory for
    ``curated-none-handling-001`` under ``pdb-on-uncertainty`` is driven
@@ -19,8 +18,6 @@ be silently inherited into Local Application V1.  Two independent proofs:
    ``build_protocol_message``; request count and the maximum canonical
    request bytes, constructed prompt bytes, and simulated Windows
    command-line characters are recorded.
-
-The configured limit + 1 fails closed.
 """
 
 from __future__ import annotations
@@ -365,28 +362,28 @@ def test_measured_21_call_reference_trajectory_admitted_by_ceiling() -> None:
 
     # The measured trajectory maximum is 23,824 bytes: the historical
     # 20,000-byte campaign budget would have rejected calls 15+ even with
-    # perfect model responses; the Local Application ceiling admits all 21.
+    # perfect model responses.  Since Task 43 (provider-owned request
+    # size) no internal ceiling is enforced: every measured request
+    # constructs its complete prompt and command unchanged.
     assert max_canonical == 23_824
     assert max_canonical > 20_000, "regression does not exceed the historical budget"
-    assert max_canonical <= adapter.MAX_PUBLIC_REQUEST_BYTES
-    assert max_prompt < adapter.MAX_NATIVE_COMMAND_LINE_CHARS
-    assert max_command_line < adapter.MAX_NATIVE_COMMAND_LINE_CHARS
     assert max_command_line > max_prompt, "command line quoting is simulated"
     adapter._MAX_MEASURED_PROMPT_BYTES = max_prompt  # recorded for the report
     adapter._MAX_MEASURED_COMMAND_LINE_CHARS = max_command_line
 
 
-def test_ceiling_plus_one_fails_closed_on_measured_max() -> None:
+def test_ceiling_plus_one_is_forwarded_complete_on_measured_max() -> None:
+    """Task 43 (provider-owned request size): growing the largest measured
+    request (23,824) to exactly historical-ceiling + 1 forwards the
+    complete message — never rejected."""
     requests, sizes = build_measured_reference_trajectory()
     last = dict(requests[-1])
-    # Grow the largest measured request (23,824) to exactly ceiling + 1:
-    # the configured limit + 1 must fail closed.
     last["_pad"] = ""
     current = len(adapter.canonical_public_request(last).encode("utf-8"))
     last["_pad"] = "x" * (adapter.MAX_PUBLIC_REQUEST_BYTES + 1 - current)
     assert len(adapter.canonical_public_request(last).encode("utf-8")) == adapter.MAX_PUBLIC_REQUEST_BYTES + 1
-    with pytest.raises(ValueError, match="exceeds the Local Application ceiling"):
-        adapter.build_protocol_message(last)
+    message = adapter.build_protocol_message(last)
+    assert adapter.canonical_public_request(last) in message
 
 
 # --- Real deterministic configured-command trajectory ----------------------
@@ -592,12 +589,11 @@ def test_real_configured_command_trajectory_requests_all_build(tmp_path: Path) -
         max_command_line = max(max_command_line, len(subprocess.list2cmdline(command)))
 
     # Record the measured real-trajectory facts (reported in validation.md).
+    # Since Task 43 no internal ceiling is enforced; every request
+    # constructs its complete prompt and command unchanged.
     adapter._REAL_TRAJECTORY = {
         "request_count": len(requests),
         "max_canonical_request_bytes": max_canonical,
         "max_constructed_prompt_bytes": max_prompt,
         "max_simulated_command_line_chars": max_command_line,
     }
-    assert max_canonical <= adapter.MAX_PUBLIC_REQUEST_BYTES
-    assert max_prompt < adapter.MAX_NATIVE_COMMAND_LINE_CHARS
-    assert max_command_line < adapter.MAX_NATIVE_COMMAND_LINE_CHARS

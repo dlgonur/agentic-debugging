@@ -651,7 +651,6 @@ def test_request_reaches_wrapper_through_stdin_and_fake_opencode_chain(tmp_path,
     assert preflight["file_argument_absent"] is True
     assert preflight["message_inline_request_present"] is True
     assert preflight["native_executable"]["version_matches_launcher"] is True
-    assert preflight["command_line_within_native_bound"] is True
     assert preflight["route_binding"]["expected_runtime_model_id"] == MODEL
 
 
@@ -851,7 +850,6 @@ def test_chain_large_frozen_request_survives_native_execution(tmp_path, manifest
     assert preflight["file_argument_absent"] is True
     assert preflight["message_byte_count"] > 9000
     assert preflight["request_within_public_evidence_budget"] is True
-    assert preflight["command_line_within_native_bound"] is True
     assert preflight["request_byte_count"] == len(canonical.encode("utf-8"))
 
 

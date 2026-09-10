@@ -46,7 +46,7 @@ from agentic_debugger.evaluation.runner import bounded_error, load_task
 from agentic_debugger.evaluation.verifier import EvaluationVerifier
 from agentic_debugger.events.logger import JsonlEventLogger
 from agentic_debugger.events.schema import Observation, RunEvent
-from agentic_debugger.rag.context import PUBLIC_REQUEST_BYTE_BUDGET, RagContext
+from agentic_debugger.rag.context import RagContext
 from agentic_debugger.runtime.workspace import TaskWorkspace
 from agentic_debugger.evaluation.directive_observability import serialize_rejection_evidence, validate_rejection_evidence
 
@@ -61,16 +61,19 @@ class LiveTransportError(LiveEvaluationError):
         self.safe_message = safe_message
 
 class ModelRequestBudgetExceeded(LiveEvaluationError):
-    """The transport rejected the model request before any provider process.
+    """Historical transport signal: the frozen public-evidence budget.
 
-    Raised only when the canonical public request serialization of the model
-    request is a valid non-negative byte count above the frozen
-    public-evidence budget: the next public request could not have been
-    constructed within the frozen case limit, so the case stops before
-    another wrapper/provider process is launched.  This is a typed,
-    non-retryable case-level signal: it is never a transport/provider
-    failure, never a malformed-directive rejection, and never launches a
-    model/provider process for the rejected request.
+    Retained for backward compatibility with frozen campaign evidence and
+    historical transports only.  New execution never raises it: model
+    request size is provider-owned (Task 43), so Agentic Debugger hands
+    the intended request to the configured transport regardless of its
+    serialized size.  A provider that rejects an oversized request
+    surfaces a provider/transport failure (``request_too_large`` as an
+    EXTERNAL provider error kind), never this pre-transport signal.
+    The ``except ModelRequestBudgetExceeded`` handler in
+    :meth:`LiveModelAdapter.next_directive` and the
+    ``public_evidence_budget_exceeded`` terminalization below exist solely
+    to interpret historical evidence; they are unreachable in new runs.
     """
 
     def __init__(self, request_byte_count: int, limit: int) -> None:
@@ -222,8 +225,10 @@ PDB_BREAKPOINT_SELECTION_POLICY = {
     },
 }
 # Ten entries retain the complete bounded exact-PDB sequence at diagnosis and
-# patch time while dropping repeated early baseline/source payloads before the
-# 25 KiB Local Application request boundary.
+# patch time while dropping repeated early baseline/source payloads.  This is
+# count-based context management (a fixed number of history entries), not a
+# request-size ceiling: model request size is provider-owned and no
+# byte/token/character bound is enforced on the request below.
 PROOF_HISTORY_WINDOW = 10
 MAX_COMMAND_ARGUMENTS = 32
 COMMAND_ERROR_SCHEMA_VERSION = "command-error-v1"
@@ -2645,16 +2650,14 @@ class LiveModelAdapter:
                 request_bytes=json.dumps(request,ensure_ascii=False,allow_nan=False).encode("utf-8")
             except (TypeError,ValueError,UnicodeError):
                 self.metrics.termination_reason="request_serialization"; raise LiveModelAdapterError("live model context could not be serialized") from None
-            if len(request_bytes)>MAX_MODEL_RESPONSE_BYTES:
-                self.metrics.termination_reason="request_too_large"; raise LiveModelAdapterError("live model context exceeded the configured request bound")
-            # RAG-enabled guard: the canonical public request (which is what
-            # the transport serializes and byte-bounds) must stay inside the
-            # frozen public-evidence budget even with the retrieved context
-            # added.  Fail closed here, before any transport call; the guard
-            # applies only when RAG context was explicitly enabled, so the
-            # frozen QuixBugs runner behavior is unchanged.
-            if self._rag_context is not None and len(request_bytes)>PUBLIC_REQUEST_BYTE_BUDGET:
-                self.metrics.termination_reason="request_too_large"; raise LiveModelAdapterError("live model context plus RAG context exceeded the public request bound")
+            # Provider-owned request size (Task 43): the intended request is
+            # handed to the configured transport regardless of its
+            # serialized size.  No Agentic-Debugger-owned byte/token/
+            # character ceiling is enforced here — neither the response
+            # bound (which constrains only provider output capture) nor
+            # any historical public-request budget.  A provider that
+            # rejects an oversized request surfaces a provider/transport
+            # failure truthfully through the transport boundary below.
             self.metrics.model_requests+=1
             self.metrics.transport_attempts+=1
             self.metrics.cumulative_request_bytes += len(request_bytes)
@@ -2736,14 +2739,11 @@ class LiveModelAdapter:
                 self.history[-1]["directive"]=redact_for_recording(raw_directive)
                 return directive
             except ModelRequestBudgetExceeded as exc:
-                # The canonical public request for this logical call exceeds
-                # the frozen public-evidence budget.  The transport rejected
-                # it before any process launch; it is never retried, never
-                # counted as a provider error, and never fed back as a
-                # malformed directive.  The logical call is unaccounted (the
-                # request was constructed but no provider process was
-                # launched) and the case terminates with the typed
-                # budget-exhausted termination reason.
+                # Historical compatibility only: no new execution raises
+                # this (request size is provider-owned since Task 43), but
+                # a legacy/frozen transport may still raise it.  The logical
+                # call stays unaccounted and the case terminates with the
+                # typed historical termination reason.
                 self.metrics.model_requests-=1
                 self.metrics.termination_reason="public_evidence_budget_exceeded"
                 raise
@@ -2980,9 +2980,9 @@ def _finalize_live_case(*,task_id,policy,repetition,case_id,run_id,config,task,c
     elif event_failed: status=LiveCaseStatus.EVENT_REPORTING_FAILED
     elif verifier_failed: status=LiveCaseStatus.VERIFIER_FAILED
     elif metrics.termination_reason=="public_evidence_budget_exceeded" and metrics.model_responses>=1:
-        # The next public request exceeded the frozen public-evidence budget
-        # after at least one genuinely completed provider response.  The case
-        # stopped before another provider process was launched; the pre-PDB
+        # Historical compatibility: frozen campaign evidence may carry the
+        # pre-Task-43 budget-exhausted termination reason.  New execution
+        # never sets it (request size is provider-owned).  The pre-PDB
         # completed-response shape is terminalized as PDB_NOT_REACHED with the
         # completed-response terminal transport evidence bound to the last
         # completed provider response.  When the controller reached Patch and

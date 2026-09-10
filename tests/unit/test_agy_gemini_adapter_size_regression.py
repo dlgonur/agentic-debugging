@@ -2,8 +2,9 @@
 
 Reuses the accepted Local Application ``curated-none-handling-001``
 ``pdb-on-uncertainty`` reference reconstruction and the real configured-command
-trajectory fixture.  Every request must construct an AGY ``--print`` command
-that stays under the 30,000-character native command-line guard.
+trajectory fixture.  Every request must construct its complete AGY ``--print``
+message and command unchanged: since Task 43 (provider-owned request size)
+no internal request-size ceiling is enforced.
 """
 
 from __future__ import annotations
@@ -62,23 +63,25 @@ def test_measured_21_request_trajectory_fits_agy_command_line() -> None:
         max_command_line = max(max_command_line, len(command_line))
 
     assert max_canonical == 23_824
-    assert max_canonical <= adapter.MAX_PUBLIC_REQUEST_BYTES
-    assert max_prompt < adapter.MAX_NATIVE_COMMAND_LINE_CHARS
-    assert max_command_line <= adapter.MAX_NATIVE_COMMAND_LINE_CHARS
+    # Since Task 43 (provider-owned request size) no internal ceiling is
+    # enforced; every measured request constructs its complete prompt and
+    # command unchanged.
     assert max_command_line > max_prompt
     adapter._MAX_MEASURED_PROMPT_BYTES = max_prompt
     adapter._MAX_MEASURED_COMMAND_LINE_CHARS = max_command_line
 
 
-def test_ceiling_plus_one_fails_closed_on_measured_max() -> None:
+def test_ceiling_plus_one_is_forwarded_complete_on_measured_max() -> None:
+    """Task 43 (provider-owned request size): historical-ceiling + 1 is
+    forwarded complete — never rejected."""
     requests, _sizes = build_measured_reference_trajectory()
     last = dict(requests[-1])
     last["_pad"] = ""
     current = len(adapter.canonical_public_request(last).encode("utf-8"))
     last["_pad"] = "x" * (adapter.MAX_PUBLIC_REQUEST_BYTES + 1 - current)
     assert len(adapter.canonical_public_request(last).encode("utf-8")) == adapter.MAX_PUBLIC_REQUEST_BYTES + 1
-    with pytest.raises(ValueError, match="exceeds the Local Application ceiling"):
-        adapter.build_protocol_message(last)
+    message = adapter.build_protocol_message(last)
+    assert adapter.canonical_public_request(last) in message
 
 
 def test_real_configured_command_trajectory_requests_all_build(tmp_path: Path) -> None:
@@ -109,6 +112,5 @@ def test_real_configured_command_trajectory_requests_all_build(tmp_path: Path) -
         "max_constructed_prompt_bytes": max_prompt,
         "max_simulated_command_line_chars": max_command_line,
     }
-    assert max_canonical <= adapter.MAX_PUBLIC_REQUEST_BYTES
-    assert max_prompt < adapter.MAX_NATIVE_COMMAND_LINE_CHARS
-    assert max_command_line <= adapter.MAX_NATIVE_COMMAND_LINE_CHARS
+    # Since Task 43 (provider-owned request size) no internal ceiling is
+    # enforced; every request constructs its complete prompt unchanged.

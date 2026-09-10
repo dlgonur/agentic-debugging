@@ -14,12 +14,14 @@ The structure is bounded, strictly validated, and fail-closed:
 * every chunk reference is a validated :class:`RagChunkRef` (types, relative
   path, positive line range, score, text byte count, unique identities);
 * total context text bytes are capped at :data:`MAX_RAG_CONTEXT_BYTES`;
+  this retrieval bound is semantic product behavior (bounded retrieval),
+  not a model-request size ceiling;
+* :data:`PUBLIC_REQUEST_BYTE_BUDGET` is a retained historical mirror of
+  the former frozen transport public-evidence budget (20,000 bytes).  It
+  is never enforced on model requests: request size is provider-owned;
 * the context binds the retrieval identity of the source retrieval result,
   and ``context_identity`` is recomputed over the full deterministic payload
   (latency excluded);
-* :data:`PUBLIC_REQUEST_BYTE_BUDGET` mirrors the frozen transport
-  public-evidence budget (20,000 bytes); the live adapter enforces it for
-  request-plus-context before any transport call.
 
 Both the demo boundary and the live boundary accept **only** a validated
 :class:`RagContext`; arbitrary lookalike objects exposing

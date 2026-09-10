@@ -141,11 +141,14 @@ transition, add_hypothesis, revise_hypothesis), and explicit prohibitions
 against code fences, explanations, tool calls, protocol/version wrappers, and
 alternate envelopes; the allowed actions and their argument contracts inside
 the embedded request are authoritative. The canonical request is never
-reduced, truncated, omitted, summarized, split, or otherwise mutated, and
-must fit inside the frozen public-evidence byte budget
-(`MAX_PUBLIC_EVIDENCE_BYTES = 20000`, matching the campaign
-`max_public_evidence_bytes`); exceeding it fails closed before any model
-process may run, never silently truncating the request the model sees.
+reduced, truncated, omitted, summarized, split, or otherwise mutated.
+Since Task 43 (provider-owned request size) no Agentic-Debugger-owned
+request-size ceiling is enforced: the former frozen public-evidence byte
+budget (`MAX_PUBLIC_EVIDENCE_BYTES = 20000`, matching the historical
+campaign `max_public_evidence_bytes`) is retained as provenance only, and
+the intended request is handed to the provider at whatever size the
+controller produced. A provider that rejects an oversized request for its
+actual limits surfaces a provider failure truthfully.
 
 Model execution invokes the native `opencode.exe` directly through the
 trusted npm-installation resolution contract. The wrapper begins only from
@@ -168,11 +171,12 @@ the exact authorization-bound version), and is used as argv[0] for
 shim, PATH lookup, environment-supplied executable paths, PowerShell, shell
 interpolation, parsing an unrestricted command from the batch file, or
 another executable. The cmd.exe batch-shim line limit (~8191 characters)
-therefore no longer applies to the inline message; the fully constructed
-command is checked against a conservative native Windows command-line bound
-(`MAX_NATIVE_COMMAND_LINE_CHARS = 30000` via `subprocess.list2cmdline`, below
-the Windows CreateProcess maximum of 32767) and fails closed before process
-creation when exceeded. Short non-model inspection commands
+therefore no longer applies to the inline message. Since Task 43
+(provider-owned request size) no Agentic-Debugger-owned command-line
+ceiling is enforced either: the complete command is always constructed,
+and if the host OS cannot represent the resulting argv, process creation
+itself fails and that OS truth surfaces as a launch failure — never as an
+Agentic-Debugger policy rejection. Short non-model inspection commands
 (`--version`, `models ...`, `debug config --pure`) may continue through the
 established launcher, and the native executable and batch launcher are proven
 to represent the same expected OpenCode installation/version. Only bounded
@@ -182,13 +186,13 @@ version-match flags) — never executable bytes or unrestricted environment
 data. Evidence records the request as a SHA-256 hash plus byte count, never
 as unrestricted request contents.
 
-The 20,000-byte public-evidence limit applies to the canonical public
-request serialization, not to the complete user message: a canonical request
-up to and including 20000 bytes is accepted and its complete inline message
-is constructed unchanged (the canonical request is never truncated,
-reduced, summarized, split, or mutated), and the fully constructed native
-command is independently bounded by `MAX_NATIVE_COMMAND_LINE_CHARS` and
-fails closed before process creation when exceeded.
+The complete user message carries the canonical public request
+serialization. Since Task 43 (provider-owned request size) the complete
+inline message is always constructed unchanged at whatever size the
+controller produced — the canonical request is never truncated,
+reduced, summarized, split, mutated, or rejected for size — and the
+fully constructed native command is never gated by an
+Agentic-Debugger-owned bound either.
 
 ## Protocol wrapper route modes
 

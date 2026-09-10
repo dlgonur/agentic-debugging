@@ -2903,23 +2903,14 @@ class _CountingTransportProxy:
         self._counter = counter
 
     def request(self, payload: Mapping[str, Any], timeout_seconds: float) -> Mapping[str, Any]:
-        # The frozen public-evidence budget gate lives at the outer transport
-        # boundary: an oversized canonical public request is rejected before
-        # any process-launch or logical-request counter is incremented, so the
-        # provider-call proof and the case outcome stay consistent (the
-        # rejected request never launches a wrapper/provider process and is
-        # never counted or retried).
-        if isinstance(payload, Mapping):
-            try:
-                canonical = transport.canonical_public_request(payload)
-            except (TypeError, ValueError, UnicodeError):
-                canonical = None
-            if canonical is not None:
-                canonical_byte_count = len(canonical.encode("utf-8"))
-                if canonical_byte_count > transport.MAX_PUBLIC_EVIDENCE_BYTES:
-                    from agentic_debugger.evaluation.live import ModelRequestBudgetExceeded
-
-                    raise ModelRequestBudgetExceeded(canonical_byte_count, transport.MAX_PUBLIC_EVIDENCE_BYTES)
+        # Provider-owned request size (Task 43): the intended request is
+        # handed to the wrapped transport at whatever size the controller
+        # produced.  No Agentic-Debugger-owned public-evidence budget gate
+        # is enforced here — every logical request launches the
+        # wrapper/provider process and is counted.  (The historical
+        # ModelRequestBudgetExceeded pre-transport rejection is retained
+        # only as a backward-compatible signal type; new execution never
+        # raises it.)
         self._counter.logical_requests += 1
         self._counter.process_launches += 1
         return self._transport.request(payload, timeout_seconds)

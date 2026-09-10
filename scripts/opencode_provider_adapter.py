@@ -73,13 +73,13 @@ def validate_model_id(model_id: str) -> str:
 
 
 def read_request(stdin_stream: Any) -> Mapping[str, Any]:
-    raw = stdin_stream.buffer.readline(frozen.MAX_PUBLIC_REQUEST_BYTES + 1)
+    # Provider-owned request size (Task 43): the stdin pipe carries the
+    # app-owned controller request and is read in full.  No
+    # Agentic-Debugger-owned ceiling is enforced here — in particular there
+    # is no "public request ceiling" anymore.
+    raw = stdin_stream.buffer.readline()
     if not raw:
         raise OpenCodeProviderAdapterError("no request on stdin", kind="invalid_request")
-    if len(raw) > frozen.MAX_PUBLIC_REQUEST_BYTES:
-        raise OpenCodeProviderAdapterError(
-            "request exceeds the public request ceiling", kind="request_too_large"
-        )
     try:
         request = json.loads(raw.decode("utf-8"))
     except (UnicodeError, json.JSONDecodeError) as exc:

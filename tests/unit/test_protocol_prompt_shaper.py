@@ -228,19 +228,21 @@ class TestProviderNeutralAuthority:
         drifted["action"] = frozenset({"kind", "name", "arguments", "extra"})
         assert shaper.directive_fields_match_validator(drifted) is False
 
-    def test_canonical_request_byte_ceiling_is_enforced(self) -> None:
+    def test_canonical_request_has_no_byte_ceiling(self) -> None:
+        """Task 43 (provider-owned request size): the historical
+        ``max_request_bytes`` parameter is accepted but ignored — the
+        complete canonical serialization is always returned."""
         request = {"protocol": {"logical_model_call_index": 0}, "pad": "z" * 100}
-        with pytest.raises(shaper.ProtocolPromptError) as excinfo:
-            shaper.canonical_public_request(request, max_request_bytes=64)
-        assert excinfo.value.kind == "request_too_large"
+        canonical = shaper.canonical_public_request(request, max_request_bytes=64)
+        assert json.loads(canonical)["pad"] == "z" * 100
 
-    def test_per_transport_ceiling_is_honored(self) -> None:
+    def test_per_transport_ceiling_argument_is_ignored(self) -> None:
         request = {"protocol": {"logical_model_call_index": 0}}
-        # The default (mature ladder) ceiling accepts what a tighter
-        # transport-specific ceiling must still reject.
+        # A tighter historical transport-specific value must not reject
+        # anything either: request size is provider-owned.
         shaper.build_user_protocol_message(request)
-        with pytest.raises(shaper.ProtocolPromptError):
-            shaper.build_user_protocol_message(request, max_request_bytes=8)
+        user = shaper.build_user_protocol_message(request, max_request_bytes=8)
+        assert shaper.PUBLIC_REQUEST_START in user
 
 
 class TestDiagnosisDecisionShape:

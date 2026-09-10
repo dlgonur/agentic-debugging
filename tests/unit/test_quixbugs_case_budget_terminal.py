@@ -1,19 +1,18 @@
-"""Focused red/green regressions for canonical-public-request budget exhaustion.
+"""Provider-owned request size regressions for the QuixBugs live runners.
 
-Locks the confirmed production failure of attempt
-``quixbugs-paired-pilot-v2-attempt-9f5958631df47a8a3a6b6f19c4a42f00a3a2880c84b8dc0421d9b7ac87e4ae74``:
-12 completed provider responses, then a 20,475-byte next canonical public
-request, 36,374 cumulative public evidence bytes, three retried
-provider/transport-shaped failures, and a campaign abort at case 1 with zero
-materialized cases.
+Historical note: attempt
+``quixbugs-paired-pilot-v2-attempt-9f5958631df47a8a3a6b6f19c4a42f00a3a2880c84b8dc0421d9b7ac87e4ae74``
+(12 completed provider responses, then a 20,475-byte next canonical public
+request) once terminated the case before provider launch under the frozen
+public-evidence budget.  Since Task 43 (provider-owned request size) that
+internal ceiling is removed: every constructed request is handed to the
+transport/wrapper/provider process complete, and only a genuine
+provider/transport failure stops the case.
 
-The repair detects the oversized canonical public request in-process, before
-any wrapper/provider process launch and before any process-launch counter is
-incremented, raises a typed non-retryable signal
-(:class:`agentic_debugger.evaluation.live.ModelRequestBudgetExceeded`),
-terminalizes the case as ``PDB_NOT_REACHED / PDB_NOT_REACHED_NO_GATE`` with
-all completed accounting preserved and ``public_evidence_bytes`` capped at
-the frozen 20,000-byte limit, and continues the campaign.
+``ModelRequestBudgetExceeded`` is retained as a backward-compatible signal
+type: the live adapter still interprets it from legacy/frozen transports
+(the two historical-compat tests below raise it directly), but new
+execution never raises it.
 """
 from __future__ import annotations
 
@@ -244,8 +243,8 @@ def _production_exhausted_outcome(manifest, case, route, **overrides):
 
 def test_exact_20000_byte_canonical_request_remains_accepted():
     """An exact canonical public request of 20,000 bytes is accepted by the
-    shared serializer and by the outer transport gate (the inner transport is
-    reached, and the request counters move exactly once)."""
+    shared serializer and forwarded by the outer transport proxy (the inner
+    transport is reached, and the request counters move exactly once)."""
     payload = _canonical_payload(20_000)
     _assert_canonical_bytes(payload, 20_000)
     message = runner.transport.build_user_message(payload)
@@ -266,10 +265,11 @@ def test_exact_20000_byte_canonical_request_remains_accepted():
     assert len(calls) == 1
 
 
-def test_20001_byte_request_is_typed_signal_no_launch_no_counters_no_retry(tmp_path, manifest, synthetic_executable, monkeypatch):
-    """A canonical public request of 20,001 bytes produces the typed
-    public-evidence exhaustion signal, launches no wrapper/provider process,
-    increments no process-attempt counter, and is never retried."""
+def test_20001_byte_request_reaches_transport_and_counts(tmp_path, manifest, synthetic_executable, monkeypatch):
+    """Task 43 (provider-owned request size): a canonical public request of
+    20,001 bytes is handed to the wrapped transport complete (counters move
+    exactly once), and the scenario transport launches the wrapper/provider
+    process for it — no typed budget signal, no pre-launch rejection."""
     payload = _canonical_payload(20_001)
     _assert_canonical_bytes(payload, 20_001)
 
@@ -278,33 +278,34 @@ def test_20001_byte_request_is_typed_signal_no_launch_no_counters_no_retry(tmp_p
     class StubTransport:
         def request(self, request_payload, timeout_seconds):
             calls.append(request_payload)
-            return {}
+            return {"directive": {"kind": "stop", "reason": "synthetic"}}
 
     counter = runner.ProviderCallCounter()
     proxy = runner._CountingTransportProxy(StubTransport(), counter)
-    with pytest.raises(ModelRequestBudgetExceeded) as info:
-        proxy.request(payload, 1.0)
-    assert info.value.request_byte_count == 20_001
-    assert info.value.limit == 20_000
-    assert counter.proof() == {"transports_created": 0, "process_launches": 0, "logical_requests": 0}
-    assert calls == []
+    response = proxy.request(payload, 1.0)
+    assert response["directive"]["kind"] == "stop"
+    assert counter.proof() == {"transports_created": 0, "process_launches": 1, "logical_requests": 1}
+    assert calls == [payload]  # complete and untruncated
 
     harness = _harness(tmp_path, manifest, synthetic_executable)
     inner = _scenario_transport(harness, "budget-gate")
     launched = []
+    real_popen = adapter.subprocess.Popen
 
-    def _no_launch(*args, **kwargs):
-        launched.append(1)
-        raise AssertionError("provider process must not be launched for an oversized request")
+    def _spy_popen(*args, **kwargs):
+        launched.append(args[0] if args else kwargs.get("args"))
+        return real_popen(*args, **kwargs)
 
-    monkeypatch.setattr(adapter.subprocess, "Popen", _no_launch)
-    with pytest.raises(ModelRequestBudgetExceeded) as info:
+    monkeypatch.setattr(adapter.subprocess, "Popen", _spy_popen)
+    try:
         inner.request(payload, 25.0)
-    assert info.value.request_byte_count == 20_001
-    assert info.value.limit == 20_000
-    assert inner.process_attempts == 0
-    assert harness["factory"].spawned_processes == 0
-    assert launched == []
+    except ModelRequestBudgetExceeded:  # pragma: no cover - must not happen
+        pytest.fail("provider-owned request must not raise the historical budget signal")
+    except Exception:
+        pass  # any other outcome still proves the process was launched
+    assert inner.process_attempts == 1
+    assert harness["factory"].spawned_processes == 1
+    assert len(launched) == 1
 
 
 # ---- live adapter non-retry signal ---------------------------------------------
@@ -478,11 +479,13 @@ def test_production_shape_budget_exhaustion_maps_and_terminalizes(tmp_path, mani
 
 def test_attempt_shape_20475_next_request_and_36374_cumulative_no_longer_abort(manifest, auth, tmp_path, git_state_provider):
     """The exact attempt-shaped values from attempt 9f595... (a 20,475-byte
-    next canonical public request rejected before launch with zero counter
-    movement, twelve completed responses, 36,374 cumulative public evidence
-    bytes) no longer abort the campaign at case 1: the case materializes as
-    ``PDB_NOT_REACHED / PDB_NOT_REACHED_NO_GATE`` with the completed
-    accounting preserved, and the campaign proceeds to case 2."""
+    next canonical public request, twelve completed responses, 36,374
+    cumulative public evidence bytes) no longer abort the campaign at case 1:
+    the case materializes as ``PDB_NOT_REACHED / PDB_NOT_REACHED_NO_GATE``
+    with the completed accounting preserved, and the campaign proceeds to
+    case 2.  (Pre-transport forwarding of such requests is proven by the
+    transport tests above; this test locks the historical outcome shape and
+    the continue-the-campaign behavior.)"""
     route = _route_evidence(manifest)
     entries = _completed_entries(manifest)
     entries[0] = {
@@ -490,29 +493,11 @@ def test_attempt_shape_20475_next_request_and_36374_cumulative_no_longer_abort(m
         "outcome": _production_exhausted_outcome(manifest, manifest["case_order"][0], route),
     }
 
-    class BudgetExhaustedFirstCaseRunner(ScriptedCaseRunner):
-        def __init__(self, scripted_entries):
-            super().__init__(scripted_entries)
-            self.oversized_rejections = []
-
-        def __call__(self, case, **kwargs):
-            if int(case["order_index"]) == 1:
-                transport = kwargs["transport"]
-                next_request = _canonical_payload(20_475)
-                with pytest.raises(ModelRequestBudgetExceeded) as info:
-                    transport.request(next_request, 1.0)
-                self.oversized_rejections.append(info.value)
-            return super().__call__(case, **kwargs)
-
-    case_runner = BudgetExhaustedFirstCaseRunner(entries)
+    case_runner = ScriptedCaseRunner(entries)
     record, factory, runner_obj, output = _run_campaign_custom(
         manifest, auth, tmp_path, case_runner=case_runner, runner_entries=entries,
         git_state_provider=git_state_provider,
     )
-
-    assert len(case_runner.oversized_rejections) == 1
-    assert case_runner.oversized_rejections[0].request_byte_count == 20_475
-    assert case_runner.oversized_rejections[0].limit == 20_000
 
     assert record["status"] == "COMPLETED"
     assert record["stop_reason"] is None

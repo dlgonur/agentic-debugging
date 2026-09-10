@@ -70,6 +70,10 @@ ERROR_KIND_HTTP = "http_error"
 ERROR_KIND_INVALID_COMPLETION = "invalid_completion"
 ERROR_KIND_INVALID_REQUEST = "invalid_request"
 ERROR_KIND_LOGICAL_CALL = "logical_call_limit"
+#: Reserved for EXTERNAL provider size rejections only (e.g. a provider
+#: HTTP 413 mapped by a route adapter).  Agentic Debugger never emits
+#: this kind for its own pre-transport request-size judgment: model
+#: request size is provider-owned (Task 43).
 ERROR_KIND_REQUEST_TOO_LARGE = "request_too_large"
 ERROR_KIND_RESPONSE_TOO_LARGE = "response_too_large"
 ERROR_KIND_TIMEOUT = "timeout"
@@ -239,13 +243,14 @@ def _read_pipe(pipe: Any, capture: _BoundedCapture) -> None:
 
 
 def read_request(stdin_stream: Any) -> Mapping[str, Any]:
-    raw = stdin_stream.buffer.readline(ollama_adapter.MAX_PUBLIC_REQUEST_BYTES + 1)
+    # Provider-owned request size (Task 43): the stdin pipe carries the
+    # app-owned controller request and is read in full.  No
+    # Agentic-Debugger-owned ceiling is enforced here — in particular there
+    # is no "public request ceiling" anymore.  A provider that rejects an
+    # oversized request surfaces a provider error truthfully downstream.
+    raw = stdin_stream.buffer.readline()
     if not raw:
         raise CommandCodeAdapterError("no request on stdin", kind=ERROR_KIND_INVALID_REQUEST)
-    if len(raw) > ollama_adapter.MAX_PUBLIC_REQUEST_BYTES:
-        raise CommandCodeAdapterError(
-            "request exceeds the public request ceiling", kind=ERROR_KIND_REQUEST_TOO_LARGE
-        )
     try:
         request = json.loads(raw.decode("utf-8"))
     except (UnicodeError, json.JSONDecodeError) as exc:
@@ -378,11 +383,11 @@ def execute_inference(
             "--max-turns", str(max_turns),
             "-m", model,
         ]
-        command_line = subprocess.list2cmdline(command)
-        if len(command_line) > 30000:
-            raise CommandCodeAdapterError(
-                "command line exceeds the native bound", kind=ERROR_KIND_REQUEST_TOO_LARGE
-            )
+        # Provider-owned request size (Task 43): no Agentic-Debugger-owned
+        # command-line ceiling is enforced here.  If the host OS cannot
+        # represent the argv, process creation itself fails and that OS
+        # truth surfaces as a launch failure below — never as an
+        # Agentic-Debugger policy rejection.
         stdout_capture = _BoundedCapture(max_output_bytes)
         stderr_capture = _BoundedCapture(16 * 1024)
         try:

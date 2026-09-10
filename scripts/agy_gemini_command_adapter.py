@@ -68,8 +68,10 @@ ALLOWED_MODEL_IDENTIFIERS = frozenset({
 
 DEFAULT_TIMEOUT_SECONDS = 20.0
 MAX_RAW_RESPONSE_BYTES = 64 * 1024
+#: Historical Local Application canonical-request size value (25,000).
+#: Retained for provenance/evidence compatibility only; it is NEVER
+#: enforced.  Model request size is provider-owned (Task 43).
 MAX_PUBLIC_REQUEST_BYTES = 25_000
-MAX_NATIVE_COMMAND_LINE_CHARS = 30_000
 DEFAULT_MAX_LOGICAL_MODEL_CALLS = 25
 EXPECTED_AGY_VERSION = executable_identity.EXPECTED_AGY_VERSION
 _PREFLIGHT_TIMEOUT_SECONDS = 15.0
@@ -477,15 +479,16 @@ def canonical_public_request(request: Mapping[str, Any]) -> str:
 
 
 def build_protocol_message(request: Mapping[str, Any]) -> str:
+    """Build the decision-model message carrying the public request.
+
+    Request size is provider-owned (Task 43): the complete canonical
+    request is always embedded, never truncated or rejected for size.
+    ``MAX_PUBLIC_REQUEST_BYTES`` is a retained historical value, never
+    enforced.
+    """
     if not isinstance(request, Mapping):
         raise ValueError("protocol request must be a JSON object")
     canonical = canonical_public_request(request)
-    byte_count = len(canonical.encode("utf-8"))
-    if byte_count > MAX_PUBLIC_REQUEST_BYTES:
-        raise ValueError(
-            f"canonical public request exceeds the Local Application ceiling "
-            f"({byte_count} > {MAX_PUBLIC_REQUEST_BYTES} bytes)"
-        )
     return (
         f"{SYSTEM_PROMPT}\n\n"
         f"{PUBLIC_REQUEST_START}\n"
@@ -966,10 +969,6 @@ def build_agy_command(
     ]
 
 
-def measure_command_line(command: Sequence[str]) -> int:
-    return len(subprocess.list2cmdline(list(command)))
-
-
 def assert_command_is_fresh_print(command: Sequence[str]) -> None:
     tokens = list(command)
     forbidden = {
@@ -1335,11 +1334,11 @@ def execute_print(
             timeout_seconds,
         )
         assert_command_is_fresh_print(command)
-        command_line_chars = measure_command_line(command)
-        if command_line_chars > MAX_NATIVE_COMMAND_LINE_CHARS:
-            raise ValueError(
-                f"command line exceeds bound ({command_line_chars} > {MAX_NATIVE_COMMAND_LINE_CHARS})"
-            )
+        # Provider-owned request size (Task 43): no Agentic-Debugger-owned
+        # command-line ceiling is enforced here.  If the host OS cannot
+        # represent the argv, process creation itself fails and that OS
+        # truth surfaces as a launch failure below — never as an
+        # Agentic-Debugger policy rejection.
         attestation_path = isolation["attestation_path"]
         if not isinstance(attestation_path, Path):
             raise RuntimeError("PreInvocation attestation path is unusable")

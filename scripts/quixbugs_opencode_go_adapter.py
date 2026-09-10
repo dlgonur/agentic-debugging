@@ -1260,22 +1260,21 @@ class OpenCodeGoTransport:
             request_bytes = (json.dumps(payload, ensure_ascii=False, allow_nan=False) + "\n").encode("utf-8")
         except (TypeError, ValueError, UnicodeError):
             raise _transport_error("request_serialization", "provider request could not be serialized") from None
-        # The frozen public-evidence budget applies to the canonical public
-        # request serialization (the exact shared serializer and frozen
-        # 20,000-byte constant the protocol wrapper enforces inside
-        # ``build_user_message``).  An oversized canonical public request is
-        # rejected here, in-process, before the wrapper/provider process is
-        # spawned and before any process-launch counter is incremented; it is
-        # a typed, non-retryable case-level stop, never a provider failure.
+        # Provider-owned request size (Task 43): the intended request is
+        # handed to the wrapper/provider process at whatever size the
+        # controller produced.  No Agentic-Debugger-owned public-evidence
+        # budget gate is enforced here — the process-attempt counter is
+        # incremented for every request and the provider process is
+        # spawned.  (The historical ModelRequestBudgetExceeded
+        # pre-transport rejection is retained only as a
+        # backward-compatible signal type; new execution never raises it.)
+        # The canonical serialization still validates strict JSON here so
+        # a non-serializable request fails closed before any process
+        # spawn; its size is never gated.
         try:
-            canonical_request = transport.canonical_public_request(payload)
+            transport.canonical_public_request(payload)
         except (TypeError, ValueError, UnicodeError):
             raise _transport_error("request_serialization", "provider request could not be serialized") from None
-        canonical_byte_count = len(canonical_request.encode("utf-8"))
-        if canonical_byte_count > transport.MAX_PUBLIC_EVIDENCE_BYTES:
-            from agentic_debugger.evaluation.live import ModelRequestBudgetExceeded
-
-            raise ModelRequestBudgetExceeded(canonical_byte_count, transport.MAX_PUBLIC_EVIDENCE_BYTES)
         self.process_attempts += 1
         self._factory.spawned_processes += 1
         evidence_dir = self._factory.evidence_dir

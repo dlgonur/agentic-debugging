@@ -182,7 +182,6 @@ def test_build_protocol_message_valid() -> None:
 
 def test_local_application_ceiling_and_command_line_bounds() -> None:
     assert adapter.MAX_PUBLIC_REQUEST_BYTES == 25_000
-    assert adapter.MAX_NATIVE_COMMAND_LINE_CHARS == 30_000
     assert adapter.MAX_RAW_RESPONSE_BYTES == 64 * 1024
     assert adapter.DEFAULT_MAX_LOGICAL_MODEL_CALLS == 25
     assert adapter.DEFAULT_TIMEOUT_SECONDS == 20.0
@@ -197,15 +196,17 @@ def test_local_application_ceiling_and_command_line_bounds() -> None:
     assert adapter.MAX_INIT_TOOLS_ENCODED_BYTES == 16 * 1024
 
 
-def test_ceiling_plus_one_fails_closed() -> None:
+def test_ceiling_plus_one_is_forwarded_complete() -> None:
+    """Task 43 (provider-owned request size): the complete request is always
+    embedded — never rejected or truncated for size."""
     req = dict(sample_request())
     req["_pad"] = ""
     target = adapter.MAX_PUBLIC_REQUEST_BYTES + 1
     current = len(adapter.canonical_public_request(req).encode("utf-8"))
     req["_pad"] = "x" * (target - current)
     assert len(adapter.canonical_public_request(req).encode("utf-8")) == target
-    with pytest.raises(ValueError, match="exceeds the Local Application ceiling"):
-        adapter.build_protocol_message(req)
+    message = adapter.build_protocol_message(req)
+    assert adapter.canonical_public_request(req) in message
 
 
 def test_prompt_contains_no_repository_path() -> None:

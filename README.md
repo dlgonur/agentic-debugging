@@ -61,6 +61,12 @@ Live execution is explicit. Model access routes through `ModelGateway` and user-
 providers (press `m`; fresh installs configure none). Credentials stay in `CredentialVault`
 and the OS secure store—never in source, argv, or evidence ([architecture](docs/architecture/model-providers-v1.md)).
 
+Model request size is provider-owned: Agentic Debugger never rejects, truncates, or
+otherwise alters a model request because it considers the request too large. The intended
+request is handed to the configured transport at whatever size the controller produced;
+a provider that rejects it for its actual context/request limits surfaces a provider
+failure truthfully.
+
 ## Current status
 
 The research cycle, Local Application V1, and V2 architecture campaign are

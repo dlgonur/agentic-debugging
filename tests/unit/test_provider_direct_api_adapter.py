@@ -4,7 +4,9 @@ Exercises the accepted protocol-1.3 JSONL command contract over the
 three provider protocol families against a local fake provider server:
 strict request/response parsing, usage passthrough (never fabricated),
 exactly-one-inference (zero adapter retry), typed failure envelopes,
-credential-boundary behavior, and timeout/oversize fail-closed paths.
+credential-boundary behavior, and timeout fail-closed paths.  Request size
+is provider-owned: oversized requests are forwarded complete, and a
+provider-originated 413 surfaces as a provider size rejection.
 No real provider is contacted and no generation spend occurs.
 """
 
@@ -466,14 +468,18 @@ class TestFailClosed:
         assert code == 1
         assert json.loads(err)["kind"] == "logical_call_limit"
 
-    def test_oversized_stdin_request_rejected(self, fake_commandcode) -> None:
+    def test_oversized_stdin_request_is_forwarded_complete(self, fake_commandcode) -> None:
+        """Task 43 (provider-owned request size): a request above the
+        historical stdin value reaches the provider complete and its
+        directive is returned."""
         request = _protocol_request()
         request["padding"] = "z" * (adapter.frozen.MAX_PUBLIC_REQUEST_BYTES + 10)
         with fake_commandcode(
             lambda request: (200, scripted_chat_completion(_DIRECTIVE))
         ):
             code, out, err = run_adapter(request=request)
-        assert code == 1
+        assert code == 0, err
+        assert json.loads(out)["directive_content"] == _DIRECTIVE
 
     def test_timeout_typed_envelope(self, fake_commandcode) -> None:
         def slow_responder(request):

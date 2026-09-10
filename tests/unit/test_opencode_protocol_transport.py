@@ -304,7 +304,7 @@ def test_opencode_cmd_launcher_selection_and_version_preflight(monkeypatch: pyte
     assert transport.PUBLIC_REQUEST_START in message
     assert transport.PUBLIC_REQUEST_END in message
     assert len(message.encode("utf-8")) <= transport.MAX_PUBLIC_EVIDENCE_BYTES
-    assert len(subprocess.list2cmdline(command)) <= transport.MAX_NATIVE_COMMAND_LINE_CHARS
+    assert command[command.index("run") + 1] == message
     with pytest.raises(ValueError):
         transport.build_opencode_command(MODEL, "max", tmp_path, " ", executable=launcher["native"])
     with pytest.raises(ValueError):
@@ -603,7 +603,6 @@ def test_no_inference_preflight_succeeds_through_stripped_transport_environment(
     assert result["trailing_positional_values_absent"] is True
     assert result["message_inline_request_present"] is True
     assert result["request_within_public_evidence_budget"] is True
-    assert result["command_line_within_native_bound"] is True
     assert result["native_executable"]["version_matches_launcher"] is True
     assert result["command"][0].endswith("opencode.exe")
     assert "opencode.cmd" not in result["command"]
@@ -1119,10 +1118,14 @@ def test_inline_message_contains_canonical_public_request_between_delimiters() -
     assert "authoritative" in message
 
 
-def test_inline_message_rejects_oversized_request() -> None:
+def test_inline_message_forwards_oversized_request_complete() -> None:
+    """Task 43 (provider-owned request size): an oversized request is shaped
+    into a complete inline message — never rejected or truncated."""
     oversized = {"directive_schema": {"action": {}}, "task": "x" * (transport.MAX_PUBLIC_EVIDENCE_BYTES * 2)}
-    with pytest.raises(ValueError, match="public-evidence byte budget"):
-        transport.build_user_message(oversized)
+    canonical = transport.canonical_public_request(oversized)
+    assert len(canonical.encode("utf-8")) > transport.MAX_PUBLIC_EVIDENCE_BYTES
+    message = transport.build_user_message(oversized)
+    assert canonical in message
 
 
 def test_real_command_carries_single_inline_message_and_no_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -1360,15 +1363,18 @@ def test_real_frozen_request_size_range_is_supported_with_native_command() -> No
     assert "--file" not in command
     assert command[command.index("run") + 1] == message
     assert len(command[2]) == len(message)
-    assert len(subprocess.list2cmdline(command)) <= transport.MAX_NATIVE_COMMAND_LINE_CHARS
     assert len(subprocess.list2cmdline(command)) > 9000
 
 
-def test_request_above_public_evidence_budget_fails_closed() -> None:
+def test_request_above_public_evidence_budget_is_forwarded_complete() -> None:
+    """Task 43 (provider-owned request size): a request above the historical
+    budget is shaped into a complete message — never rejected."""
     request = _large_public_request()
     request["task"]["description"] = "x" * (transport.MAX_PUBLIC_EVIDENCE_BYTES * 2)
-    with pytest.raises(ValueError, match="public-evidence byte budget"):
-        transport.build_user_message(request)
+    canonical = transport.canonical_public_request(request)
+    assert len(canonical.encode("utf-8")) > transport.MAX_PUBLIC_EVIDENCE_BYTES
+    message = transport.build_user_message(request)
+    assert canonical in message
 
 
 def _request_with_canonical_size(target: int) -> dict:
@@ -1385,7 +1391,7 @@ def _request_with_canonical_size(target: int) -> dict:
 def test_canonical_request_exactly_public_evidence_boundary_is_accepted() -> None:
     """A canonical request of exactly 20000 bytes is accepted and its complete
     inline message (above 20000 bytes with the scaffolding) is constructed
-    unchanged; the native command remains within the command-line bound."""
+    unchanged; the native command carries it verbatim."""
     request = _request_with_canonical_size(transport.MAX_PUBLIC_EVIDENCE_BYTES)
     canonical = transport.canonical_public_request(request)
     assert len(canonical.encode("utf-8")) == transport.MAX_PUBLIC_EVIDENCE_BYTES
@@ -1396,13 +1402,21 @@ def test_canonical_request_exactly_public_evidence_boundary_is_accepted() -> Non
         MODEL, "max", Path("C:/tmp/agentic-isolation"), message, executable="C:/tools/opencode.exe",
     )
     assert command[command.index("run") + 1] == message
-    assert len(subprocess.list2cmdline(command)) <= transport.MAX_NATIVE_COMMAND_LINE_CHARS
 
 
-def test_canonical_request_above_public_evidence_boundary_fails_closed() -> None:
+def test_canonical_request_above_public_evidence_boundary_is_forwarded() -> None:
+    """Task 43 (provider-owned request size): a canonical request above the
+    historical 20000-byte value is shaped into a complete message and a
+    complete native command — never rejected or truncated."""
     request = _request_with_canonical_size(transport.MAX_PUBLIC_EVIDENCE_BYTES + 1)
-    with pytest.raises(ValueError, match="public-evidence byte budget"):
-        transport.build_user_message(request)
+    canonical = transport.canonical_public_request(request)
+    assert len(canonical.encode("utf-8")) == transport.MAX_PUBLIC_EVIDENCE_BYTES + 1
+    message = transport.build_user_message(request)
+    assert canonical in message
+    command = transport.build_opencode_command(
+        MODEL, "max", Path("C:/tmp/agentic-isolation"), message, executable="C:/tools/opencode.exe",
+    )
+    assert command[command.index("run") + 1] == message
 
 
 def test_canonical_below_budget_with_complete_message_above_budget_is_accepted() -> None:
@@ -1418,15 +1432,18 @@ def test_canonical_below_budget_with_complete_message_above_budget_is_accepted()
     command = transport.build_opencode_command(
         MODEL, "max", Path("C:/tmp/agentic-isolation"), message, executable="C:/tools/opencode.exe",
     )
-    assert len(subprocess.list2cmdline(command)) <= transport.MAX_NATIVE_COMMAND_LINE_CHARS
+    assert command[command.index("run") + 1] == message
 
 
-def test_native_command_line_bound_is_enforced() -> None:
-    message = "x" * (transport.MAX_NATIVE_COMMAND_LINE_CHARS - 40)
-    with pytest.raises(ValueError, match="native command line exceeds"):
-        transport.build_opencode_command(
-            MODEL, "max", Path("C:/tmp"), message, executable="C:/tools/opencode.exe",
-        )
+def test_native_command_line_has_no_agentic_debugger_owned_bound() -> None:
+    """Task 43 (provider-owned request size): the native command is always
+    constructed, however large the message.  Physical representability is
+    judged by the host OS at process creation, not by an internal ceiling."""
+    message = "x" * 40_000
+    command = transport.build_opencode_command(
+        MODEL, "max", Path("C:/tmp"), message, executable="C:/tools/opencode.exe",
+    )
+    assert command[command.index("run") + 1] == message
 
 
 def test_native_executable_resolves_npm_package_layout_and_fails_closed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

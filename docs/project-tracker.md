@@ -7,6 +7,7 @@
 **POST-V2 SESSION TOKEN USAGE TELEMETRY V1 (TASK 34) — COMPLETE (2026-09-09).**
 **POST-V2 GLOBAL CLI LAUNCH ALIAS V1 (TASK 41) — COMPLETE (2026-09-09).**
 **POST-V2 UNIVERSAL MODEL EXECUTION ELIGIBILITY V1 (TASK 42) — COMPLETE (2026-09-09).**
+**POST-V2 PROVIDER-OWNED MODEL REQUEST SIZE V1 (TASK 43) — COMPLETE (2026-09-10).**
 
 - V2 implementation baseline: `e86ac2d25beb5114e9a3c805f6bc468f77905deb`.
 - V2 architecture campaign (Candidates 06–30): logical control/execution plane
@@ -20,7 +21,12 @@
   usability capability on `feat/global-cli-launch-alias-v1`.
 - Universal Model Execution Eligibility v1 (Task 42): COMPLETE (2026-09-09) as a post-V2
   product capability establishing repo-wide model execution eligibility on `fix/universal-model-execution-v1`.
-- Next implementation priority: None selected after completion of Task 42. No V3 or
+- Provider-Owned Model Request Size v1 (Task 43): COMPLETE (2026-09-10) as a post-V2
+  runtime policy correction on `fix/provider-owned-request-size-v1`. Model request size
+  is provider-owned repo-wide: no Agentic-Debugger-owned request-size ceiling may
+  reject, truncate, or alter a model request before the provider; provider-originated
+  size/context rejections surface truthfully as provider failures.
+- Next implementation priority: None selected after completion of Task 43. No V3 or
   new architecture campaign opened.
 - Provider-platform integrity convergence: COMPLETE (2026-09-03).
 - Goal-Mode Cycle 3 (shared visual language, welcome redesign, terminal UI polish): COMPLETE (2026-08-29).
@@ -87,6 +93,17 @@
   `SourceKind.CONFIGURED_MODEL` with Level-32 budget contract (25 model requests, 25 controller steps,
   3600s, 1 retry, 2 directive repairs). Preserved frozen `SourceKind.LEVEL32_OPERATOR` for qualified
   Ollama Cloud models. Concrete runtime blockers (missing credentials, offline providers) remain fail-closed.
+- [x] **Task 43 — Provider-Owned Model Request Size v1 (2026-09-10):**
+  Established the repo-wide runtime rule: model request size is provider-owned.
+  Removed every Agentic-Debugger-owned model-request size ceiling on all execution
+  routes (live-adapter request gates incl. the RAG public-request gate, the shared
+  prompt-shaping ceiling, OpenCode/CommandCode/Ollama/AGY/direct-API stdin and
+  shaping ceilings, QuixBugs runner pre-transport gates, CLI-arg command-line
+  preflights). The intended request is handed to the configured transport complete
+  at whatever size the controller produced; provider-originated size/context
+  rejections (e.g. HTTP 413) surface truthfully as provider failures. Historical
+  ceiling values are retained as unenforced provenance only. Model request COUNT,
+  step, retry, time, credential, and tool-safety ceilings are unchanged.
 
 ## 2026-08-29 goal-mode UI work
 

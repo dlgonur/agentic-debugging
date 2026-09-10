@@ -400,10 +400,14 @@ CONTENT_FRAGMENT_OBSERVABILITY_SCHEMA_VERSION = (
 DEFAULT_TIMEOUT_SECONDS = 20.0
 MAX_REQUEST_TIMEOUT_SECONDS = 3600.0
 DEFAULT_THINKING_LEVEL = "high"
-# The inherited 25,000-byte ceiling rejected Kimi's otherwise valid frozen
-# Level-32 request at 26,622 bytes after successful PDB evidence.  32 KiB is
-# the smallest bounded repair that admits the observed request while staying
-# below MAX_RAW_RESPONSE_BYTES and preserving the same public task contract.
+# Historical request-size values, retained for provenance/evidence
+# compatibility only and NEVER enforced.  Model request size is
+# provider-owned (Task 43): the intended request is read, serialized,
+# and handed to the provider at whatever size the controller produced.
+# (The inherited 25,000-byte ceiling once rejected Kimi's otherwise valid
+# frozen Level-32 request at 26,622 bytes after successful PDB evidence;
+# 32 KiB was the smallest bounded repair then.  Task 43 removes the
+# ceiling family entirely instead of raising it again.)
 MAX_PUBLIC_REQUEST_BYTES = 32_768
 MAX_RAW_RESPONSE_BYTES = 64 * 1024
 MAX_STREAM_FRAME_BYTES = 1024 * 1024
@@ -412,6 +416,9 @@ MAX_CONTENT_FRAGMENT_TEXT_BYTES = 4096
 _SECRET_CONTENT = re.compile(
     r"(?i)(?:bearer\s+\S+|basic\s+\S+|(?:api[_-]?key|access[_-]?token|authorization|credential|password|secret|token|private[_-]?key)\s*[:=]\s*\S+)"
 )
+#: Historical stdin read value, retained for provenance compatibility
+#: only and NEVER enforced as a request-size ceiling.  The stdin pipe
+#: carries the app-owned controller request; it is read in full.
 MAX_STDIN_REQUEST_BYTES = 128 * 1024
 DEFAULT_MAX_LOGICAL_MODEL_CALLS = 25
 MAX_CONFIGURED_LOGICAL_MODEL_CALLS = 512
@@ -811,9 +818,11 @@ def _http_json_request(
     request_bytes = None
     headers = {"Accept": "application/json"}
     if body is not None:
+        # Provider-owned request size: the intended body is handed to the
+        # provider at whatever size the controller produced.  No
+        # Agentic-Debugger-owned ceiling is enforced here; only the
+        # RESPONSE capture bound below constrains provider output.
         request_bytes = (_safe_json(body) + "\n").encode("utf-8")
-        if len(request_bytes) > MAX_RAW_RESPONSE_BYTES:
-            raise OllamaAdapterError("Ollama request exceeded the configured bound", kind="request_too_large")
         headers["Content-Type"] = "application/json"
 
     deadline = time.monotonic() + float(timeout_seconds)
@@ -827,6 +836,11 @@ def _http_json_request(
         except (OSError, http.client.HTTPException):
             raise OllamaAdapterError("Ollama HTTP request failed", kind="http_error") from None
         if response.status < 200 or response.status >= 300:
+            if response.status == 413:
+                raise OllamaAdapterError(
+                    "Provider rejected request as too large (HTTP 413)",
+                    kind="request_too_large",
+                )
             raise OllamaAdapterError(
                 f"Ollama HTTP request returned status {response.status}",
                 kind="http_error",
@@ -1050,9 +1064,9 @@ def _stream_chat_request(
     }
     if thinking_level is not None:
         payload["think"] = thinking_level
+    # Provider-owned request size: the intended payload is handed to the
+    # provider at whatever size the controller produced.
     request_bytes = (_safe_json(payload) + "\n").encode("utf-8")
-    if len(request_bytes) > MAX_RAW_RESPONSE_BYTES:
-        raise OllamaAdapterError("Ollama request exceeded the configured bound", kind="request_too_large")
 
     if request_deadline is None:
         request_deadline = time.monotonic() + idle_timeout_seconds
@@ -1088,6 +1102,11 @@ def _stream_chat_request(
         except (OSError, http.client.HTTPException):
             raise OllamaAdapterError("Ollama HTTP request failed", kind="http_error") from None
         if response.status < 200 or response.status >= 300:
+            if response.status == 413:
+                raise OllamaAdapterError(
+                    "Provider rejected request as too large (HTTP 413)",
+                    kind="request_too_large",
+                )
             raise OllamaAdapterError(
                 f"Ollama HTTP request returned status {response.status}",
                 kind="http_error",
@@ -1333,15 +1352,14 @@ def run_preflight(
 
 
 def _read_request(stdin_stream: TextIO) -> Mapping[str, Any]:
-    line = stdin_stream.readline(MAX_STDIN_REQUEST_BYTES + 1)
+    # Provider-owned request size: the stdin pipe carries the app-owned
+    # controller request and is read in full.  No Agentic-Debugger-owned
+    # ceiling is enforced here.
+    line = stdin_stream.readline()
     if not line:
         raise OllamaAdapterError("empty request on stdin", kind="invalid_request")
     try:
-        if len(line.encode("utf-8")) > MAX_STDIN_REQUEST_BYTES:
-            raise OllamaAdapterError("stdin request exceeded the configured bound", kind="request_too_large")
         value = json.loads(line)
-    except OllamaAdapterError:
-        raise
     except (UnicodeError, json.JSONDecodeError):
         raise OllamaAdapterError("stdin request was not valid JSON", kind="invalid_request") from None
     if not isinstance(value, Mapping):
@@ -1434,7 +1452,6 @@ def run_adapter(
 
         request = _read_request(stdin_stream)
         validate_logical_call_index(request, args.max_logical_model_calls)
-        canonical_public_request(request)
         idle_timeout = _validate_timeout_seconds(args.timeout)
         request_timeout = _validate_timeout_seconds(
             args.request_timeout if args.request_timeout is not None else args.timeout

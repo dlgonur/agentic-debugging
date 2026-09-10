@@ -63,10 +63,12 @@ MAX_RETRIEVAL_RESULTS = 8
 MAX_RETRIEVAL_CONTEXT_BYTES = 4096
 #: Default maximum total context bytes allowed inside one RagContext.
 MAX_RAG_CONTEXT_BYTES = 4000
-#: Mirror of the frozen transport public-evidence budget
+#: Historical mirror of the frozen transport public-evidence budget
 #: (``scripts/opencode_protocol_transport.MAX_PUBLIC_EVIDENCE_BYTES``).
-#: Used by the live adapter to fail closed when the canonical public
-#: request plus the retrieved context would exceed the transport bound.
+#: Retained for provenance/evidence compatibility only; it is NEVER
+#: enforced on model requests.  Model request size is provider-owned
+#: (Task 43): Agentic Debugger hands the intended request to the
+#: configured transport regardless of serialized size.
 PUBLIC_REQUEST_BYTE_BUDGET = 20_000
 #: Hard cap on the derived failure-output document bytes.
 MAX_FAILURE_DOC_BYTES = 32 * 1024

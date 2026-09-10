@@ -193,36 +193,38 @@ def test_build_protocol_message_valid() -> None:
 
 
 def test_local_application_ceiling_is_distinct_and_admits_measured_trajectory() -> None:
-    # The historical QuixBugs campaign budget (20,000) must not be silently
-    # inherited; the Local Application ceiling must exceed the measured
-    # curated-none-handling-001 reference trajectory maximum (23,824).
+    # The historical QuixBugs campaign budget (20,000) was never silently
+    # inherited; the retained Local Application historical value exceeds
+    # the measured curated-none-handling-001 reference trajectory maximum
+    # (23,824).  Since Task 43 the value is provenance only, never enforced.
     assert adapter.MAX_PUBLIC_REQUEST_BYTES == 25_000
     assert adapter.MAX_PUBLIC_REQUEST_BYTES > 23_824
-    assert adapter.MAX_PUBLIC_REQUEST_BYTES < adapter.MAX_NATIVE_COMMAND_LINE_CHARS
 
 
-def test_build_protocol_message_exceeds_ceiling() -> None:
+def test_build_protocol_message_forwards_oversized_request_complete() -> None:
+    """Task 43 (provider-owned request size): the complete request is always
+    embedded — never rejected or truncated for size."""
     req = sample_request()
     req["bloat"] = "x" * 25_000
-    with pytest.raises(ValueError, match="canonical public request exceeds the Local Application ceiling"):
-        adapter.build_protocol_message(req)
+    message = adapter.build_protocol_message(req)
+    assert adapter.canonical_public_request(req) in message
 
 
-def test_ceiling_plus_one_fails_closed() -> None:
+def test_ceiling_plus_one_is_forwarded_complete() -> None:
     base = sample_request()
     target = adapter.MAX_PUBLIC_REQUEST_BYTES + 1
-    # Pad until exactly ceiling + 1 canonical bytes (the padding key itself
-    # contributes fixed JSON overhead, so the pad length is resolved
-    # iteratively): the request must fail closed, proving the configured
-    # limit itself is the boundary.
+    # Pad until exactly historical-ceiling + 1 canonical bytes (the padding
+    # key itself contributes fixed JSON overhead, so the pad length is
+    # resolved iteratively): the request is forwarded complete, proving no
+    # internal ceiling remains at the historical boundary.
     req = dict(base)
     req["_pad"] = ""
     current = len(adapter.canonical_public_request(req).encode("utf-8"))
     req["_pad"] = "x" * (target - current)
     assert len(adapter.canonical_public_request(req).encode("utf-8")) == target
-    with pytest.raises(ValueError, match="exceeds the Local Application ceiling"):
-        adapter.build_protocol_message(req)
-    # And the exact ceiling itself is admitted.
+    message = adapter.build_protocol_message(req)
+    assert adapter.canonical_public_request(req) in message
+    # And the exact historical ceiling itself is admitted unchanged.
     req_exact = dict(base)
     req_exact["_pad"] = ""
     current_exact = len(adapter.canonical_public_request(req_exact).encode("utf-8"))

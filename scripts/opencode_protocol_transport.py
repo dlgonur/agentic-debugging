@@ -48,23 +48,19 @@ _MAX_EVIDENCE_FIELD_CHARS = 16_384
 #: the request from the message.
 PUBLIC_REQUEST_START = "=== BEGIN PUBLIC REQUEST ==="
 PUBLIC_REQUEST_END = "=== END PUBLIC REQUEST ==="
-#: The frozen paired-pilot v2 public-evidence byte budget
-#: (``max_public_evidence_bytes = 20000``).  The bound applies to the
-#: canonical public request serialization
-#: (:func:`canonical_public_request`), never to the complete inline user
-#: message: a canonical request up to and including 20000 bytes is accepted
-#: and its complete message is constructed unchanged (the fully constructed
-#: native command is independently bounded by
-#: :data:`MAX_NATIVE_COMMAND_LINE_CHARS`).
+#: Historical paired-pilot v2 public-evidence size value (20,000).
+#: Retained for provenance/evidence compatibility only; it is NEVER
+#: enforced.  Model request size is provider-owned (Task 43): the
+#: intended canonical public request is shaped and handed to the
+#: provider at whatever size the controller produced.
 MAX_PUBLIC_EVIDENCE_BYTES = 20_000
-#: Conservative native Windows command-line bound for the FULLY constructed
-#: ``opencode run`` argv: ``subprocess.list2cmdline(command)`` must stay below
-#: the Windows CreateProcess command-line maximum (32767 characters).  Model
-#: execution invokes the native ``opencode.exe`` directly (never the cmd.exe
-#: batch shim, whose ~8191-character line limit no longer applies), so the
-#: inline message can carry the full public request up to the public-evidence
-#: bound.
-MAX_NATIVE_COMMAND_LINE_CHARS = 30_000
+#: Model execution invokes the native ``opencode.exe`` directly (never the
+#: cmd.exe batch shim, whose ~8191-character line limit no longer applies).
+#: Request size is provider-owned (Task 43): the complete inline message
+#: is constructed at whatever size the controller produced.  If the host
+#: OS cannot represent the resulting argv, process creation itself fails
+#: and that OS truth surfaces as a launch failure — never as an
+#: Agentic-Debugger policy rejection.
 #: The trusted npm package root relative to the verified ``opencode.cmd``
 #: launcher directory; the native executable must belong to this root.
 NPM_PACKAGE_ROOT_RELATIVE = "node_modules/opencode-ai"
@@ -876,26 +872,15 @@ def build_user_message(request: Mapping[str, Any]) -> str:
     protocol/version wrappers, and alternate envelopes.  The allowed actions
     and their argument contracts inside the embedded request are authoritative.
 
-    The 20,000-byte public-evidence limit applies to the canonical public
-    request serialization (:func:`canonical_public_request`), never to the
-    complete user message: a canonical request up to and including
-    :data:`MAX_PUBLIC_EVIDENCE_BYTES` bytes is accepted and its complete
-    message is constructed unchanged (the canonical request is never
-    truncated, reduced, summarized, split, or mutated).  The fully
-    constructed native command is independently bounded by
-    :data:`MAX_NATIVE_COMMAND_LINE_CHARS` in
-    :func:`build_opencode_command`; exceeding either bound fails closed
-    before any model process may run.
+    Request size is provider-owned (Task 43): the complete canonical
+    request is always embedded unchanged — never truncated, reduced,
+    summarized, split, mutated, or rejected for size.
+    ``MAX_PUBLIC_EVIDENCE_BYTES`` is a retained historical value, never
+    enforced.
     """
     if not isinstance(request, Mapping):
         raise ValueError("OpenCode protocol request must be an object")
     canonical = canonical_public_request(request)
-    request_byte_count = len(canonical.encode("utf-8"))
-    if request_byte_count > MAX_PUBLIC_EVIDENCE_BYTES:
-        raise ValueError(
-            f"OpenCode canonical public request exceeds the public-evidence byte budget "
-            f"({request_byte_count} > {MAX_PUBLIC_EVIDENCE_BYTES})"
-        )
     message = (
         PROTOCOL_INSTRUCTION
         + " "
@@ -923,11 +908,11 @@ def build_opencode_command(model: str, variant: str, root: Path, message: str, e
     ``opencode.cmd`` batch shim, PATH ambiguity, PowerShell, or shell
     interpolation.  The isolated ``--dir`` is retained.
 
-    The fully constructed command must fit inside
-    :data:`MAX_NATIVE_COMMAND_LINE_CHARS` (``subprocess.list2cmdline``
-    character count, a documented bound below the Windows CreateProcess
-    command-line maximum of 32767); exceeding it fails closed before process
-    creation.
+    Request size is provider-owned (Task 43): the complete command is
+    always constructed, never rejected for size.  If the host OS cannot
+    represent the resulting argv, process creation itself fails and that
+    OS truth surfaces as a launch failure — never as an Agentic-Debugger
+    policy rejection.
     """
     if not isinstance(message, str) or not message.strip():
         raise ValueError("OpenCode positional protocol message must be non-empty")
@@ -937,12 +922,6 @@ def build_opencode_command(model: str, variant: str, root: Path, message: str, e
         str(executable), "run", message, "--pure", "--format", "json",
         "--model", model, "--variant", variant, "--dir", str(root),
     ]
-    command_line = subprocess.list2cmdline(command)
-    if len(command_line) > MAX_NATIVE_COMMAND_LINE_CHARS:
-        raise ValueError(
-            f"OpenCode native command line exceeds the safety bound "
-            f"({len(command_line)} > {MAX_NATIVE_COMMAND_LINE_CHARS} characters)"
-        )
     return command
 
 
@@ -1169,7 +1148,6 @@ def _preflight(args: argparse.Namespace) -> int:
                 len(canonical_public_request({}).encode("utf-8")) <= MAX_PUBLIC_EVIDENCE_BYTES
             ),
             "command_line_character_count": len(subprocess.list2cmdline(command)),
-            "command_line_within_native_bound": len(subprocess.list2cmdline(command)) <= MAX_NATIVE_COMMAND_LINE_CHARS,
             "agents_present_during_preflight": isolation["agents_path"].is_file(),
             "config_copy_present_during_preflight": isolation["config_path"].is_file(),
             "auth_copy_present_during_preflight": isolation["auth_copy"].is_file(),
@@ -1767,7 +1745,6 @@ def main(argv: list[str] | None = None) -> int:
             "message_byte_count": len(message.encode("utf-8")),
             "request_within_public_evidence_budget": request_byte_count <= MAX_PUBLIC_EVIDENCE_BYTES,
             "command_line_character_count": len(subprocess.list2cmdline(command)),
-            "command_line_within_native_bound": len(subprocess.list2cmdline(command)) <= MAX_NATIVE_COMMAND_LINE_CHARS,
             "file_argument_absent": "--file" not in command,
             "message_is_single_positional": command.index("run") == 1 and isinstance(command[2], str) and bool(command[2]),
             "message_inline_request_present": isinstance(command[2], str) and command[2].strip() != "",

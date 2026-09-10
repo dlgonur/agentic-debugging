@@ -84,7 +84,10 @@ All numbered stages V2-01 through V2-04 are implemented:
   remains open.
 - The post-V2 repository-wide documentation and project-state hygiene closeout
   (Task 31) is **COMPLETE** (2026-09-07). Session Token Usage Telemetry v1 (Task 34)
-  is **COMPLETE** (2026-09-09). No subsequent implementation priority has been
+  is **COMPLETE** (2026-09-09). Provider-Owned Model Request Size v1 (Task 43)
+  is **COMPLETE** (2026-09-10): model request size is provider-owned repo-wide
+  and no Agentic-Debugger-owned request-size ceiling remains on any execution
+  route. No subsequent implementation priority has been
   selected by repository authority; no V3 or new architecture campaign has been opened.
 
 **2026-08-28 closure update:** the mandatory project cycle is **CLOSED**.

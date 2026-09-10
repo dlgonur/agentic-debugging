@@ -29,8 +29,13 @@ root is this scripts directory.  Every value exposed to the model derives
 from the request itself; nothing is fabricated and no fixture oracle value
 appears here.
 
-Adapters keep their own public-request byte ceilings by passing
-``max_request_bytes``; the default is the mature ladder ceiling.
+Model request size is provider-owned (Task 43): this module serializes
+and shapes the intended request at whatever size the controller produced.
+It never rejects, truncates, compacts, or otherwise alters a request
+because of its size.  The historical ``max_request_bytes`` parameters are
+accepted but ignored (deprecated historical input); a provider that
+rejects an oversized request surfaces a provider error truthfully
+through the calling adapter.
 """
 
 from __future__ import annotations
@@ -39,6 +44,10 @@ import json
 from enum import Enum
 from typing import Any, Mapping
 
+#: Historical Local Application canonical-request size value (32,768).
+#: Retained for provenance/evidence compatibility only; it is NEVER
+#: enforced.  Model request size is provider-owned: the intended request
+#: is serialized and shaped at whatever size the controller produced.
 MAX_PUBLIC_REQUEST_BYTES = 32_768
 
 PUBLIC_REQUEST_START = "=== BEGIN PUBLIC REQUEST ==="
@@ -177,6 +186,14 @@ def canonical_public_request(
     *,
     max_request_bytes: int = MAX_PUBLIC_REQUEST_BYTES,
 ) -> str:
+    """Serialize the request to compact, deterministic canonical JSON.
+
+    ``max_request_bytes`` is deprecated historical input: it is accepted
+    for backward compatibility and ignored.  Request size is
+    provider-owned — the complete canonical serialization is always
+    returned, never truncated or rejected for size.
+    """
+    _ = max_request_bytes
     if not isinstance(request, Mapping):
         raise ProtocolPromptError("protocol request must be an object")
     try:
@@ -187,14 +204,8 @@ def canonical_public_request(
             ensure_ascii=False,
             allow_nan=False,
         )
-        size = len(canonical.encode("utf-8"))
     except (TypeError, ValueError, UnicodeError):
         raise ProtocolPromptError("protocol request is not strict JSON") from None
-    if size > max_request_bytes:
-        raise ProtocolPromptError(
-            "canonical public request exceeds the Local Application ceiling",
-            kind="request_too_large",
-        )
     return canonical
 
 

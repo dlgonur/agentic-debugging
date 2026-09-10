@@ -160,13 +160,13 @@ def _resolve_credential(provider: str, auth_mode: str) -> Optional[str]:
 
 
 def read_request(stdin_stream: Any) -> Mapping[str, Any]:
-    raw = stdin_stream.buffer.readline(frozen.MAX_PUBLIC_REQUEST_BYTES + 1)
+    # Provider-owned request size (Task 43): the stdin pipe carries the
+    # app-owned controller request and is read in full.  No
+    # Agentic-Debugger-owned ceiling is enforced here — in particular there
+    # is no "public request ceiling" anymore.
+    raw = stdin_stream.buffer.readline()
     if not raw:
         raise ProviderDirectApiError("no request on stdin", kind="invalid_request")
-    if len(raw) > frozen.MAX_PUBLIC_REQUEST_BYTES:
-        raise ProviderDirectApiError(
-            "request exceeds the public request ceiling", kind="request_too_large"
-        )
     try:
         request = json.loads(raw.decode("utf-8"))
     except (UnicodeError, json.JSONDecodeError) as exc:
@@ -519,6 +519,13 @@ def perform_inference(
             "invalid_request": "invalid_request",
         }.get(exc.kind, "http_error")
         sanitized_msg = sanitize_text(str(exc), active_credential=credential)
+        if exc.kind == "http_status" and getattr(exc, "status", None) == 413:
+            # Provider-originated size rejection (Task 43): the provider
+            # received the request and refused it as too large.  Surfaced
+            # truthfully with provider provenance, never as an
+            # Agentic-Debugger policy rejection.
+            kind = "request_too_large"
+            sanitized_msg = "Provider rejected request as too large (HTTP 413)"
         raise ProviderDirectApiError(sanitized_msg, kind=kind) from None
     text = extract_completion(protocol, response)
     if not text or not text.strip():

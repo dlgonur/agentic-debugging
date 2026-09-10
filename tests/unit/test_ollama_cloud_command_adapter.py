@@ -1989,15 +1989,22 @@ def test_shared_deadline_includes_metadata_cost(fixture_server) -> None:
     assert adapter.FALLBACK_COUNT == 0
 
 
-def test_request_and_logical_call_bounds_are_fail_closed(fixture_server) -> None:
+def test_oversized_request_is_forwarded_complete(fixture_server) -> None:
+    """Task 43 (provider-owned request size): a request above the historical
+    value is read in full and reaches the provider complete."""
     state, _server, endpoint = fixture_server()
     oversized = sample_request()
     oversized["_pad"] = "x" * (adapter.MAX_PUBLIC_REQUEST_BYTES + 1)
-    rc, stdout, _stderr = invoke(endpoint, oversized)
-    assert rc == 1
-    assert stdout == ""
-    assert state.requests == []
+    rc, stdout, stderr = invoke(endpoint, oversized)
+    assert rc == 0, stderr
+    assert_success_envelope(stdout)
+    assert "/api/chat" in request_paths(state)
 
+
+def test_logical_call_limit_stays_fail_closed(fixture_server) -> None:
+    """The logical-call COUNT ceiling is unrelated to request size — Task 43
+    leaves count ceilings intact — and still fails closed pre-provider."""
+    state, _server, endpoint = fixture_server()
     out_of_range = sample_request(logical_call_index=25)
     rc, stdout, _stderr = invoke(endpoint, out_of_range)
     assert rc == 1

@@ -165,17 +165,24 @@ def test_live_boundary_rejects_lookalike_rag_context_objects():
         _adapter(rag_context={"index_id": "x"})
 
 
-def test_next_directive_enforces_budget_with_rag_enabled(monkeypatch):
-    """Request plus RAG context over the budget fails closed pre-transport."""
-    import agentic_debugger.evaluation.live as live_module
+def test_next_directive_forwards_large_rag_request_to_transport(monkeypatch):
+    """Request plus RAG context above the historical budget reaches transport.
+
+    Task 43 (provider-owned request size): the removed internal
+    public-request ceiling must no longer terminate execution before the
+    provider.  A RAG-enabled request larger than the historical 20,000-byte
+    budget is constructed, handed to the transport in full, and answered.
+    """
 
     class CapturingTransport:
         def __init__(self):
             self.calls = 0
+            self.payloads = []
 
         def request(self, payload, timeout_seconds):
             self.calls += 1
-            return {"directive": {"kind": "transition", "target_state": "Failed", "reason": "x"}}
+            self.payloads.append(payload)
+            return {"directive": {"kind": "transition", "target_state": "Understand", "reason": "large context accepted"}}
 
     transport = CapturingTransport()
     adapter = LiveModelAdapter(
@@ -187,12 +194,29 @@ def test_next_directive_enforces_budget_with_rag_enabled(monkeypatch):
         registry=_registry(),
         rag_context=_rag_context(),
     )
-    # A real RagContext is at most ~4 KiB, so the guard is exercised by
-    # pinning the mirrored public-request budget below the request size.
-    monkeypatch.setattr(live_module, "PUBLIC_REQUEST_BYTE_BUDGET", 100)
-    with pytest.raises(LiveModelAdapterError):
-        adapter.next_directive(_snapshot())
-    assert transport.calls == 0  # fail closed before any transport call
+    # A real RagContext is at most ~4 KiB; pad the task-visible history so
+    # the serialized request deterministically exceeds the historical
+    # 20,000-byte ceiling.
+    adapter.history.append(
+        {
+            "request_index": 0,
+            "state": ControllerState.REPRODUCE.value,
+            "allowed_actions": [],
+            "last_observation": {"padding": "x" * 24_000},
+        }
+    )
+    directive = adapter.next_directive(_snapshot())
+    assert transport.calls == 1  # handed to transport, never gated
+    sent_bytes = json.dumps(
+        transport.payloads[0], ensure_ascii=False, allow_nan=False
+    ).encode("utf-8")
+    from agentic_debugger.rag.schema import PUBLIC_REQUEST_BYTE_BUDGET as HISTORICAL_BUDGET
+
+    assert HISTORICAL_BUDGET == 20_000
+    assert len(sent_bytes) > HISTORICAL_BUDGET
+    assert transport.payloads[0]["history"][0]["last_observation"]["padding"] == "x" * 24_000
+    assert directive.target_state is ControllerState.UNDERSTAND
+    assert adapter.metrics.termination_reason is None
 
 
 def test_frozen_quixbugs_path_never_passes_rag_context():
