@@ -1418,7 +1418,7 @@ def run_adapter(
     parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_SECONDS, help="Per-print timeout in seconds")
     parser.add_argument("--max-response-bytes", type=int, default=MAX_RAW_RESPONSE_BYTES, help="Max structured output bytes")
     parser.add_argument("--work-root", default=None, help="Absolute existing directory for disposable work dirs")
-    parser.add_argument("--max-logical-model-calls", type=int, default=DEFAULT_MAX_LOGICAL_MODEL_CALLS)
+    parser.add_argument("--max-logical-model-calls", type=int, default=0, help="Logical-call envelope; 0 means unbounded generic operation")
     parser.add_argument("--expected-version", default=EXPECTED_AGY_VERSION, help="Required AGY --version token")
     parser.add_argument("--preflight", action="store_true", help="Zero-inference identity + models preflight")
     args = parser.parse_args(argv)

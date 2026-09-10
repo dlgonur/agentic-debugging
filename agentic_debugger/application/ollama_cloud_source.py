@@ -141,7 +141,8 @@ def _config(
 def build_ollama_live_config(
     alias: str,
     *,
-    logical_call_ceiling: int = 32,
+    # Task 44 (repair F3): generic omission means unbounded (0).
+    logical_call_ceiling: int = 0,
     idle_timeout_seconds: int | None = None,
     request_timeout_seconds: int | None = None,
 ) -> LiveModelConfig:

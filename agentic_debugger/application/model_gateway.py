@@ -874,7 +874,10 @@ class ModelGateway:
         model_id: Optional[str],
         *,
         profile_id: Optional[str] = None,
-        logical_call_ceiling: int = _DEFAULT_MAX_MODEL_REQUESTS,
+        # Task 44 (repair F3): generic omission means unbounded (0 = no
+        # upper-bound termination).  Finite values are honored only when
+        # an explicit caller (frozen/operator/harness) supplies one.
+        logical_call_ceiling: int = 0,
         request_timeout_seconds: Optional[float] = None,
         config_root: Optional[Any] = None,
         is_ollama: bool = False,
@@ -2317,8 +2320,10 @@ class ModelGateway:
         *,
         cancel_check: Optional[Callable[[], None]] = None,
         activity_observer: Optional[Callable[..., None]] = None,
-        max_model_requests: int = _DEFAULT_MAX_MODEL_REQUESTS,
-        max_controller_steps: int = _DEFAULT_MAX_CONTROLLER_STEPS,
+        # Task 44 (repair F3): generic omission means unbounded (0 = no
+        # upper-bound termination in the corroborating re-resolution).
+        max_model_requests: int = 0,
+        max_controller_steps: int = 0,
         max_response_bytes: int = _MAX_MODEL_RESPONSE_BYTES,
         credential_binding: Optional[Any] = None,
         credential_ticket: Optional[str] = None,

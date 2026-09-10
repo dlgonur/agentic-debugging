@@ -340,6 +340,7 @@ def invoke(
     timeout: float = 2.0,
     request_timeout: float | None = None,
     model: str | None = None,
+    max_logical_calls: int | None = None,
 ) -> tuple[int, str, str]:
     stdout = io.StringIO()
     stderr = io.StringIO()
@@ -348,6 +349,8 @@ def invoke(
         argv.extend(["--request-timeout", str(request_timeout)])
     if model is not None:
         argv.extend(["--model", model])
+    if max_logical_calls is not None:
+        argv.extend(["--max-logical-model-calls", str(max_logical_calls)])
     rc = adapter.run_adapter(
         stdin_stream=io.StringIO(json.dumps(request or sample_request()) + "\n"),
         stdout_stream=stdout,
@@ -2002,11 +2005,13 @@ def test_oversized_request_is_forwarded_complete(fixture_server) -> None:
 
 
 def test_logical_call_limit_stays_fail_closed(fixture_server) -> None:
-    """The logical-call COUNT ceiling is unrelated to request size — Task 43
-    leaves count ceilings intact — and still fails closed pre-provider."""
+    """An EXPLICIT finite logical-call envelope still fails closed
+    pre-provider.  Task 43 leaves request size provider-owned; Task 44
+    leaves explicit finite COUNT envelopes intact while generic omission
+    is unbounded (covered in test_unbounded_progress_defaults.py)."""
     state, _server, endpoint = fixture_server()
     out_of_range = sample_request(logical_call_index=25)
-    rc, stdout, _stderr = invoke(endpoint, out_of_range)
+    rc, stdout, _stderr = invoke(endpoint, out_of_range, max_logical_calls=25)
     assert rc == 1
     assert stdout == ""
     assert state.requests == []

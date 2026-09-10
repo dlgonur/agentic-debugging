@@ -1100,7 +1100,7 @@ def run_adapter(
     parser.add_argument("--evidence-file", default=None, help="Optional path to append evidence record")
     parser.add_argument("--auth-file", default=None, help="Explicit absolute auth store path (operator/test override)")
     parser.add_argument("--work-root", default=None, help="Absolute existing directory for disposable work dirs")
-    parser.add_argument("--max-logical-model-calls", type=int, default=DEFAULT_MAX_LOGICAL_MODEL_CALLS, help="Micro-run logical call envelope")
+    parser.add_argument("--max-logical-model-calls", type=int, default=0, help="Micro-run logical call envelope; 0 means unbounded generic operation")
     parser.add_argument("--preflight", action="store_true", help="Zero-inference identity + effective-config preflight; never runs a model")
 
     args = parser.parse_args(argv)

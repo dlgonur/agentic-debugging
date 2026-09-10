@@ -459,7 +459,8 @@ def run_adapter(
     executable: Optional[str] = None,
     model: Optional[str] = None,
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
-    max_logical_calls: int = DEFAULT_MAX_LOGICAL_MODEL_CALLS,
+    # Task 44 (repair F3): generic omission means unbounded (0).
+    max_logical_calls: int = 0,
     max_turns: int = DEFAULT_MAX_TURNS,
 ) -> int:
     if model is None:
@@ -529,7 +530,8 @@ def run_list_models(
 def build_commandcode_live_config(
     model_id: str,
     *,
-    logical_call_ceiling: int = 32,
+    # Task 44 (repair F3): generic omission means unbounded (0).
+    logical_call_ceiling: int = 0,
     request_timeout_seconds: Optional[float] = None,
     cmdc_executable: Optional[str] = None,
 ):
@@ -570,7 +572,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="CommandCode GOAT protocol-1.3 command adapter")
     parser.add_argument("--model", default=None)
     parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_SECONDS)
-    parser.add_argument("--max-logical-model-calls", type=int, default=DEFAULT_MAX_LOGICAL_MODEL_CALLS)
+    parser.add_argument("--max-logical-model-calls", type=int, default=0, help="Logical-call envelope; 0 means unbounded generic operation")
     parser.add_argument("--max-turns", type=int, default=DEFAULT_MAX_TURNS)
     parser.add_argument("--cmdc-executable", default=None)
     parser.add_argument("--list-models", action="store_true")

@@ -1402,7 +1402,7 @@ def run_adapter(
         default=None,
         help="outer metadata/generation request timeout in seconds",
     )
-    parser.add_argument("--max-logical-model-calls", type=int, default=DEFAULT_MAX_LOGICAL_MODEL_CALLS)
+    parser.add_argument("--max-logical-model-calls", type=int, default=0, help="Logical-call envelope; 0 means unbounded generic operation")
     parser.add_argument("--expected-version", default=EXPECTED_OLLAMA_VERSION)
     parser.add_argument(
         "--thinking-level",
@@ -1512,7 +1512,8 @@ def run_adapter(
 def build_ollama_live_config(
     alias: str,
     *,
-    logical_call_ceiling: int = 32,
+    # Task 44 (repair F3): generic omission means unbounded (0).
+    logical_call_ceiling: int = 0,
     idle_timeout_seconds: int | None = None,
     request_timeout_seconds: int | None = None,
 ):

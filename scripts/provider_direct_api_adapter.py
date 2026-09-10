@@ -570,7 +570,8 @@ def run_adapter(
     model: str,
     protocol: str,
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
-    max_logical_calls: int = DEFAULT_MAX_LOGICAL_MODEL_CALLS,
+    # Task 44 (repair F3): generic omission means unbounded (0).
+    max_logical_calls: int = 0,
     engine: Optional[str] = None,
     base_url: Optional[str] = None,
     auth_mode: Optional[str] = None,
@@ -688,7 +689,7 @@ def main() -> None:
     )
     parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_SECONDS)
     parser.add_argument(
-        "--max-logical-model-calls", type=int, default=DEFAULT_MAX_LOGICAL_MODEL_CALLS
+        "--max-logical-model-calls", type=int, default=0, help="Logical-call envelope; 0 means unbounded generic operation"
     )
     parser.add_argument("--engine", default=None, choices=("stdlib", "curl"))
     parser.add_argument(

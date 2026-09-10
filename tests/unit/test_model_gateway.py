@@ -1739,7 +1739,6 @@ def test_finding_1_e_local_project_product_path_preserves_legacy_route_and_trans
     from agentic_debugger.application.session_runtime import (
         ProjectRuntimeEnvironmentSpec,
         build_local_project_launch,
-        local_project_model_call_ceiling,
     )
     from agentic_debugger.evaluation.live import LiveModelConfig
 
@@ -1774,12 +1773,13 @@ def test_finding_1_e_local_project_product_path_preserves_legacy_route_and_trans
     pf_launch_a = gateway.static_preflight(launch_a.model_binding)
     assert pf_launch_a.is_runnable is True
     assert pf_launch_a.route == ROUTE_DIRECT_API
-    # Task-26: the transport is materialized under the SAME session-owned
-    # model-call ceiling the launch resolved its ModelBinding with (the
-    # Local Project default 32 here) — never the gateway general default.
+    # Task-44 (repair F1/F3): the transport is materialized under the
+    # SAME unbounded authority the launch resolved its ModelBinding with
+    # (0) — the historical helper still reports 32 as provenance
+    # metadata, but it is not an execution ceiling.
     transport_a, live_cfg_a = gateway.create_transport(
         launch_a.model_binding,
-        max_model_requests=local_project_model_call_ceiling(launch_a.budgets),
+        max_model_requests=0,
     )
     assert transport_a is not None
     assert live_cfg_a is not None
@@ -1822,7 +1822,7 @@ def test_finding_1_e_local_project_product_path_preserves_legacy_route_and_trans
         assert pf_launch_b.route == ROUTE_LEGACY_CLI
         transport_b, live_cfg_b = gateway.create_transport(
             launch_b.model_binding,
-            max_model_requests=local_project_model_call_ceiling(launch_b.budgets),
+            max_model_requests=0,
         )
         assert transport_b is not None
         assert live_cfg_b is not None
@@ -1847,7 +1847,7 @@ def test_finding_1_e_local_project_product_path_preserves_legacy_route_and_trans
     assert pf_launch_c.route == ROUTE_QUALIFIED_LADDER
     transport_c, live_cfg_c = gateway.create_transport(
         launch_c.model_binding,
-        max_model_requests=local_project_model_call_ceiling(launch_c.budgets),
+        max_model_requests=0,
     )
     assert transport_c is not None
     assert live_cfg_c is not None

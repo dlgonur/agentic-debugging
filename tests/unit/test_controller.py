@@ -568,12 +568,19 @@ def test_model_hypothesis_record_mutation_cannot_forge_controller_state(field, v
         model_record = model_snapshot.hypotheses.hypotheses[0]
         object.__setattr__(model_record, field, value)
 
+    # Task 44 (repair): explicit finite harness bound.  The adapter
+    # returns the same legal transition indefinitely
+    # (UNDERSTAND→RUNTIME_EVIDENCE, then the RUNTIME_EVIDENCE self-loop),
+    # so the test must request its own bound rather than relying on the
+    # generic product default, which is unbounded (None).  N=2 keeps two
+    # consecutive calls to prove record detachment across calls.
     result = DeterministicController(
         ToolRegistry(),
         _SnapshotMutator(
             TransitionDirective(ControllerState.RUNTIME_EVIDENCE, "actual"),
             mutate=mutate,
         ),
+        ControllerRunConfig(2),
     ).run(snapshot(ControllerState.UNDERSTAND, limits=limits, ledger=original))
     assert result.stop_reason is ControllerStopReason.MODEL_CALL_LIMIT
     assert result.hypotheses == original

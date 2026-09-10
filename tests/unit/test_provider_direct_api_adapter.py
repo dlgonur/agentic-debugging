@@ -155,6 +155,7 @@ def run_adapter(
     protocol: str = "chat_completions",
     request: Optional[dict] = None,
     timeout: float = 20.0,
+    max_logical_calls: int = 0,
 ) -> tuple[int, str, str]:
     request = request if request is not None else _protocol_request()
     stdin = _FakeStdin(json.dumps(request).encode("utf-8"))
@@ -168,6 +169,7 @@ def run_adapter(
             model=model,
             protocol=protocol,
             timeout_seconds=timeout,
+            max_logical_calls=max_logical_calls,
         )
     except adapter.ProviderDirectApiError as exc:
         # Mirror the main() envelope contract for typed failures.
@@ -461,10 +463,15 @@ class TestFailClosed:
         assert json.loads(err)["kind"] == "invalid_request"
 
     def test_logical_call_limit_enforced(self, fake_commandcode) -> None:
+        # Task-44 repair F3: an EXPLICIT finite envelope still fails
+        # closed pre-provider; generic omission is unbounded (covered in
+        # test_unbounded_progress_defaults.py).
         with fake_commandcode(
             lambda request: (200, scripted_chat_completion(_DIRECTIVE))
         ):
-            code, out, err = run_adapter(request=_protocol_request(index=999))
+            code, out, err = run_adapter(
+                request=_protocol_request(index=999), max_logical_calls=64
+            )
         assert code == 1
         assert json.loads(err)["kind"] == "logical_call_limit"
 

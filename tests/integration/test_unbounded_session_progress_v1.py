@@ -18,24 +18,31 @@ Coverage:
 * ``test_configured_level32_continues_past_historical_40_step_ceiling`` —
   crosses the historical 40 controller-step ceiling (>= 41 valid
   progression steps, here 45) with the same real runtime.
-* ``test_local_project_shared_authority_unbounded`` — representative
-  Local Project regression through the SHARED controller/adapter
-  authority (no duplicated implementation): unbounded limits (None)
-  with Local Project task constraints continue past the old 32-call
-  default.
+* ``test_real_local_project_product_path_continues_past_32`` — REAL
+  Local Project product path (``build_local_project_launch`` →
+  SessionLaunch ModelBinding → ``run_local_project_session`` →
+  ``ModelGateway.create_transport`` → LiveModelAdapter →
+  DeterministicController → scripted loopback provider) driven past the
+  historical Local Project 32-call default.  Fails on Candidate 52 with
+  the SessionLaunch/transport fingerprint drift.
 
 All tests mock the EXTERNAL provider response only (fake subprocess /
-fake transport); the controller/model execution boundary
-(``run_local_session``, ``DeterministicController.run``,
-``LiveModelAdapter`` progression authority) is never monkeypatched.
+fake transport / loopback HTTP); the controller/model execution boundary
+(``run_local_session``, ``run_local_project_session``,
+``build_local_project_launch``, ``ModelGateway.create_transport``,
+``DeterministicController.run``, ``LiveModelAdapter`` progression
+authority) is never monkeypatched.
 """
 
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, Dict, List, Optional, Tuple
 
 import pytest
 
@@ -56,8 +63,19 @@ from test_level32_configured_runtime import (
     _seed_hermetic_level32_source,
     _setup_test_providers,
 )
+from test_provider_direct_api_session import _make_git_repo
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO_ROOT / "scripts"))
+
+LP_PROVIDER_ID = "commandcode_goat"
+LP_MODEL_ID = "deepseek/deepseek-v4-flash"
+LP_SECRET = "lp-unbounded-credential-not-real"
+# Historical Local Project default (Task-26); generic execution is
+# unbounded past it.
+OLD_LOCAL_PROJECT_DEFAULT = 32
+# UNDERSTAND self-loops after the opening REPRODUCE→UNDERSTAND step.
+LP_CHURN_TARGET = 33
 
 # Exact Candidate-51 historical ceilings (Task-42 configured Level-32).
 OLD_LEVEL32_MODEL_REQUEST_CEILING = 25
@@ -349,119 +367,297 @@ def test_configured_level32_continues_past_historical_40_step_ceiling(
     assert evidence["served"] >= n_successful
 
 
-def test_local_project_shared_authority_unbounded() -> None:
-    """Local Project representative regression via the SHARED authority.
+class _ChurnChatServer:
+    """Loopback /chat/completions fake serving UNDERSTAND churn.
 
-    The limit authority is shared (DeterministicController +
-    LiveModelAdapter); Local Project duplicates no implementation.  This
-    drives that shared authority with unbounded limits (None) through 35
-    valid UNDERSTAND self-loop transitions — past the old Local Project
-    default (32) — ending with the honest scripted FAILED transition
-    (never via a count budget).
+    Mirrors the accepted ``_ScriptedChatServer`` responder contract
+    (reads the bounded protocol context out of the prompt, answers one
+    directive per POST) but keeps the controller in UNDERSTAND with
+    budget-free self-loop transitions so the run can proceed past the
+    historical 32-call default: REPRODUCE → UNDERSTAND once, then
+    ``LP_CHURN_TARGET`` self-loops, then the honest scripted FAILED
+    terminal (never a count budget).
     """
-    import json as _json
-    from pathlib import Path as _Path
 
-    from agentic_debugger.agent.controller import ControllerRunConfig, DeterministicController
-    from agentic_debugger.agent.controller_policy import (
-        ControllerBudgetLimits,
-        ControllerBudgetState,
-        HypothesisLedger,
-    )
-    from agentic_debugger.agent.model_adapter import ControllerSnapshot
-    from agentic_debugger.agent.state_machine import ControllerState
-    from agentic_debugger.agent.tool_registry import ToolRegistry
-    from agentic_debugger.demo.policies import DemoPolicy
-    from agentic_debugger.evaluation.live import LiveModelAdapter, LiveModelConfig, LiveRunLimits
-    from agentic_debugger.evaluation.runner import load_task
+    def __init__(self, churn_target: int = LP_CHURN_TARGET) -> None:
+        self.calls: List[Dict[str, Any]] = []
+        self.understand_calls = 0
+        self.churn_target = churn_target
+        self._lock = threading.Lock()
 
-    old_local_default = 32
-    n_churn = 35
+    def respond(self, payload: Dict[str, Any]) -> Tuple[int, Dict[str, Any]]:
+        prompt = payload["messages"][-1]["content"]
+        from opencode_go_command_adapter import PUBLIC_REQUEST_END, PUBLIC_REQUEST_START
 
-    repo_root = _Path(__file__).resolve().parents[2]
-    task = load_task(
-        str(repo_root / "agentic_debugger" / "datasets" / "curated" / "curated-off-by-one-002" / "task.json")
-    )
-
-    calls: list[dict] = []
-
-    class FakeTransport:
-        def request(self, payload, timeout_seconds):
-            idx = len(calls)
-            calls.append(payload)
-            assert payload["protocol"]["logical_model_call_index"] == idx
-            if idx < n_churn:
-                directive = {
+        between = prompt.split(PUBLIC_REQUEST_START, 1)[1].split(PUBLIC_REQUEST_END, 1)[0]
+        context = json.loads(between.strip())
+        state = context["controller"]["state"]
+        if state == "Reproduce":
+            content: Optional[str] = json.dumps(
+                {
                     "kind": "transition",
                     "target_state": "Understand",
-                    "reason": f"churn {idx} continue reasoning past old ceiling",
+                    "reason": "baseline reproduced; continue reasoning",
                 }
+            )
+        elif state == "Understand":
+            with self._lock:
+                self.understand_calls += 1
+                churn = self.understand_calls
+            if churn <= self.churn_target:
+                content = json.dumps(
+                    {
+                        "kind": "transition",
+                        "target_state": "Understand",
+                        "reason": f"churn {churn} continue reasoning past old ceiling",
+                    }
+                )
             else:
-                directive = {
+                content = json.dumps(
+                    {
+                        "kind": "transition",
+                        "target_state": "Failed",
+                        "reason": "scripted end after unbounded proof",
+                    }
+                )
+        else:
+            content = json.dumps(
+                {
                     "kind": "transition",
                     "target_state": "Failed",
-                    "reason": "scripted end after unbounded proof",
+                    "reason": "script exhausted",
                 }
-            return {
-                "directive": directive,
-                "usage": {"prompt_tokens": 5, "completion_tokens": 5, "total_tokens": 10},
-            }
+            )
+        return 200, {
+            "id": "chatcmpl-lp-unbounded",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": content}}],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 5, "total_tokens": 10},
+        }
 
-    registry = ToolRegistry(())
-    config = LiveModelConfig(
-        model_name="local-fake",
-        command=("echo", "hi"),
-        request_timeout_seconds=30,
-        tool_version="test-v1",
-    )
-    limits = LiveRunLimits(
-        max_model_requests=None,
-        max_controller_steps=None,
-        max_retries=2,
-        max_directive_repairs=0,
-    )
-    assert limits.max_model_requests is None
-    assert limits.max_controller_steps is None
-    adapter = LiveModelAdapter(
-        task=task,
-        policy=DemoPolicy.PDB_ON_UNCERTAINTY,
-        config=config,
-        transport=FakeTransport(),
-        limits=limits,
-        registry=registry,
-        evaluation_id="eval-local",
-        case_id="case-local",
-        run_id="run-local",
-        trajectory_id="run-local",
-    )
-    controller = DeterministicController(
-        registry, adapter, ControllerRunConfig(max_model_calls=None)
-    )
-    assert controller.config.max_model_calls is None
-    snapshot = ControllerSnapshot(
-        "run-local",
-        task.task_id,
-        ControllerState.UNDERSTAND,
-        0,
-        ControllerBudgetLimits.from_task_constraints(task.constraints),
-        ControllerBudgetState(),
-        HypothesisLedger(),
-    )
-    result = controller.run(snapshot)
-    # Honest scripted FAILED ending after 35 valid churn steps — never
-    # via a total-session count ceiling.
-    from agentic_debugger.agent.controller import ControllerStopReason
+    @property
+    def request_count(self) -> int:
+        return len(self.calls)
 
-    assert result.stop_reason is ControllerStopReason.FAILED
-    assert result.model_calls == n_churn + 1
-    assert result.model_calls > old_local_default
-    assert len(result.steps) == n_churn + 1
-    assert adapter.metrics.model_requests == n_churn + 1
-    assert adapter.metrics.termination_reason is None
-    assert len(calls) == n_churn + 1
-    # No count-derived taxonomy was emitted.
-    assert adapter.metrics.termination_reason not in {
-        "model_request_limit",
-        "controller_step_limit",
-        "directive_rejected",
-    }
+    def __enter__(self) -> "_ChurnChatServer":
+        outer = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self) -> None:  # noqa: N802 - stdlib handler API
+                length = int(self.headers.get("Content-Length") or 0)
+                body = json.loads(self.rfile.read(length).decode("utf-8"))
+                with outer._lock:
+                    outer.calls.append(
+                        {
+                            "path": self.path,
+                            "authorization": self.headers.get("Authorization"),
+                            "payload": body,
+                        }
+                    )
+                status, response = outer.respond(body)
+                encoded = json.dumps(response).encode("utf-8")
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(encoded)))
+                self.end_headers()
+                self.wfile.write(encoded)
+
+            def log_message(self, format: str, *args: Any) -> None:  # silence
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self._server = server
+        self.base_url = f"http://127.0.0.1:{server.server_port}"
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        self._server.shutdown()
+        self._server.server_close()
+
+
+def _isolate_lp_provider(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Hermetic provider/credential isolation mirroring the accepted
+    direct-API session harness: no operator ambient state may satisfy or
+    block the loopback provider."""
+    pc.clear_all_session_keys()
+    isolated_home = tmp_path / "operator-state-hidden"
+    isolated_home.mkdir(exist_ok=True)
+    monkeypatch.setenv("HOME", str(isolated_home))
+    monkeypatch.setenv("USERPROFILE", str(isolated_home))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local-app-data"))
+    for name in (
+        "OPENCODE_API_KEY",
+        "COMMAND_CODE_API_KEY",
+        "AGENTIC_DEBUGGER_OPENCODE_GO_API_KEY",
+        "AGENTIC_DEBUGGER_COMMANDCODE_GOAT_API_KEY",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(
+        pc, "opencode_auth_store_path", lambda: tmp_path / "missing-auth.json"
+    )
+    _vault: dict[str, str] = {}
+    monkeypatch.setattr(
+        pc, "save_secure_credential", lambda k, v: _vault.__setitem__(k, v) or True
+    )
+    monkeypatch.setattr(pc, "load_secure_credential", lambda k: _vault.get(k))
+    monkeypatch.setattr(pc, "has_secure_credential", lambda k: k in _vault)
+    monkeypatch.setattr(
+        pc, "delete_secure_credential", lambda k: _vault.pop(k, None) is not None
+    )
+    pc.add_provider_config(
+        name="CommandCode GOAT",
+        base_url="https://api.commandcode.ai/provider/v1",
+        api_format=pc.PROTOCOL_CHAT_COMPLETIONS,
+        provider_id=LP_PROVIDER_ID,
+        transport_profile=pc.TRANSPORT_COMMANDCODE_GOAT,
+    )
+
+
+def test_real_local_project_product_path_continues_past_32(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Task-44 repair F1: REAL Local Project product path past request #32.
+
+    ``build_local_project_launch`` → SessionLaunch ModelBinding →
+    ``run_local_project_session`` → ``ModelGateway.create_transport`` →
+    LiveModelAdapter → DeterministicController → scripted loopback
+    provider.  None of ``run_local_project_session``,
+    ``build_local_project_launch``, or ``ModelGateway.create_transport``
+    is monkeypatched; only external provider execution is faked.
+
+    Requires request #33 to be sent with no fingerprint drift, no
+    ``logical_call_limit``, no ``model_request_limit``, and no
+    controller budget exhaustion.  Fails on Candidate 52 with
+    ``model profile unavailable: ... configuration fingerprint
+    drifted`` before any model request.
+    """
+    from agentic_debugger.application.emitter import SessionEventEmitter
+    from agentic_debugger.application.journal import SessionEventJournal
+    from agentic_debugger.application.local_project import (
+        cleanup_parent_tmpdir,
+        create_isolated_worktree,
+        validate_local_project,
+    )
+    from agentic_debugger.application.local_project_source import (
+        run_local_project_session,
+    )
+    from agentic_debugger.application.model_providers import (
+        resolve_provider_live_config,
+    )
+    from agentic_debugger.application.session import SessionBudgets
+    from agentic_debugger.application.session_runtime import (
+        ProjectRuntimeEnvironmentSpec,
+        build_local_project_launch,
+    )
+    from agentic_debugger.application.worker_scenarios import ScenarioContext
+    from agentic_debugger.cancellation import CancellationToken
+
+    _isolate_lp_provider(monkeypatch, tmp_path)
+    repo = _make_git_repo(tmp_path)
+    validated = validate_local_project(str(repo), launch_cwd=tmp_path)
+    wt = create_isolated_worktree(validated.repo_root, validated.head_commit)
+    try:
+        with _ChurnChatServer() as server:
+            # Genuine endpoint repoint BEFORE any session credential, so
+            # parent, worker, and adapter agree byte-for-byte.
+            pc.update_provider_config(LP_PROVIDER_ID, base_url=server.base_url)
+            monkeypatch.setattr(pc, "credential_source_for", lambda kind: "session_key")
+            pc.set_session_key(LP_PROVIDER_ID, LP_SECRET)
+
+            session_id = "sess-lp-unbounded-001"
+            launch = build_local_project_launch(
+                session_id=session_id,
+                task_id="local-project-debug",
+                policy="static-baseline",
+                provider_id=LP_PROVIDER_ID,
+                model_id=LP_MODEL_ID,
+                profile_id=LP_MODEL_ID,
+                launch_snapshot={"PATH": "/usr/bin"},
+                project_spec=ProjectRuntimeEnvironmentSpec(),
+                budgets=SessionBudgets(),
+                config_root=str(tmp_path / "cfg"),
+            )
+            # The SessionLaunch binding already resolves under the
+            # unbounded authority: its fingerprint equals the
+            # ceiling-0 resolution, not the historical 32.
+            live0, _ = resolve_provider_live_config(
+                LP_PROVIDER_ID, LP_MODEL_ID, logical_call_ceiling=0
+            )
+            assert launch.model_binding is not None
+            assert launch.model_binding.config_fingerprint == live0.configuration_fingerprint
+
+            journal_path = tmp_path / "session" / "session.events.jsonl"
+            journal_path.parent.mkdir(parents=True, exist_ok=True)
+            journal = SessionEventJournal(
+                journal_path,
+                session_id=session_id,
+                task_id="local-project-debug",
+                source_kind=SourceKind.LOCAL_PROJECT,
+            )
+            emitter = SessionEventEmitter(
+                session_id=session_id,
+                task_id="local-project-debug",
+                source_kind=SourceKind.LOCAL_PROJECT,
+                sink=journal,
+            )
+            emitter.emit(SessionEventKind.SESSION_CREATED, {"spec_fingerprint": "a" * 64})
+            emitter.bind_run_id("run-lp-unbounded")
+            emitter.emit(SessionEventKind.SESSION_STARTED, {})
+            ctx = ScenarioContext(
+                work_dir=tmp_path / "work",
+                token=CancellationToken(),
+                journal=journal,
+                emitter=emitter,
+                run_id="run-lp-unbounded",
+                session_dir=journal_path.parent,
+                session_launch=launch,
+            )
+            with pytest.raises(ModelExecutionError) as excinfo:
+                run_local_project_session(
+                    ctx,
+                    {
+                        "project_repo_path": str(repo),
+                        "project_head": validated.head_commit,
+                        "isolated_workspace": str(wt.isolated_path),
+                        "bug_description": "add returns a - b instead of a + b",
+                        "reproduction_command": "python repro.py",
+                        "verification_command": "python -m pytest -q test_regression.py",
+                        "parent_tmpdir": str(wt.parent_tmpdir),
+                        "policy": "static-baseline",
+                        "config_root": str(repo / "config"),
+                        "profile_id": LP_MODEL_ID,
+                        "provider": LP_PROVIDER_ID,
+                        "model_id": LP_MODEL_ID,
+                    },
+                )
+            terminal = str(excinfo.value)
+            # Honest scripted FAILED ending — never a count/fingerprint gate.
+            assert "fingerprint drifted" not in terminal
+            assert "logical_call_limit" not in terminal
+            assert "logical model call" not in terminal
+            assert "model_request_limit" not in terminal
+            assert "model request limit" not in terminal
+            assert "budget exhausted" not in terminal
+            assert "directive exhausted" not in terminal
+            # Request #33 was actually sent (1 opening + 33 churn + terminal).
+            assert server.request_count >= OLD_LOCAL_PROJECT_DEFAULT + 1, (
+                f"stopped before request #33: {server.request_count}"
+            )
+            events = [
+                json.loads(line)
+                for line in journal_path.read_text(encoding="utf-8").splitlines()
+            ]
+            kinds = [e["event_kind"] for e in events]
+            started = kinds.count(SessionEventKind.MODEL_REQUEST_STARTED.value)
+            completed = kinds.count(SessionEventKind.MODEL_REQUEST_COMPLETED.value)
+            assert started == completed
+            assert started >= OLD_LOCAL_PROJECT_DEFAULT + 1
+            provenance = next(
+                e["payload"]
+                for e in events
+                if e["event_kind"] == SessionEventKind.MODEL_CONFIGURED.value
+            )
+            assert provenance["provider"] == LP_PROVIDER_ID
+            assert provenance["route"] == "direct_api"
+    finally:
+        cleanup_parent_tmpdir(wt.parent_tmpdir, repo)

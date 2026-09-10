@@ -863,7 +863,9 @@ def resolve_provider_live_config(
     kind: str,
     model_id: str,
     *,
-    logical_call_ceiling: int = 32,
+    # Task 44 (repair F3): generic omission means unbounded (0).  An
+    # explicit finite ceiling is honored only for explicit callers.
+    logical_call_ceiling: int = 0,
     request_timeout_seconds: Optional[float] = None,
 ) -> Tuple[Any, Mapping[str, Any]]:
     """(LiveModelConfig, provenance payload) for one provider model."""

@@ -417,8 +417,12 @@ def test_malformed_or_missing_logical_call_metadata_rejected(protocol: Any) -> N
 
 
 def test_run_adapter_rejects_index_beyond_envelope_end_to_end(fake_launcher, auth_file) -> None:
+    # Task-44 repair F3: explicit finite envelope still rejects; generic
+    # omission is unbounded (covered in test_unbounded_progress_defaults).
     req = sample_request(logical_call_index=26)
-    rc, stdout, stderr = run_adapter_real(fake_launcher, auth_file, req)
+    rc, stdout, stderr = run_adapter_real(
+        fake_launcher, auth_file, req, extra_argv=["--max-logical-model-calls", "25"]
+    )
     assert rc == 1
     assert "exceeds the micro-run envelope" in stderr
     assert stdout == ""

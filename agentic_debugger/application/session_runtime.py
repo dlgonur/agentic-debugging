@@ -1253,17 +1253,23 @@ def build_local_project_launch(
         from agentic_debugger.application.model_gateway import ModelGateway
 
         gateway = ModelGateway.default(config_root=config_root)
-        # Task-26: the ModelBinding is resolved under the SAME session
-        # model-call ceiling the session later uses for transport
-        # materialization and execution limits — an explicit session
-        # budget is authoritative, the Local Project default (32)
-        # otherwise.  The gateway's general configured-source default
-        # (64) must never silently enter a Local Project session here.
+        # Task 44: generic Local Project execution is unbounded.  The
+        # SessionLaunch ModelBinding resolves under the SAME unbounded
+        # logical-call authority (0 = no upper-bound termination) the
+        # source later uses for transport materialization
+        # (``ModelGateway.create_transport``), the live adapter
+        # (``max_model_requests=None``) and the controller
+        # (``max_model_calls=None``).  SessionBudgets count dimensions
+        # and the historical Local Project default (32) are
+        # compatibility/provenance metadata only: they never enter the
+        # executable command/fingerprint and never gate execution.  An
+        # explicit scientific caller needing a finite envelope supplies
+        # its own pre-resolved ``model_binding`` instead.
         model_binding = gateway.resolve(
             provider_id=provider_id,
             model_id=model_id,
             profile_id=profile_id,
-            logical_call_ceiling=local_project_model_call_ceiling(budgets),
+            logical_call_ceiling=0,
             is_ollama=is_ollama,
             ollama_alias=ollama_alias,
         )

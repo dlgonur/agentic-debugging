@@ -834,7 +834,13 @@ def test_one_beyond_logical_call_index_rejected() -> None:
 
 
 def test_run_adapter_rejects_index_beyond_envelope(fake_agy: dict[str, str]) -> None:
-    rc, stdout, stderr = run_adapter_real(fake_agy, sample_request(logical_call_index=26))
+    # Task-44 repair F3: explicit finite envelope still rejects; generic
+    # omission is unbounded (covered in test_unbounded_progress_defaults).
+    rc, stdout, stderr = run_adapter_real(
+        fake_agy,
+        sample_request(logical_call_index=26),
+        extra_argv=["--max-logical-model-calls", "25"],
+    )
     assert rc == 1
     assert "exceeds the micro-run envelope" in stderr
     assert stdout == ""

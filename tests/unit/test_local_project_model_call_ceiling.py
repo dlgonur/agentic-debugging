@@ -1,19 +1,20 @@
-"""Task-26 regression: ONE Local Project model-call ceiling authority.
+"""Local Project model-call ceiling coherence regression (Task-26, Task-44).
 
-A Local Project session must use ONE effective model-call ceiling from
-session launch through actual model execution: launch-time ``ModelBinding``
-resolution, transport materialization, the ``LiveModelAdapter`` request
-limit, and the ``DeterministicController`` model-call limit all derive from
-the SAME session-owned ceiling — the Local Project default (32) when
-``SessionBudgets.max_model_calls`` is absent, the explicit budget when
-supplied.  The gateway's general configured-source default (64) must never
-silently enter a Local Project session.
+Task-26 established ONE effective ceiling authority from session launch
+through model execution.  Task-44 (Unbounded Session Progress v1)
+supersedes the finite values for generic execution while PRESERVING the
+coherence invariant: launch-time ``ModelBinding`` resolution, transport
+materialization, the ``LiveModelAdapter`` request limit, and the
+``DeterministicController`` model-call limit must all derive from the
+SAME authority — now unbounded (logical ceiling 0 / ``None``) for
+generic Local Project sessions.
 
-Fails on the pre-Task-26 baseline (``8c680d1``): the launch resolved the
-``ModelBinding`` under the gateway general default (64) while the source
-materialized the transport at 32, so a direct-API Local Project session
-failed at ``create_transport`` with a configuration-fingerprint drift
-(stale-binding rejection) before any useful model execution.
+``SessionBudgets.max_model_calls`` and the historical Local Project
+default (32) remain as compatibility/provenance metadata only: they must
+not affect generic execution or executable fingerprints.  The
+fingerprint/stale-binding validation itself is preserved — the mismatch
+check still fails closed; it simply never fires for coherent generic
+sessions because both sides resolve at 0.
 
 The regression exercises the real Local Product seam end to end — the
 same ``run_local_project_session`` flow the worker runs (worker-owned
@@ -294,7 +295,7 @@ def _run_fallback_session(
 
 
 # ---------------------------------------------------------------------------
-# default Local Project budget: effective ceiling 32, end to end
+# generic Local Project execution is unbounded end to end (Task-44)
 # ---------------------------------------------------------------------------
 
 
@@ -308,7 +309,9 @@ def test_default_local_project_ceiling_is_32_worker_path(
         tmp_path, monkeypatch, budgets=SessionBudgets(), session_id="sess-lp-ceil-w"
     )
 
-    # The Local Project default effective ceiling is 32 (no explicit budget).
+    # Task-44: SessionBudgets counts are provenance metadata only — the
+    # historical helper still reports 32, but generic execution never
+    # consults it.
     from agentic_debugger.application.session_runtime import (
         LOCAL_PROJECT_DEFAULT_MAX_MODEL_CALLS,
         local_project_model_call_ceiling,
@@ -318,22 +321,23 @@ def test_default_local_project_ceiling_is_32_worker_path(
     assert local_project_model_call_ceiling(launch.budgets) == 32
     assert LOCAL_PROJECT_DEFAULT_MAX_MODEL_CALLS == 32
 
-    # Launch-time ModelBinding was resolved under 32 — not the gateway
-    # general default 64 — and the session did not fail at transport
-    # materialization with a 64-vs-32 fingerprint drift (reaching the
-    # controller-config stop proves create_transport corroborated).
+    # Launch-time ModelBinding was resolved under the unbounded
+    # authority (0) — and the session did not fail at transport
+    # materialization with a fingerprint drift (reaching the
+    # controller-config stop proves create_transport corroborated at 0).
     binding = launch.model_binding
     assert binding.config_fingerprint is not None
-    assert binding.config_fingerprint == _fingerprint_at(32)
+    assert binding.config_fingerprint == _fingerprint_at(0)
+    assert binding.config_fingerprint != _fingerprint_at(32)
     assert binding.config_fingerprint != _fingerprint_at(64)
 
-    # The adapter request limit and the controller model-call limit carry
-    # the SAME session ceiling — no hidden 32/64 override in between.
-    assert captured["limits_max_model_requests"] == 32
-    assert captured["controller_max_model_calls"] == 32
+    # The adapter request limit and the controller model-call limit are
+    # unbounded (None) — counters are telemetry only.
+    assert captured["limits_max_model_requests"] is None
+    assert captured["controller_max_model_calls"] is None
 
-    # The emitted model.configured provenance carries the launch binding's
-    # (32-resolved) configuration fingerprint.
+    # The emitted model.configured provenance carries the launch
+    # binding's (0-resolved) configuration fingerprint.
     assert captured["provenance"] is not None
     assert captured["provenance"]["config_fingerprint"] == binding.config_fingerprint
 
@@ -347,12 +351,14 @@ def test_default_local_project_ceiling_is_32_fallback_path(
     captured = _run_fallback_session(tmp_path, monkeypatch)
 
     # Same invariant on the direct/non-worker fallback path: the source
-    # built its launch through the factory and stayed at the 32 authority
-    # through binding resolution, transport, adapter, and controller.
-    assert captured["limits_max_model_requests"] == 32
-    assert captured["controller_max_model_calls"] == 32
+    # built its launch through the factory and stayed at the unbounded
+    # authority through binding resolution, transport, adapter, and
+    # controller.
+    assert captured["limits_max_model_requests"] is None
+    assert captured["controller_max_model_calls"] is None
     assert captured["provenance"] is not None
-    assert captured["provenance"]["config_fingerprint"] == _fingerprint_at(32)
+    assert captured["provenance"]["config_fingerprint"] == _fingerprint_at(0)
+    assert captured["provenance"]["config_fingerprint"] != _fingerprint_at(32)
     assert captured["provenance"]["config_fingerprint"] != _fingerprint_at(64)
 
 
@@ -374,26 +380,30 @@ def test_explicit_session_budget_is_authoritative_worker_path(
         session_id="sess-lp-ceil-x",
     )
 
-    # The session-owned budget is the one effective ceiling.
+    # Task-44: an explicit SessionBudgets count is provenance metadata
+    # only — it must NOT restore a finite execution ceiling.  The pure
+    # helper still reports 7, but the launch binding resolves at the
+    # unbounded authority (0), not under 7, 32, or 64.
     from agentic_debugger.application.session_runtime import (
         local_project_model_call_ceiling,
     )
 
     assert local_project_model_call_ceiling(launch.budgets) == 7
 
-    # Launch-time binding resolved under 7, not under the Local Project
-    # default (32) nor the gateway general default (64).
+    # Launch-time binding resolved under 0 (unbounded).
     binding = launch.model_binding
     assert binding.config_fingerprint is not None
-    assert binding.config_fingerprint == _fingerprint_at(7)
+    assert binding.config_fingerprint == _fingerprint_at(0)
+    assert binding.config_fingerprint != _fingerprint_at(7)
     assert binding.config_fingerprint != _fingerprint_at(32)
     assert binding.config_fingerprint != _fingerprint_at(64)
 
-    # Transport materialization corroborated under the SAME authority
-    # (reaching the controller-config stop proves create_transport passed),
-    # and the adapter/controller limits carry the same explicit value.
-    assert captured["limits_max_model_requests"] == 7
-    assert captured["controller_max_model_calls"] == 7
+    # Transport materialization corroborated under the SAME unbounded
+    # authority (reaching the controller-config stop proves
+    # create_transport passed), and the adapter/controller limits are
+    # unbounded (None).
+    assert captured["limits_max_model_requests"] is None
+    assert captured["controller_max_model_calls"] is None
     assert captured["provenance"]["config_fingerprint"] == binding.config_fingerprint
 
 
@@ -425,12 +435,13 @@ def test_ceiling_helper_contract() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_gateway_general_default_remains_64(
+def test_gateway_generic_default_is_unbounded_and_explicit_finite_honored(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The GENERAL configured-source default stays 64: a gateway resolve
-    without an explicit ceiling equals the 64-resolution — never the Local
-    Project default."""
+    """Task-44 (repair F3): a gateway resolve WITHOUT an explicit ceiling
+    equals the 0-resolution (unbounded generic operation) — never a
+    historical finite default.  An explicitly supplied finite ceiling is
+    still honored (explicit-caller semantics for frozen/harness use)."""
     from agentic_debugger.application.model_gateway import ModelGateway
 
     _isolate_provider_config(tmp_path, monkeypatch)
@@ -439,5 +450,9 @@ def test_gateway_general_default_remains_64(
 
     binding = gateway.resolve(PROVIDER_ID, MODEL_ID)
     assert binding.config_fingerprint is not None
-    assert binding.config_fingerprint == _fingerprint_at(64)
+    assert binding.config_fingerprint == _fingerprint_at(0)
     assert binding.config_fingerprint != _fingerprint_at(32)
+    assert binding.config_fingerprint != _fingerprint_at(64)
+
+    explicit = gateway.resolve(PROVIDER_ID, MODEL_ID, logical_call_ceiling=64)
+    assert explicit.config_fingerprint == _fingerprint_at(64)

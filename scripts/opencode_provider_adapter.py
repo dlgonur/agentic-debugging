@@ -147,7 +147,8 @@ def run_adapter(
     opencode_executable: Optional[str] = None,
     auth_file: Optional[str] = None,
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
-    max_logical_calls: int = DEFAULT_MAX_LOGICAL_MODEL_CALLS,
+    # Task 44 (repair F3): generic omission means unbounded (0).
+    max_logical_calls: int = 0,
 ) -> int:
     if model is None:
         raise OpenCodeProviderAdapterError("--model is required", kind="configuration")
@@ -214,7 +215,8 @@ def run_adapter(
 def build_opencode_live_config(
     model_id: str,
     *,
-    logical_call_ceiling: int = 32,
+    # Task 44 (repair F3): generic omission means unbounded (0).
+    logical_call_ceiling: int = 0,
     request_timeout_seconds: Optional[float] = None,
     opencode_executable: Optional[str] = None,
     auth_file: Optional[str] = None,
@@ -259,7 +261,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="OpenCode provider protocol-1.3 command adapter")
     parser.add_argument("--model", default=None)
     parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_SECONDS)
-    parser.add_argument("--max-logical-model-calls", type=int, default=DEFAULT_MAX_LOGICAL_MODEL_CALLS)
+    parser.add_argument("--max-logical-model-calls", type=int, default=0, help="Logical-call envelope; 0 means unbounded generic operation")
     parser.add_argument("--opencode-executable", default=None)
     parser.add_argument("--auth-file", default=None)
     args = parser.parse_args()
