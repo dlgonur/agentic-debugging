@@ -4,11 +4,18 @@ import json
 import shutil
 import sys
 import tempfile
+import time
 import uuid
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
+from agentic_debugger.agent.controller import (
+    ControllerRunConfig,
+    DeterministicController,
+    ControllerStopReason,
+)
 from agentic_debugger.agent.controller_policy import (
     ActionName,
     BudgetKind,
@@ -16,10 +23,13 @@ from agentic_debugger.agent.controller_policy import (
     ControllerBudgetState,
     HypothesisConfidence,
     HypothesisLedger,
+    HypothesisStatus,
     PdbPolicy,
+    RootCauseHypothesis,
     allowed_actions_for_state,
     budget_kind_for_action,
 )
+from agentic_debugger.agent.model_adapter import ControllerSnapshot
 from agentic_debugger.agent.state_machine import ControllerState
 from agentic_debugger.agent.tool_registry import ToolRejectedError, ToolRegistry, ToolResult, ToolSpec
 from agentic_debugger.demo.catalog import build_reference_patch, scenario_for
@@ -40,6 +50,8 @@ from agentic_debugger.evaluation.live import (
     LiveOptInError,
     LiveRunLimits,
     LiveTransportError,
+    ModelRequestBudgetExceeded,
+    _finalize_live_case,
     redact_for_recording,
     render_live_report,
     run_live_case,
@@ -3417,3 +3429,279 @@ def test_ladder_contracts_remain_zero_directive_repairs_for_qualified_runs():
     for contract in LADDER_RUNTIME_CONTRACTS.values():
         assert contract.max_retries == 0
         assert contract.max_directive_repairs == 0
+
+
+
+# ---- migrated current regressions (from the pruned QuixBugs campaign suites) ----
+#
+# These compact regressions protect current ``evaluation.live`` contracts that
+# previously lived inside ``tests/unit/test_quixbugs_case_budget_terminal.py``:
+# the documented backward-compatible interpretation of the historical
+# ``ModelRequestBudgetExceeded`` transport signal, the terminalization of a
+# budget-stopped controller run, the one-decision-per-real-gate-lifecycle PDB
+# gate recording invariant, and the ``campaign_version`` verifier-authoritative
+# terminal classification of ``_finalize_live_case``.
+
+
+def _curated_task() -> DebugTask:
+    return DebugTask.from_mapping(
+        json.loads((ROOT / "agentic_debugger/datasets/curated" / TASK_ID / "task.json").read_text())
+    )
+
+
+def test_model_request_budget_exceeded_from_legacy_transport_is_non_retryable_and_unaccounted():
+    """The historical typed budget signal raised by a legacy/frozen transport
+    is not retried, is not counted as a provider error, is not fed back as a
+    malformed directive, and the rejected logical call stays unaccounted."""
+    task = _curated_task()
+    calls = []
+
+    class BudgetTransport:
+        def request(self, payload, timeout_seconds):
+            calls.append(payload)
+            raise ModelRequestBudgetExceeded(20_475, 20_000)
+
+    adapter = LiveModelAdapter(
+        task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(),
+        transport=BudgetTransport(), limits=LiveRunLimits(max_model_requests=3, max_retries=2),
+        registry=_test_live_registry(),
+    )
+    limits = ControllerBudgetLimits.from_task_constraints(task.constraints)
+    with pytest.raises(ModelRequestBudgetExceeded) as info:
+        adapter.next_directive(ControllerSnapshot(
+            "budget-run", task.task_id, ControllerState.REPRODUCE, 0, limits,
+            ControllerBudgetState(), HypothesisLedger(),
+        ))
+    assert info.value.request_byte_count == 20_475
+    assert adapter.metrics.model_requests == 0
+    assert adapter.metrics.model_responses == 0
+    assert adapter.metrics.retries == 0
+    assert adapter.metrics.termination_reason == "public_evidence_budget_exceeded"
+    assert adapter.directive_rejections == []
+    assert len(calls) == 1
+
+
+def test_budget_stopped_controller_run_finalizes_pdb_not_reached_with_measurements():
+    """A completed response followed by the historical budget signal stops the
+    controller without a provider failure and ``_finalize_live_case``
+    materializes ``PDB_NOT_REACHED`` with the completed accounting and the
+    typed termination reason preserved."""
+    task = _curated_task()
+
+    class BudgetAfterOneTransport:
+        def __init__(self):
+            self.calls = 0
+
+        def request(self, payload, timeout_seconds):
+            self.calls += 1
+            if self.calls == 1:
+                return {
+                    "directive": {"kind": "action", "name": "run_reproduction", "arguments": {"phase": "baseline"}},
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+                }
+            raise ModelRequestBudgetExceeded(20_475, 20_000)
+
+    live_adapter = LiveModelAdapter(
+        task=task, policy=DemoPolicy.PDB_ON_UNCERTAINTY, config=config(),
+        transport=BudgetAfterOneTransport(), limits=LiveRunLimits(max_model_requests=3, max_retries=2),
+        registry=_test_live_registry(),
+    )
+    controller = DeterministicController(_test_live_registry(), live_adapter, ControllerRunConfig(max_model_calls=3))
+    result = controller.run(ControllerSnapshot(
+        "budget-chain", task.task_id, ControllerState.REPRODUCE, 0,
+        ControllerBudgetLimits.from_task_constraints(task.constraints),
+        ControllerBudgetState(), HypothesisLedger(),
+    ))
+    assert result.stop_reason is ControllerStopReason.MODEL_ERROR
+    assert live_adapter.metrics.model_requests == 1
+    assert live_adapter.metrics.model_responses == 1
+    assert live_adapter.metrics.retries == 0
+    assert live_adapter.metrics.termination_reason == "public_evidence_budget_exceeded"
+
+    finalized = _finalize_live_case(
+        task_id=task.task_id, policy=DemoPolicy.PDB_ON_UNCERTAINTY, repetition=1,
+        case_id="budget-case", run_id="budget-run", config=config(), task=task,
+        context=None, workspace=None, result=result, metrics=live_adapter.metrics,
+        live_adapter=live_adapter, started=time.monotonic() - 1.0,
+        interrupted=False, controller_failed=False, diagnostics=[],
+        verify=lambda: pytest.fail("verifier must not run for a budget-exhausted case"),
+        extra_cleanup=lambda: (True, None), extra_cleanup_owned=False,
+        evidence={"pdb_gate_decisions": [], "directive_rejections": []},
+    )
+    assert finalized.status is LiveCaseStatus.PDB_NOT_REACHED
+    assert finalized.reporting["completed"] is True
+    mapping = finalized.to_mapping()
+    assert mapping["measurements"]["termination_reason"] == "public_evidence_budget_exceeded"
+    assert mapping["measurements"]["model_request_count"] == 1
+    assert mapping["measurements"]["model_response_count"] == 1
+    assert mapping["measurements"]["retry_count"] == 0
+
+
+def _gate_recording_snapshot(task, model_call_index: int = 4, *, hypothesis: bool = True):
+    """A controller snapshot in UNDERSTAND; with a low-confidence,
+    runtime-evidence hypothesis it passes the ``pdb-on-uncertainty`` gate."""
+    limits = ControllerBudgetLimits.from_task_constraints(task.constraints)
+    ledger = HypothesisLedger()
+    if hypothesis:
+        qualifying = RootCauseHypothesis(
+            "h-1", "root cause", HypothesisConfidence.LOW, HypothesisStatus.ACTIVE, (), True, 1,
+        )
+        ledger = HypothesisLedger((qualifying,))
+    return ControllerSnapshot(
+        "run", task.task_id, ControllerState.UNDERSTAND, model_call_index, limits,
+        ControllerBudgetState(), ledger,
+    )
+
+
+def test_pdb_gate_records_exactly_one_decision_per_real_transition():
+    """One ``UNDERSTAND -> RUNTIME_EVIDENCE`` transition records exactly one
+    allowed gate decision, not one per reread of the pure gate."""
+    task = _curated_task()
+    adapter = LiveModelAdapter(
+        task=task, policy=DemoPolicy.PDB_ON_UNCERTAINTY, config=config(),
+        transport=_RuntimeTransitionTransport(), limits=LiveRunLimits(max_model_requests=3, max_retries=0),
+        registry=_test_live_registry(),
+    )
+    adapter._failure_reproduced = True
+    adapter.next_directive(_gate_recording_snapshot(task))
+    assert len(adapter.pdb_gate_decisions) == 1
+    assert adapter.pdb_gate_decisions[0]["allowed"] is True
+
+
+def test_pdb_gate_records_one_denied_decision_across_denied_retries():
+    """When the gate denies, the model's repeated ``RuntimeEvidence`` requests
+    are rejected on every retry, but exactly one denied decision is recorded."""
+    task = _curated_task()
+    adapter = LiveModelAdapter(
+        task=task, policy=DemoPolicy.PDB_ON_UNCERTAINTY, config=config(),
+        transport=_RuntimeTransitionTransport(), limits=LiveRunLimits(max_model_requests=3, max_retries=2),
+        registry=_test_live_registry(),
+    )
+    adapter._failure_reproduced = True
+    with pytest.raises(LiveModelAdapterError):
+        adapter.next_directive(_gate_recording_snapshot(task, hypothesis=False))
+    assert len(adapter.pdb_gate_decisions) == 1
+    assert adapter.pdb_gate_decisions[0]["allowed"] is False
+    assert adapter.directive_rejections
+
+
+def test_pdb_gate_records_one_decision_per_distinct_lifecycle():
+    """Two distinct ``UNDERSTAND -> RUNTIME_EVIDENCE`` controller steps
+    (different ``model_call_index`` values) each record their own decision."""
+    task = _curated_task()
+    adapter = LiveModelAdapter(
+        task=task, policy=DemoPolicy.PDB_ON_UNCERTAINTY, config=config(),
+        transport=_RuntimeTransitionTransport(), limits=LiveRunLimits(max_model_requests=6, max_retries=0),
+        registry=_test_live_registry(),
+    )
+    adapter._failure_reproduced = True
+    adapter.next_directive(_gate_recording_snapshot(task, model_call_index=4))
+    adapter.next_directive(_gate_recording_snapshot(task, model_call_index=5))
+    assert len(adapter.pdb_gate_decisions) == 2
+    assert all(decision["allowed"] is True for decision in adapter.pdb_gate_decisions)
+
+
+def test_static_baseline_never_records_pdb_gate_decision():
+    """The static-baseline gate policy is DISABLED: even if the model spuriously
+    requests ``RuntimeEvidence``, no gate decision is ever recorded."""
+    task = _curated_task()
+    adapter = LiveModelAdapter(
+        task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(),
+        transport=_RuntimeTransitionTransport(), limits=LiveRunLimits(max_model_requests=3, max_retries=2),
+        registry=_test_live_registry(),
+    )
+    adapter._failure_reproduced = True
+    with pytest.raises(LiveModelAdapterError):
+        adapter.next_directive(_gate_recording_snapshot(task, hypothesis=False))
+    assert adapter.pdb_gate_decisions == []
+
+
+def test_finalize_live_case_campaign_version_selects_verifier_authoritative_terminal():
+    """``campaign_version`` selects the terminal classification: a completed
+    pdb-on-uncertainty case with an executed verifier classifies
+    verifier-authoritatively (RESOLVED/UNRESOLVED) at version >= 4, while the
+    frozen default (version 2) contract keeps PDB_NOT_REACHED."""
+    task = _curated_task()
+    registry = ToolRegistry((
+        ToolSpec(
+            ActionName.RUN_REPRODUCTION,
+            lambda arguments: dict(arguments),
+            lambda _action, _arguments: ToolResult(ObservationStatus.OK, {}, "ok"),
+            argument_contract={
+                "required": ["phase"],
+                "properties": {"phase": {"type": "string", "min_length": 1}},
+                "additional_properties": False,
+            },
+        ),
+        ToolSpec(
+            ActionName.APPLY_PATCH,
+            lambda arguments: dict(arguments),
+            lambda _action, _arguments: ToolResult(ObservationStatus.OK, {"applied": True, "patch_sha256": "c" * 64}, "ok"),
+            argument_contract={
+                "required": ["patch"],
+                "properties": {"patch": {"type": "string", "min_length": 1}},
+                "additional_properties": False,
+            },
+        ),
+    ))
+    patch = "--- a/x.py\n+++ b/x.py\n@@ -1 +1 @@\n-bug\n+fix\n"
+
+    class _CompletedTransport:
+        def __init__(self):
+            self.calls = 0
+            self.directives = [
+                {"kind": "action", "name": "run_reproduction", "arguments": {"phase": "baseline"}},
+                {"kind": "transition", "target_state": "Understand", "reason": "reproduced"},
+                {"kind": "transition", "target_state": "Patch", "reason": "hypothesis ready"},
+                {"kind": "action", "name": "apply_patch", "arguments": {"patch": patch}},
+                {"kind": "transition", "target_state": "Validate", "reason": "patched"},
+                {"kind": "transition", "target_state": "Done", "reason": "verified"},
+            ]
+
+        def request(self, payload, timeout_seconds):
+            directive = self.directives[min(self.calls, len(self.directives) - 1)]
+            self.calls += 1
+            return {"directive": directive, "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}}
+
+    live_adapter = LiveModelAdapter(
+        task=task, policy=DemoPolicy.PDB_ON_UNCERTAINTY, config=config(),
+        transport=_CompletedTransport(), limits=LiveRunLimits(max_model_requests=12, max_controller_steps=12),
+        registry=registry, evaluation_id="e", case_id="c", run_id="r", trajectory_id="r",
+    )
+    controller = DeterministicController(registry, live_adapter, ControllerRunConfig(max_model_calls=12))
+    result = controller.run(ControllerSnapshot(
+        "r", task.task_id, ControllerState.REPRODUCE, 0,
+        ControllerBudgetLimits.from_task_constraints(task.constraints),
+        ControllerBudgetState(), HypothesisLedger(),
+    ))
+    assert result.final_state is ControllerState.DONE
+    context = SimpleNamespace(
+        patch_applied=True, candidate_patch=patch,
+        declared_localization=None, patch_changed_files=[], tool_calls=[], release_pdb=lambda: [],
+    )
+
+    def _verifier(outcome_value: str, f2p_passed: int) -> SimpleNamespace:
+        return SimpleNamespace(
+            status=SimpleNamespace(value="COMPLETED"),
+            outcome=SimpleNamespace(value=outcome_value),
+            baseline=SimpleNamespace(valid=True),
+            patch_application=SimpleNamespace(to_mapping=lambda: {"patch_sha256": "c" * 64}),
+            f2p_passed=f2p_passed, f2p_total=1, p2p_passed=1, p2p_total=1,
+            workspace=SimpleNamespace(cleaned=True, canonical_fixture_unchanged=True),
+        )
+
+    common = dict(
+        task_id=task.task_id, policy=DemoPolicy.PDB_ON_UNCERTAINTY, repetition=1,
+        case_id="c", run_id="r", config=config(), task=task,
+        context=context, workspace=None, result=result, metrics=live_adapter.metrics,
+        live_adapter=live_adapter, started=time.monotonic() - 1.0,
+        interrupted=False, controller_failed=False, diagnostics=[],
+        extra_cleanup=lambda: (True, None), extra_cleanup_owned=False,
+        evidence={"pdb_gate_decisions": [], "directive_rejections": []},
+    )
+    v2_finalized = _finalize_live_case(**common, verify=lambda: _verifier("RESOLVED", 1))
+    assert v2_finalized.status is LiveCaseStatus.PDB_NOT_REACHED
+    v4_finalized = _finalize_live_case(**common, campaign_version=4, verify=lambda: _verifier("RESOLVED", 1))
+    assert v4_finalized.status is LiveCaseStatus.RESOLVED
+    v4_unresolved = _finalize_live_case(**common, campaign_version=4, verify=lambda: _verifier("NO_OP", 0))
+    assert v4_unresolved.status is LiveCaseStatus.UNRESOLVED
