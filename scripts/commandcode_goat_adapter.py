@@ -83,7 +83,8 @@ MAX_TIMEOUT_SECONDS = 3600.0
 DEFAULT_MAX_LOGICAL_MODEL_CALLS = 64
 DEFAULT_MAX_TURNS = 4
 #: The CLI result line echoes the whole conversation (prompt included), so
-#: the raw capture bound must exceed the request ceiling comfortably.
+#: the raw RESPONSE capture bound is sized generously.  Request size
+#: itself is provider-owned and never gated.
 MAX_RAW_OUTPUT_BYTES = 512 * 1024
 #: The model answer itself is one JSON directive object; anything larger is
 #: a runaway completion, not a directive.

@@ -18,6 +18,9 @@ deprecated provenance-only constants, never enforced):
   failure at Level-32 Model Request #8);
 * 1,048,576 bytes — ``MAX_MODEL_RESPONSE_BYTES`` misapplied as a request
   gate in the live adapter;
+* 4,194,304 bytes — ``_MAX_REQUEST_BYTES`` request-body ceiling in the
+  common provider HTTP client (``provider_http._body_bytes``), removed by
+  the Candidate-50 repair;
 * 30,000 characters — native command-line preflight on CLI-arg routes
   (physical representability is now judged by the host OS at process
   creation, whose failures surface as launch failures, never as policy).
@@ -87,6 +90,7 @@ HISTORICAL_PUBLIC_EVIDENCE_BUDGET = 20_000
 HISTORICAL_LOCAL_APP_CEILING = 25_000
 HISTORICAL_SHARED_SHAPING_CEILING = 32_768
 HISTORICAL_RESPONSE_BOUND_AS_REQUEST_GATE = 1_048_576
+HISTORICAL_PROVIDER_HTTP_REQUEST_BOUND = 4 * 1024 * 1024
 ABOVE_ALL_OLD_CEILINGS = 40_000
 
 
@@ -165,6 +169,12 @@ def test_historical_ceiling_values_are_exact() -> None:
     from agentic_debugger.evaluation.live import MAX_MODEL_RESPONSE_BYTES
 
     assert MAX_MODEL_RESPONSE_BYTES == 1_048_576
+    # The common-HTTP request-body ceiling is gone entirely (Candidate 50):
+    # no request-size bound may remain in provider_http.
+    from agentic_debugger.application import provider_http
+
+    assert HISTORICAL_PROVIDER_HTTP_REQUEST_BOUND == 4 * 1024 * 1024
+    assert not hasattr(provider_http, "_MAX_REQUEST_BYTES")
 
 
 def test_large_request_reaches_transport_once_complete_and_continues() -> None:
@@ -401,28 +411,165 @@ def test_opencode_transport_message_and_command_have_no_request_ceiling() -> Non
     assert command[command.index("run") + 1] == message
 
 
-def test_direct_api_provider_413_surfaces_provider_size_rejection(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A provider-originated HTTP 413 normalizes to the external
-    ``request_too_large`` taxonomy with provider provenance."""
-    from agentic_debugger.application.provider_http import ProviderHttpError
+def test_provider_http_body_above_old_4mib_reaches_provider_complete() -> None:
+    """Candidate-50 repair: a serialized POST body larger than the removed
+    historical 4 MiB common-HTTP ceiling is handed to the engine complete.
 
-    def _raise_413(*args, **kwargs):
-        raise ProviderHttpError(
-            "provider returned HTTP 413: payload too large", kind="http_status", status=413
+    Uses the REAL ``provider_http.request_json()`` path against a local
+    loopback fake HTTP endpoint.  Fails on Candidate 49 with
+    ``request payload exceeded the transport bound`` and zero provider
+    hits.
+    """
+    import sys as _sys
+
+    _unit_dir = str(REPO_ROOT / "tests" / "unit")
+    if _unit_dir not in _sys.path:
+        _sys.path.insert(0, _unit_dir)
+    from fake_provider_server import FakeProviderServer
+
+    from agentic_debugger.application.provider_http import request_json
+
+    pad = "x" * (HISTORICAL_PROVIDER_HTTP_REQUEST_BOUND + 1024)
+    with FakeProviderServer(lambda request: (200, {"ok": True})) as server:
+        payload = request_json(
+            "POST",
+            server.base_url + "/chat/completions",
+            engine="stdlib",
+            json_payload={"model": "m", "input": pad},
+            timeout_seconds=30,
         )
+        assert payload == {"ok": True}
+        # 1. body > 4,194,304 bytes; 2. exactly one provider hit;
+        # 3-4. complete and untruncated; 5. success when accepted.
+        assert len(server.requests) == 1
+        body = json.loads(server.requests[0]["body"].decode("utf-8"))
+        assert body["input"] == pad
+        assert len(server.requests[0]["body"]) > HISTORICAL_PROVIDER_HTTP_REQUEST_BOUND
 
-    monkeypatch.setattr(provider_direct_api_adapter, "request_json", _raise_413)
-    with pytest.raises(provider_direct_api_adapter.ProviderDirectApiError) as info:
-        provider_direct_api_adapter.perform_inference(
+
+@pytest.fixture
+def _commandcode_direct_provider(tmp_path, monkeypatch: pytest.MonkeyPatch):
+    """Isolated Direct API provider setup reusing the repository's fake
+    provider machinery (config store + session credential channel)."""
+    from agentic_debugger.application import provider_connections as pc
+
+    monkeypatch.setenv(
+        "AGENTIC_DEBUGGER_PROVIDER_CONFIG_PATH",
+        str(tmp_path / "provider-configurations.json"),
+    )
+    pc.clear_all_session_keys()
+    pc.add_provider_config(
+        name="CommandCode GOAT",
+        base_url="https://api.commandcode.ai/provider/v1",
+        api_format=pc.PROTOCOL_CHAT_COMPLETIONS,
+        provider_id="commandcode_goat",
+        transport_profile=pc.TRANSPORT_COMMANDCODE_GOAT,
+    )
+    monkeypatch.setenv(
+        "AGENTIC_DEBUGGER_COMMANDCODE_GOAT_API_KEY",
+        "adapter-test-credential-not-real",
+    )
+    yield pc
+    pc.clear_all_session_keys()
+
+
+_DIRECTIVE_JSON = (
+    '{"kind": "action", "name": "get_source_window", '
+    '"arguments": {"path": "pkg/mod.py", "start_line": 1, "end_line": 40}}'
+)
+
+
+def _chat_completion(content: str) -> dict:
+    return {
+        "choices": [{"message": {"role": "assistant", "content": content}}],
+        "usage": {"prompt_tokens": 11, "completion_tokens": 7, "total_tokens": 18},
+    }
+
+
+def test_direct_api_inference_above_old_4mib_reaches_provider_complete(
+    _commandcode_direct_provider,
+) -> None:
+    """Candidate-50 repair end to end on the real model path:
+
+    controller/adapter-shaped request → real
+    ``provider_direct_api_adapter.perform_inference()`` → real
+    ``provider_http.request_json()`` → loopback fake HTTP provider.
+
+    ``request_json`` itself is never monkeypatched.  Fails on
+    Candidate 49 with ``request payload exceeded the transport bound``
+    and zero provider hits.
+    """
+    import sys as _sys
+
+    _unit_dir = str(REPO_ROOT / "tests" / "unit")
+    if _unit_dir not in _sys.path:
+        _sys.path.insert(0, _unit_dir)
+    from fake_provider_server import FakeProviderServer
+
+    pad = "y" * (HISTORICAL_PROVIDER_HTTP_REQUEST_BOUND + 65_536)
+    with FakeProviderServer(
+        lambda request: (200, _chat_completion(_DIRECTIVE_JSON))
+    ) as server:
+        text, usage = provider_direct_api_adapter.perform_inference(
             "commandcode_goat",
             "deepseek/deepseek-v4-flash",
             "chat_completions",
             system_prompt="system",
-            user_prompt="user",
-            timeout_seconds=5.0,
+            user_prompt=pad,
+            timeout_seconds=30.0,
             engine="stdlib",
-            base_url="https://127.0.0.1:9/",
-            auth_mode="none",
+            base_url=server.base_url,
+            auth_mode="bearer",
         )
-    assert info.value.kind == "request_too_large"
-    assert "Provider rejected request as too large (HTTP 413)" in str(info.value)
+        assert json.loads(text)["name"] == "get_source_window"
+        assert usage == {
+            "prompt_tokens": 11,
+            "completion_tokens": 7,
+            "total_tokens": 18,
+        }
+        assert len(server.requests) == 1
+        body = json.loads(server.requests[0]["body"].decode("utf-8"))
+        content = body["messages"][0]["content"]
+        assert pad in content
+        assert len(server.requests[0]["body"]) > HISTORICAL_PROVIDER_HTTP_REQUEST_BOUND
+
+
+def test_direct_api_provider_413_above_old_bound_surfaces_external(
+    _commandcode_direct_provider,
+) -> None:
+    """Same above-4-MiB shape, but the fake external endpoint deliberately
+    returns HTTP 413: the provider WAS contacted (exactly one hit) and its
+    rejection surfaces as external ``request_too_large`` truth.
+
+    This distinguishes Candidate-49 behavior (internal reject,
+    provider_hits == 0) from Candidate-50 behavior (provider_hits == 1,
+    provider 413, external request_too_large).
+    """
+    import sys as _sys
+
+    _unit_dir = str(REPO_ROOT / "tests" / "unit")
+    if _unit_dir not in _sys.path:
+        _sys.path.insert(0, _unit_dir)
+    from fake_provider_server import FakeProviderServer
+
+    pad = "y" * (HISTORICAL_PROVIDER_HTTP_REQUEST_BOUND + 65_536)
+    with FakeProviderServer(
+        lambda request: (413, {"error": {"message": "payload too large"}})
+    ) as server:
+        with pytest.raises(
+            provider_direct_api_adapter.ProviderDirectApiError
+        ) as info:
+            provider_direct_api_adapter.perform_inference(
+                "commandcode_goat",
+                "deepseek/deepseek-v4-flash",
+                "chat_completions",
+                system_prompt="system",
+                user_prompt=pad,
+                timeout_seconds=30.0,
+                engine="stdlib",
+                base_url=server.base_url,
+                auth_mode="bearer",
+            )
+        assert len(server.requests) == 1
+        assert info.value.kind == "request_too_large"
+        assert "Provider rejected request as too large (HTTP 413)" in str(info.value)

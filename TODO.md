@@ -6,6 +6,7 @@
 **REPOSITORY-STATE HYGIENE CLOSEOUT COMPLETE (2026-09-07).**
 **POST-V2 SESSION TOKEN USAGE TELEMETRY V1 (TASK 34) COMPLETE (2026-09-09).**
 **POST-V2 GLOBAL CLI LAUNCH ALIAS V1 (TASK 41) COMPLETE (2026-09-09).**
+**POST-V2 PROVIDER-OWNED MODEL REQUEST SIZE V1 (TASK 43) COMPLETE (2026-09-10).**
 
 Release tag `v0.1.0` exists at `d01f7a5`; cycle 1 closed at
 `docs/project-closeout.md`. The V2 architecture campaign (Candidates 06–30)
@@ -20,7 +21,10 @@ The post-V2 repository-wide documentation and project-state hygiene closeout
 Alias v1 (Task 41) is complete (2026-09-09) as an additive product usability
 capability. Universal Model Execution Eligibility v1 (Task 42) is complete
 (2026-09-09) separating execution eligibility from scientific qualification.
-No subsequent implementation priority selected. No V3 or
+Provider-Owned Model Request Size v1 (Task 43) is complete (2026-09-10) as a
+post-V2 runtime policy correction: model request size is provider-owned
+repo-wide and no Agentic-Debugger-owned request-size ceiling remains on any
+execution route. No subsequent implementation priority selected. No V3 or
 new architecture campaign has been opened.
 
 ## V2 architecture outcomes (completed 2026-09-07)
@@ -131,10 +135,18 @@ failure visibility, and retry.
   3600s, 1 retry, 2 directive repairs); preserved frozen `SourceKind.LEVEL32_OPERATOR` for qualified
   Ollama Cloud models; preserved fail-closed behavior for concrete runtime blockers (missing credentials,
   offline providers).
+- [x] Task 43 — Provider-Owned Model Request Size v1 (2026-09-10):
+  Repository-wide hard runtime rule: model request size is provider-owned. Removed every
+  Agentic-Debugger-owned model-request size ceiling on all execution routes (live-adapter
+  request gates, shared prompt-shaping ceiling, OpenCode/CommandCode/Ollama/AGY/direct-API
+  stdin and shaping ceilings, common provider-HTTP request-body ceiling, QuixBugs runner
+  pre-transport gates, CLI-arg command-line preflights); provider-originated size/context
+  rejections surface truthfully as provider failures; historical values retained as
+  unenforced provenance only; count/step/retry/time/credential/tool-safety ceilings unchanged.
 
 ## Active work
 
-No subsequent implementation priority selected.
+After Task 43, no subsequent implementation priority is selected.
 No V3 or new architecture campaign has been opened.
 
 ## Product backlog

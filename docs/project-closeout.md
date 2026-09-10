@@ -1,9 +1,9 @@
-# Agentic Debugging — Project Closeout (current, 2026-09-09)
+# Agentic Debugging — Project Closeout (current, 2026-09-10)
 
 **Project:** Agentic Debugger research prototype
 **Owner:** Repository owner
 **Execution control:** Repository owner
-**Document date:** 2026-09-09 (previous reconciliation: 2026-09-07)
+**Document date:** 2026-09-10 (previous reconciliation: 2026-09-09)
 **V2 architecture campaign closeout baseline:** `e86ac2d25beb5114e9a3c805f6bc468f77905deb`
 (earlier historical baselines: 2026-08-28 release tag `v0.1.0` at `d01f7a5`,
 2026-08-27 `8fbea883212d3fe4ad6434a366ca0898fbea68f1`; current repository HEAD
@@ -11,6 +11,7 @@ intentionally not embedded; post-V2 documentation hygiene closeout complete;
 Session Token Usage Telemetry v1 (Task 34) COMPLETE (2026-09-09);
 Global CLI Launch Alias v1 (Task 41) COMPLETE (2026-09-09);
 Universal Model Execution Eligibility v1 (Task 42) COMPLETE (2026-09-09);
+Provider-Owned Model Request Size v1 (Task 43) COMPLETE (2026-09-10);
 no subsequent implementation priority selected.)
 **Supersedes:** `outdated/docs-archive/status/project-closeout-2026-08-11.md` (the
 2026-08-11 S9 bounded-negative closeout, preserved unchanged as a historical
@@ -21,6 +22,14 @@ This is the single current reviewer/handoff status document. The historical
 technical narrative covering R1–R6 through 2026-08-13 is `docs/final-report.md`; the
 2026-08-11 scientific snapshot is archived verbatim at
 `outdated/docs-archive/reports/final-report-2026-08-11.md`.
+
+**2026-09-10 post-V2 capability update — Task 43 Provider-Owned Model Request Size v1:**
+Provider-Owned Model Request Size v1 (Task 43) COMPLETE (2026-09-10); no subsequent implementation priority selected.
+Task 43 established the repository-wide hard runtime rule that model request size is provider-owned on `fix/provider-owned-request-size-v1`:
+- **Hard Runtime Rule:** "Agentic Debugger must never reject, truncate, compact, shorten, or otherwise alter a model request solely because Agentic Debugger considers the request too large. Request-size authority belongs to the selected model/provider/transport."
+- **Removed internal ceilings:** live-adapter request gates (incl. the RAG public-request gate), the shared prompt-shaping ceiling, OpenCode/CommandCode/Ollama/AGY/direct-API stdin and shaping ceilings, the common provider-HTTP request-body ceiling on the Direct API path, QuixBugs runner pre-transport gates, and CLI-arg command-line preflights. Historical values retained as unenforced provenance only.
+- **Provider truth preserved:** provider-originated size/context rejections (e.g. HTTP 413 → external `request_too_large`) surface truthfully as provider failures; response capture, display/evidence, security, directive-response, retrieval/history, and count/step/retry/time ceilings are unchanged.
+This is a post-V2 runtime policy correction, not V3 or a new architecture campaign. No subsequent implementation priority has been selected by repository authority.
 
 **2026-09-09 post-V2 capability update — Task 42 Universal Model Execution Eligibility v1:**
 Universal Model Execution Eligibility v1 (Task 42) COMPLETE (2026-09-09); no subsequent implementation priority selected.

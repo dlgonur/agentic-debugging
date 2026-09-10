@@ -98,7 +98,8 @@
   Removed every Agentic-Debugger-owned model-request size ceiling on all execution
   routes (live-adapter request gates incl. the RAG public-request gate, the shared
   prompt-shaping ceiling, OpenCode/CommandCode/Ollama/AGY/direct-API stdin and
-  shaping ceilings, QuixBugs runner pre-transport gates, CLI-arg command-line
+  shaping ceilings, the common provider-HTTP request-body ceiling on the Direct
+  API path, QuixBugs runner pre-transport gates, CLI-arg command-line
   preflights). The intended request is handed to the configured transport complete
   at whatever size the controller produced; provider-originated size/context
   rejections (e.g. HTTP 413) surface truthfully as provider failures. Historical

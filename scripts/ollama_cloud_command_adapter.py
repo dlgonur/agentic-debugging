@@ -498,6 +498,13 @@ def transport_config_fingerprint(spec: CloudModelSpec) -> str:
     Covers every execution parameter that can materially change transport
     behavior.  Two treatments whose fingerprints differ must not silently
     reuse the same treatment identity.
+
+    Historical note: ``max_public_request_bytes`` and
+    ``max_stdin_request_bytes`` remain in this payload SOLELY as legacy
+    fingerprint/provenance components preserving frozen scientific
+    treatment identities.  They are NOT execution constraints — model
+    request size is provider-owned (Task 43) and neither value is
+    enforced anywhere on the request path.
     """
 
     payload = {

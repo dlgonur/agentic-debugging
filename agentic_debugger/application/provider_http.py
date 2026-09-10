@@ -1,4 +1,4 @@
-"""Bounded direct-HTTP client for the built-in provider connections.
+"""Common direct-HTTP client for the built-in provider connections.
 
 One module owns every provider HTTP boundary so the safety rules are
 stated (and testable) exactly once:
@@ -7,8 +7,10 @@ stated (and testable) exactly once:
   plain ``http`` is accepted only for loopback addresses so local fake
   provider servers can exercise the real code path in tests;
 - explicit timeout on every request; a request never outlives it;
-- bounded request payload and bounded response capture: an oversized
-  response is a typed failure, never a silent truncation;
+- request BODY size is provider-owned, response capture remains bounded:
+  the complete serialized body is handed to the selected HTTP engine at
+  whatever size the caller produced, while an oversized response is a
+  typed failure, never a silent truncation;
 - exactly ONE request per call: no hidden provider retries and no
   engine re-issuing; the caller decides the engine deterministically
   before the request;
@@ -77,10 +79,11 @@ ANTHROPIC_VERSION_HEADER = "2023-06-01"
 #: runaway responses.
 DEFAULT_MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 
-#: Hard ceilings for caller-controlled transport bounds.  Current provider
-#: requests and captures use smaller limits; these caps keep the common HTTP
-#: boundary bounded even if a future caller supplies an unsafe value.
-_MAX_REQUEST_BYTES = 4 * 1024 * 1024
+#: Hard ceiling for caller-controlled RESPONSE capture bounds.  Response
+#: capture uses smaller limits; this cap keeps the common HTTP boundary
+#: bounded even if a future caller supplies an unsafe value.  There is
+#: deliberately no request-body counterpart: request BODY size is
+#: provider-owned (Task 43) and is never gated here.
 _MAX_RESPONSE_BYTES = 16 * 1024 * 1024
 
 #: Bounded diagnostic snippet carried by sanitized provider errors.
@@ -227,6 +230,12 @@ def _validate_url(url: str) -> None:
 def _body_bytes(
     json_payload: Optional[Mapping[str, Any]], method: str
 ) -> Optional[bytes]:
+    """Serialize the request body without any size gate.
+
+    Request BODY size is provider-owned (Task 43): the complete
+    serialized body is always returned, never truncated or rejected for
+    size.  Only the wire contract is enforced (POST + strict JSON).
+    """
     if json_payload is None:
         return None
     if method != "POST":
@@ -234,18 +243,13 @@ def _body_bytes(
             "a request body requires the POST method", kind="invalid_request"
         )
     try:
-        encoded = json.dumps(
+        return json.dumps(
             json_payload, ensure_ascii=False, allow_nan=False, sort_keys=True
         ).encode("utf-8")
     except (TypeError, ValueError, UnicodeError) as exc:
         raise ProviderHttpError(
             f"request payload could not be serialized: {exc}", kind="invalid_request"
         ) from None
-    if len(encoded) > _MAX_REQUEST_BYTES:
-        raise ProviderHttpError(
-            "request payload exceeded the transport bound", kind="invalid_request"
-        )
-    return encoded
 
 
 def _is_tls_block(body: str) -> bool:
@@ -569,7 +573,12 @@ def request_json(
     tls_signature_blocked: bool = False,
     auth_mode: str = AUTH_BEARER,
 ) -> Mapping[str, Any]:
-    """One bounded JSON request; exactly one network attempt.
+    """One JSON request with bounded response capture; exactly one network attempt.
+
+    Request BODY size is provider-owned: the complete serialized body is
+    handed to the selected engine at whatever size the caller produced.  A
+    provider that rejects an oversized body (e.g. HTTP 413) surfaces a
+    provider/transport failure truthfully.
 
     ``engine`` selects the transport deterministically before the
     request: ``"stdlib"`` (urllib), ``"curl"`` (OS curl client), or

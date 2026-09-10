@@ -1,9 +1,10 @@
-"""Unit gates for the bounded provider HTTP boundary.
+"""Unit gates for the provider HTTP boundary.
 
 Covers URL validation (explicit HTTPS outside loopback), bounded
 response capture, typed sanitized failures, credential-safe error text,
-and the exactly-one-request (zero hidden retry) contract for both
-engines against a local fake provider server.
+provider-owned request-body size (no internal ceiling: the complete
+body is handed to the engine), and the exactly-one-request (zero hidden
+retry) contract for both engines against a local fake provider server.
 """
 
 from __future__ import annotations
@@ -64,15 +65,23 @@ class TestUrlValidation:
             )
         assert excinfo.value.kind == "invalid_request"
 
-    def test_request_payload_is_bounded_before_network(self) -> None:
-        with pytest.raises(ProviderHttpError) as excinfo:
-            request_json(
+    def test_request_payload_has_no_size_ceiling(self) -> None:
+        """Task 43 (provider-owned request size): a body larger than the
+        removed historical 4 MiB transport bound is handed to the engine
+        complete — exactly one provider hit, full payload, success."""
+        pad = "x" * (4 * 1024 * 1024 + 1024)
+        with FakeProviderServer(lambda request: (200, {"ok": True})) as server:
+            payload = request_json(
                 "POST",
-                "https://example.com/chat/completions",
+                server.base_url + "/chat/completions",
                 engine="stdlib",
-                json_payload={"input": "x" * (4 * 1024 * 1024)},
+                json_payload={"input": pad},
+                timeout_seconds=30,
             )
-        assert excinfo.value.kind == "invalid_request"
+            assert payload == {"ok": True}
+            assert len(server.requests) == 1
+            body = json.loads(server.requests[0]["body"].decode("utf-8"))
+            assert body["input"] == pad
 
     def test_credential_control_characters_rejected(self) -> None:
         with pytest.raises(ProviderHttpError) as excinfo:

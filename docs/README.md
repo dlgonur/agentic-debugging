@@ -10,7 +10,7 @@ historical statements.
 
 | File | Purpose |
 |---|---|
-| `project-closeout.md` | **Current status authority** through V2 architecture, Task 31 hygiene, Session Token Usage Telemetry v1 (Task 34), Global CLI Launch Alias v1 (Task 41), and Universal Model Execution Eligibility v1 (Task 42) (2026-09-09) |
+| `project-closeout.md` | **Current status authority** through V2 architecture, Task 31 hygiene, Session Token Usage Telemetry v1 (Task 34), Global CLI Launch Alias v1 (Task 41), Universal Model Execution Eligibility v1 (Task 42), and Provider-Owned Model Request Size v1 (Task 43) (2026-09-10) |
 | `release-closeout-2026-08-28.md` | Concise release, validation, and negative-boundary record |
 | `pre-release-hardening-2026-08-27.md` | Durable PRE-RELEASE-HARDENING-01 closeout record (feature-freeze ready at `8fbea88`; PRH-D01..D09 dispositions) |
 | `results-index.md` | Concise map from accepted conclusions to surviving evidence |
