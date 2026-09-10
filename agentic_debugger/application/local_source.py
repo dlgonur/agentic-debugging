@@ -149,7 +149,7 @@ def run_local_session(
     model_factory: Callable[[DemoToolContext, Any], Any],
     verifier_patch: Callable[[DemoToolContext, ControllerRunResult], Optional[str]],
     fail_on_controller_failure: bool,
-    max_model_calls: int,
+    max_model_calls: int | None,
     registry_pdb_policy: Optional[PdbPolicy] = None,
     fixture_dir: Optional[Path] = None,
     scenario: Optional[DemoScenario] = None,
@@ -161,6 +161,12 @@ def run_local_session(
     directory exists).  Every event flows through ``ctx.emitter`` (the
     session's single shared emission authority); cancellation honors
     ``ctx.token`` at every safe boundary.
+
+    Task 44: ``max_model_calls=None`` means unbounded — the controller
+    serves directives for as long as the protocol permits with no
+    total-session progression ceiling.  An explicit finite value is
+    honored only for explicit callers (deterministic harnesses/frozen
+    treatments); generic application sources always pass ``None``.
     """
     if ctx.emitter is None:
         raise ScenarioInputError("local execution source requires the shared emitter")

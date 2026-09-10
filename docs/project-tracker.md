@@ -105,6 +105,15 @@
   rejections (e.g. HTTP 413) surface truthfully as provider failures. Historical
   ceiling values are retained as unenforced provenance only. Model request COUNT,
   step, retry, time, credential, and tool-safety ceilings are unchanged.
+- [x] **Task 44 — Unbounded Session Progress v1 (2026-09-10):**
+  Established the repo-wide runtime rule: interactive/configured sessions have
+  no Agentic-Debugger-owned total model-request, directive, or controller-step
+  execution ceiling; progress counters are telemetry only. Removed count-based
+  termination authority on all generic routes (controller/adapters unbounded;
+  provider independence via the common authority); preserved retry/repair,
+  per-action tool, time, response, security, and frozen-scientific bounds with
+  the Level-32 treatment envelope (40) isolated to official runs. STEP UI
+  renders `STEP N` with no false remaining budget.
 
 ## 2026-08-29 goal-mode UI work
 

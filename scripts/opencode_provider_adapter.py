@@ -90,6 +90,10 @@ def read_request(stdin_stream: Any) -> Mapping[str, Any]:
 
 
 def validate_logical_call_index(request: Mapping[str, Any], maximum: int) -> None:
+    # Task 44: ``maximum == 0`` means unbounded (no total-session
+    # progression ceiling); finite values remain for explicit callers only.
+    if type(maximum) is not int or isinstance(maximum, bool) or not 0 <= maximum <= 512:
+        raise OpenCodeProviderAdapterError("logical call ceiling is invalid", kind="configuration")
     # The frozen campaign adapter validated a 1-based micro-run envelope;
     # the live product controller uses zero-based model-call indices
     # (first request 0, envelope 0..N-1), same as the accepted Ollama
@@ -100,6 +104,13 @@ def validate_logical_call_index(request: Mapping[str, Any], maximum: int) -> Non
             "request is missing the protocol envelope", kind="invalid_request"
         )
     index = protocol.get("logical_model_call_index")
+    if maximum == 0:
+        if type(index) is not int or isinstance(index, bool) or index < 0:
+            raise OpenCodeProviderAdapterError(
+                "logical_model_call_index must be a non-negative integer",
+                kind="invalid_request",
+            )
+        return
     if type(index) is not int or isinstance(index, bool) or not 0 <= index < maximum:
         if type(index) is int and not isinstance(index, bool) and index >= maximum:
             raise OpenCodeProviderAdapterError(
@@ -216,7 +227,8 @@ def build_opencode_live_config(
     from agentic_debugger.evaluation.live import LiveModelConfig as _LiveModelConfig
 
     model = validate_model_id(model_id)
-    if type(logical_call_ceiling) is not int or isinstance(logical_call_ceiling, bool) or not 1 <= logical_call_ceiling <= 512:
+    # Task 44: 0 means unbounded interactive execution.
+    if type(logical_call_ceiling) is not int or isinstance(logical_call_ceiling, bool) or not 0 <= logical_call_ceiling <= 512:
         raise OpenCodeProviderAdapterError("logical call ceiling is invalid", kind="configuration")
     request_timeout = (
         DEFAULT_TIMEOUT_SECONDS if request_timeout_seconds is None else float(request_timeout_seconds)

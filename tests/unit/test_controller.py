@@ -92,7 +92,13 @@ def test_constants_config_and_stop_reasons_are_exact():
         "model_call_limit", "controller_error",
     ]
     assert len(ControllerStopReason.__members__) == 9
-    assert ControllerRunConfig() == ControllerRunConfig(DEFAULT_MAX_MODEL_CALLS)
+    # Task 44: the default is unbounded (None = no total-session
+    # progression ceiling); the historical 64 remains as a provenance
+    # constant only.  Explicit finite values are still honored for
+    # explicit callers (tests/frozen treatments).
+    assert ControllerRunConfig() == ControllerRunConfig(None)
+    assert ControllerRunConfig().max_model_calls is None
+    ControllerRunConfig(None)
     ControllerRunConfig(1)
     ControllerRunConfig(MAX_CONTROLLER_MODEL_CALLS)
     for value in (0, -1, MAX_CONTROLLER_MODEL_CALLS + 1, True, False):
@@ -105,16 +111,17 @@ def test_default_config_records_are_isolated_and_canonical_limits_are_retained()
     first = DeterministicController(ToolRegistry(), RecordingAdapter([directive]))
     second = DeterministicController(ToolRegistry(), RecordingAdapter([directive]))
     assert first.config is not second.config
-    assert first.config.max_model_calls == DEFAULT_MAX_MODEL_CALLS
-    assert second.config.max_model_calls == DEFAULT_MAX_MODEL_CALLS
+    # Task 44: generic default is unbounded (None).
+    assert first.config.max_model_calls is None
+    assert second.config.max_model_calls is None
 
     object.__setattr__(first.config, "max_model_calls", 1)
     third = DeterministicController(ToolRegistry(), RecordingAdapter([directive]))
-    assert second.config.max_model_calls == DEFAULT_MAX_MODEL_CALLS
-    assert third.config.max_model_calls == DEFAULT_MAX_MODEL_CALLS
-    assert first._canonical_max_model_calls == DEFAULT_MAX_MODEL_CALLS
-    assert second._canonical_max_model_calls == DEFAULT_MAX_MODEL_CALLS
-    assert third._canonical_max_model_calls == DEFAULT_MAX_MODEL_CALLS
+    assert second.config.max_model_calls is None
+    assert third.config.max_model_calls is None
+    assert first._canonical_max_model_calls is None
+    assert second._canonical_max_model_calls is None
+    assert third._canonical_max_model_calls is None
 
 
 def test_controller_construction_is_pure_and_canonicalizes_registry():

@@ -116,7 +116,20 @@ class SessionId:
 
 @dataclass(frozen=True)
 class SessionBudgets:
-    """Visible controller/model/time budgets of a new session."""
+    """Visible controller/model/time budgets of a new session.
+
+    Task 44 (Unbounded Session Progress v1): ``max_model_calls`` and
+    ``max_controller_steps`` are telemetry/provenance only for generic
+    interactive/configured/Local Project execution — the runtime never
+    terminates an otherwise valid session merely because an accumulated
+    request/directive/step counter reaches an application-defined total.
+    Generic sources pass unbounded (``None``/``0``) and ignore these
+    fields for execution authority.  An explicit finite value is honored
+    only by explicit callers (frozen scientific treatments, operator
+    harnesses) that intentionally request a bound.  Time dimensions
+    (``max_elapsed_seconds``) remain execution authority where enforced
+    by the worker cancellation token.
+    """
 
     max_model_calls: Optional[int] = None
     max_controller_steps: Optional[int] = None

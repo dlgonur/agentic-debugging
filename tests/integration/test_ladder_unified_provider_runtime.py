@@ -572,16 +572,18 @@ def test_configured_direct_api_uses_ladder_contract_budgets(tmp_path: Path, monk
 
     assert len(captured_runs) == 1
     assert captured_runs[0]["task_id"] == LADDER_LEVEL_18_TASK
-    assert captured_runs[0]["max_model_calls"] == 24
+    # Task 44: interactive ladder execution is unbounded (None = no
+    # total-session controller-step ceiling; counters are telemetry only).
+    assert captured_runs[0]["max_model_calls"] is None
     assert len(captured_limits) == 1
-    assert captured_limits[0].max_model_requests == 24
-    assert captured_limits[0].max_controller_steps == 24
+    assert captured_limits[0].max_model_requests is None
+    assert captured_limits[0].max_controller_steps is None
     assert captured_limits[0].max_model_phase_seconds == 3600
     assert captured_limits[0].max_retries == 0
     # Interactive unqualified provider ladder run: bounded directive
     # repairs are explicit, while provider retries remain zero.
     assert captured_limits[0].max_directive_repairs == INTERACTIVE_LADDER_DIRECTIVE_REPAIRS == 2
-    assert resolved_ceilings["commandcode_goat:deepseek/deepseek-v4-flash"] == 24
+    assert resolved_ceilings["commandcode_goat:deepseek/deepseek-v4-flash"] == 0
 
     # 2. Ordinary curated task: configured source chooses 64 ceiling, 64/64/None/2 limits
     j_curated = SessionEventJournal(
@@ -601,13 +603,14 @@ def test_configured_direct_api_uses_ladder_contract_budgets(tmp_path: Path, monk
 
     assert len(captured_runs) == 2
     assert captured_runs[1]["task_id"] == "curated-off-by-one-002"
-    assert captured_runs[1]["max_model_calls"] == 64
+    # Task 44: generic curated execution is unbounded.
+    assert captured_runs[1]["max_model_calls"] is None
     assert len(captured_limits) == 2
-    assert captured_limits[1].max_model_requests == 64
-    assert captured_limits[1].max_controller_steps == 64
+    assert captured_limits[1].max_model_requests is None
+    assert captured_limits[1].max_controller_steps is None
     assert captured_limits[1].max_retries == 2
     assert captured_limits[1].max_directive_repairs == 2
-    assert resolved_ceilings["commandcode_goat:zai-org/glm-5.2"] == 64
+    assert resolved_ceilings["commandcode_goat:zai-org/glm-5.2"] == 0
 
 
 def test_level32_configured_model_accepted_at_app_boundary(
@@ -760,14 +763,16 @@ def test_configured_source_accepts_level32_task(
 
     assert len(captured_runs) == 1
     assert captured_runs[0]["task_id"] == LEVEL32_TASK_ID
-    assert captured_runs[0]["max_model_calls"] == 25
+    # Task 44: interactive Level-32 execution is unbounded (None/0);
+    # historical 25/25 values are provenance only.
+    assert captured_runs[0]["max_model_calls"] is None
     assert len(captured_limits) == 1
-    assert captured_limits[0].max_model_requests == 25
-    assert captured_limits[0].max_controller_steps == 25
+    assert captured_limits[0].max_model_requests is None
+    assert captured_limits[0].max_controller_steps is None
     assert captured_limits[0].max_model_phase_seconds == 3600
     assert captured_limits[0].max_retries == 1
     assert captured_limits[0].max_directive_repairs == 2
-    assert resolved_ceilings["commandcode_goat:deepseek/deepseek-v4-flash"] == 25
+    assert resolved_ceilings["commandcode_goat:deepseek/deepseek-v4-flash"] == 0
 
 
 def test_lower_ladder_contract_load_fails_closed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

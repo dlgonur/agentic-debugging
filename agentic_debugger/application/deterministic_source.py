@@ -137,6 +137,9 @@ def run_deterministic_session(
         return demo_context.patch
 
     try:
+        # Task 44: deterministic offline execution is unbounded like every
+        # other generic session (the scripted demonstration model ends via
+        # its DONE directive, never via a total-session count ceiling).
         run_local_session(
             ctx,
             task_id=task_id,
@@ -145,7 +148,7 @@ def run_deterministic_session(
             model_factory=_model_factory,
             verifier_patch=_verifier_patch,
             fail_on_controller_failure=False,
-            max_model_calls=DEMO_MAX_MODEL_CALLS,
+            max_model_calls=None,
         )
     except LocalSourceError as exc:
         raise DeterministicSourceError(str(exc)) from exc

@@ -104,9 +104,21 @@ _MAX_POLICY_CHARS = 64
 #: A safe configuration fingerprint is a SHA-256 hex digest.
 _FINGERPRINT_RE = re.compile(r"[0-9a-f]{64}")
 
+#: Task 44 (Unbounded Session Progress v1): interactive/configured
+#: sessions have NO Agentic-Debugger-owned total model-request /
+#: directive / controller-step execution ceiling.  Progress counters are
+#: telemetry only.  The historical finite defaults below are retained as
+#: provenance constants for interpreting pre-Task-44 evidence and for
+#: explicit frozen/operator callers only; generic execution passes
+#: ``None`` (LiveRunLimits/controller) and ``0`` (provider-adapter
+#: logical ceiling = unbounded) and never consults these values.
 _DEFAULT_MAX_MODEL_REQUESTS = 64
 _DEFAULT_MAX_CONTROLLER_STEPS = 64
 _DEFAULT_MAX_RETRIES = 2
+
+#: Unbounded sentinel for the provider-adapter logical ceiling
+#: (``--max-logical-model-calls 0`` = no upper-bound termination).
+_UNBOUNDED_LOGICAL_CEILING = 0
 
 
 class ConfiguredSourceError(LocalSourceError):
@@ -242,6 +254,11 @@ def _resolve_registry_model(
     ``model.configured`` emission or executable launch.  The fingerprint
     is the deterministic configuration identity of the provider/model
     pair (the registry has no file-backed configuration to hash).
+
+    Task 44: ``logical_call_ceiling=None`` (the generic default) means
+    unbounded (``0`` to the provider adapter = no upper-bound
+    termination).  An explicit finite ceiling is honored only for
+    explicit callers (frozen/operator).
     """
     import hashlib
 
@@ -251,7 +268,7 @@ def _resolve_registry_model(
     )
 
     ceiling = (
-        _DEFAULT_MAX_MODEL_REQUESTS
+        _UNBOUNDED_LOGICAL_CEILING
         if logical_call_ceiling is None
         else int(logical_call_ceiling)
     )
@@ -294,10 +311,13 @@ def run_configured_session(
     task_id = ctx.emitter.task_id
 
     # Provider-neutral ladder contract: if task_id is an accepted
-    # ladder rung, the rung's budget contract must be honored regardless
-    # of which provider is selected. Lower ladder rungs enforce their
-    # public reproduction probe; Level 32 enforces its interactive
-    # budget contract.
+    # ladder rung, the rung's proof contract is honored regardless of
+    # which provider is selected.  Lower ladder rungs enforce their
+    # public reproduction probe; Level 32 materializes its interactive
+    # workspace.  Task 44: total-session model-request / controller-step
+    # counts are NOT execution ceilings for interactive execution —
+    # ``ladder_contract`` below carries only the time/retry/repair
+    # dimensions; request/step dimensions are always unbounded (None/0).
     if task_id in LADDER_RUNTIME_CONTRACTS:
         ladder_contract = ladder_runtime_contract(task_id)
         ladder_scenario = scenario_for(task_id)
@@ -310,6 +330,10 @@ def run_configured_session(
     elif task_id == LEVEL32_TASK_ID:
         is_lower_ladder = False
         is_level32 = True
+        # Task 44: the historical 25/25 total-session values are NOT
+        # consulted for execution.  Only time/retry/repair dimensions
+        # are carried; request/step ceilings are unbounded.  The 25s
+        # remain as provenance constants for pre-Task-44 evidence.
         ladder_contract = LadderRuntimeContract(
             max_model_requests=25,
             max_controller_steps=25,
@@ -329,12 +353,12 @@ def run_configured_session(
     if "provider" in params or "model_id" in params:
         provider, model_id, policy_value = _validate_registry_params(params)
         policy = DemoPolicy(policy_value)
-        # Ladder ceiling is task-specific (24 lower / 25 Level 32), not the general 64
-        ceiling = (
-            ladder_contract.max_model_requests
-            if (is_lower_ladder or is_level32) and ladder_contract is not None
-            else None
-        )
+        # Task 44: interactive execution is unbounded — the provider
+        # adapter receives the unbounded sentinel (0 = no upper-bound
+        # termination) regardless of ladder membership.  Historical
+        # task-specific ceilings (24 lower / 25 Level 32 / 64 general)
+        # are provenance only and never gate execution.
+        ceiling = _UNBOUNDED_LOGICAL_CEILING
         live_config, provenance, fingerprint = _resolve_registry_model(
             provider, model_id, logical_call_ceiling=ceiling
         )
@@ -498,16 +522,17 @@ def run_configured_session(
                 f"Level-32 workspace preparation failed: {exc}"
             ) from exc
 
-    # Ladder contract is provider-neutral: same budgets/proof
-    # regardless of whether the model comes from the registry or a
-    # store profile. Outside ladder, keep general defaults.
+    # Task 44: interactive/configured execution is unbounded.  The
+    # ladder contract contributes ONLY time/retry/repair dimensions;
+    # total-session request/step dimensions are always None (telemetry
+    # only, no execution ceiling) regardless of ladder membership.
     # Directive repair is an explicit interactive-only concept: these are
     # executable unqualified provider runs, never a qualified scientific
     # treatment (the qualified ladder and Level-32 paths keep zero).
     if (is_lower_ladder or is_level32) and ladder_contract is not None:
         limits = LiveRunLimits(
-            max_model_requests=ladder_contract.max_model_requests,
-            max_controller_steps=ladder_contract.max_controller_steps,
+            max_model_requests=None,
+            max_controller_steps=None,
             max_model_phase_seconds=ladder_contract.max_model_phase_seconds,
             max_retries=ladder_contract.max_retries,
             max_directive_repairs=INTERACTIVE_LADDER_DIRECTIVE_REPAIRS,
@@ -516,8 +541,8 @@ def run_configured_session(
         )
     else:
         limits = LiveRunLimits(
-            max_model_requests=_DEFAULT_MAX_MODEL_REQUESTS,
-            max_controller_steps=_DEFAULT_MAX_CONTROLLER_STEPS,
+            max_model_requests=None,
+            max_controller_steps=None,
             # The session deadline is enforced by the worker's cancellation
             # token (deadline + transport poll), never duplicated into a second
             # model-phase budget that could race the token's timeout
@@ -595,12 +620,13 @@ def run_configured_session(
         return demo_context.candidate_patch
 
     try:
-        # Ladder uses task-specific controller step ceiling
-        _max_calls = (
-            ladder_contract.max_controller_steps
-            if (is_lower_ladder or is_level32) and ladder_contract is not None
-            else _DEFAULT_MAX_CONTROLLER_STEPS
-        )
+        # Task 44: interactive execution is unbounded — no total-session
+        # controller-step ceiling.  ``None`` means the controller serves
+        # directives for as long as the protocol permits; step/request
+        # counters remain telemetry only.  Historical task-specific
+        # ceilings (24 lower / 25 Level 32 / 64 general) are provenance
+        # only and never gate execution.
+        _max_calls = None
         run_local_session(
             ctx,
             task_id=task_id,

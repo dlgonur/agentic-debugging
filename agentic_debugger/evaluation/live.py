@@ -379,18 +379,38 @@ class LiveRunLimits:
     # or illegal model directive is NOT a network retry: bounded directive
     # repair attempts (same controller snapshot, typed directive_feedback,
     # no controller advance, no tool dispatch, real model requests inside
-    # the overall request ceiling) are governed separately by
+    # the overall request accounting) are governed separately by
     # ``max_directive_repairs``.  The frozen scientific default is 0
     # (one malformed directive terminates the case); interactive runs opt
     # in explicitly.
-    max_model_requests:int=64; max_controller_steps:int=64; max_model_phase_seconds:int=900; max_retries:int=2; continue_on_task_failure:bool=True; max_response_bytes:int=MAX_MODEL_RESPONSE_BYTES; max_elapsed_seconds:int|None=None; treatment_budget:"LiveTreatmentBudget|None"=None; max_directive_repairs:int=0
+    #
+    # Task 44 (Unbounded Session Progress v1): ``max_model_requests`` and
+    # ``max_controller_steps`` are ``None`` for unbounded
+    # interactive/configured execution — counters remain observational
+    # telemetry with no execution authority.  An explicit finite value is
+    # honored ONLY for explicit callers (frozen scientific treatments,
+    # operator CLI, deterministic harnesses).  Generic application
+    # sources always pass ``None``.
+    max_model_requests:int|None=None; max_controller_steps:int|None=None; max_model_phase_seconds:int=900; max_retries:int=2; continue_on_task_failure:bool=True; max_response_bytes:int=MAX_MODEL_RESPONSE_BYTES; max_elapsed_seconds:int|None=None; treatment_budget:"LiveTreatmentBudget|None"=None; max_directive_repairs:int=0
     def __post_init__(self):
         if self.max_elapsed_seconds is not None:
             if type(self.max_elapsed_seconds) is not int:
                 raise LiveConfigurationError("max_elapsed_seconds is invalid")
             object.__setattr__(self,"max_model_phase_seconds",self.max_elapsed_seconds)
-        for name,value,low,high in (("max_model_requests",self.max_model_requests,1,512),("max_controller_steps",self.max_controller_steps,1,256),("max_model_phase_seconds",self.max_model_phase_seconds,1,3600),("max_retries",self.max_retries,0,8),("max_response_bytes",self.max_response_bytes,1024,4*1024*1024),("max_directive_repairs",self.max_directive_repairs,0,8)):
-            if type(value) is not int or not low<=value<=high: raise LiveConfigurationError(name+" is invalid")
+        # Task 44: total-session count ceilings are optional (None =
+        # unbounded telemetry-only).  Finite values keep their historical
+        # bounds when explicitly requested (frozen/operator/harness).
+        for name,value,low,high,nullable in (("max_model_requests",self.max_model_requests,1,512,True),("max_controller_steps",self.max_controller_steps,1,256,True),("max_model_phase_seconds",self.max_model_phase_seconds,1,3600,False),("max_retries",self.max_retries,0,8,False),("max_response_bytes",self.max_response_bytes,1024,4*1024*1024,False),("max_directive_repairs",self.max_directive_repairs,0,8,False)):
+            if nullable and value is None:
+                continue
+            if type(value) is not int or isinstance(value,bool) or not low<=value<=high: raise LiveConfigurationError(name+" is invalid")
+        if type(self.continue_on_task_failure) is not bool: raise LiveConfigurationError("continue_on_task_failure is invalid")
+        if self.treatment_budget is not None:
+            if not isinstance(self.treatment_budget, LiveTreatmentBudget): raise LiveConfigurationError("treatment_budget is invalid")
+            # A treatment-budgeted (frozen scientific) run keeps its finite
+            # envelope: the three global ceilings must agree exactly.
+            if self.max_model_requests != self.treatment_budget.max_model_requests or self.max_controller_steps != self.treatment_budget.max_controller_steps or self.max_retries != self.treatment_budget.max_retries:
+                raise LiveConfigurationError("treatment budget must be the authoritative global envelope")
         if type(self.continue_on_task_failure) is not bool: raise LiveConfigurationError("continue_on_task_failure is invalid")
         if self.treatment_budget is not None:
             if not isinstance(self.treatment_budget, LiveTreatmentBudget): raise LiveConfigurationError("treatment_budget is invalid")
@@ -411,6 +431,14 @@ class LiveTreatmentBudget:
 
     This is provenance/configuration only.  It is intentionally never added
     to the model request contract.
+
+    Task 44: the 40/40 total-session values are historical provenance for
+    interpreting frozen campaign evidence and for the explicit official
+    frozen operator route (``treatment_budget`` present in
+    ``LiveRunLimits``).  Generic interactive/configured execution never
+    sets ``treatment_budget`` and passes ``None`` (Live/Controller) /
+    ``0`` (provider adapter) — unbounded with counters as telemetry
+    only.  The envelope therefore cannot leak into generic execution.
     """
     logical_decision_ceiling:int=40
     max_controller_steps:int=40
@@ -2637,13 +2665,17 @@ class LiveModelAdapter:
         # directive repair (same controller snapshot, typed
         # directive_feedback on the next request, no controller advance,
         # no tool dispatch) under ``max_directive_repairs``.  Every attempt
-        # is a real model request inside the overall request ceiling.
+        # is a real model request counted indefinitely as telemetry.
+        # Task 44: ``max_model_requests=None`` means unbounded — no
+        # total-session request ceiling.  A finite value is honored only
+        # for explicit callers (frozen treatments/operator/harness).
         transport_retries_used = 0
         directive_repairs_used = 0
         attempt = 0
         while True:
             attempt += 1
-            if self.metrics.model_requests>=self.limits.max_model_requests: self.metrics.termination_reason="model_request_limit"; raise LiveModelAdapterError("live model request limit reached")
+            _request_ceiling = self.limits.max_model_requests
+            if _request_ceiling is not None and self.metrics.model_requests>=_request_ceiling: self.metrics.termination_reason="model_request_limit"; raise LiveModelAdapterError("live model request limit reached")
             request=redact_for_recording(self._request_context(snapshot,logical_request_index=logical_request_index,transport_attempt_index=attempt,contracts=effective_contract,legal_targets=legal_targets,directive_schema=directive_schema,rejection=rejection))
             final_content: str | None = None
             try:

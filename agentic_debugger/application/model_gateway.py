@@ -120,6 +120,12 @@ _DEFAULT_MAX_CONTROLLER_STEPS = 128
 _DEFAULT_MAX_RETRIES = 2
 _MAX_MODEL_RESPONSE_BYTES = 32 * 1024
 
+#: Task 44: unbounded sentinel for provider-adapter logical ceilings
+#: (0 = no upper-bound termination).  The historical finite defaults
+#: above are retained as provenance constants only; generic execution
+#: passes 0/None and never consults them.
+_UNBOUNDED_LOGICAL_CEILING = 0
+
 
 def is_loopback_url(url: Optional[str]) -> bool:
     """True only if the URL points to a loopback address (127.0.0.1, localhost, ::1)."""

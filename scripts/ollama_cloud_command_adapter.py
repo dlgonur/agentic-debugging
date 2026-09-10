@@ -866,7 +866,10 @@ def _http_json_request(
 
 
 def validate_logical_call_index(request: Mapping[str, Any], maximum: int) -> None:
-    if type(maximum) is not int or isinstance(maximum, bool) or not 1 <= maximum <= MAX_CONFIGURED_LOGICAL_MODEL_CALLS:
+    # Task 44: ``maximum == 0`` means unbounded interactive execution —
+    # any non-negative index is accepted with no upper-bound termination.
+    # Finite values remain for explicit callers (frozen/deterministic).
+    if type(maximum) is not int or isinstance(maximum, bool) or not 0 <= maximum <= MAX_CONFIGURED_LOGICAL_MODEL_CALLS:
         raise OllamaAdapterError("logical-call bound is invalid", kind="configuration")
     protocol = request.get("protocol")
     if not isinstance(protocol, Mapping):
@@ -874,6 +877,10 @@ def validate_logical_call_index(request: Mapping[str, Any], maximum: int) -> Non
     if protocol.get("name") != PROTOCOL_NAME or protocol.get("version") != PROTOCOL_VERSION:
         raise OllamaAdapterError("request protocol is not 1.3", kind="invalid_request")
     index = protocol.get("logical_model_call_index")
+    if maximum == 0:
+        if type(index) is not int or isinstance(index, bool) or index < 0:
+            raise OllamaAdapterError("logical model call index must be a non-negative integer", kind="invalid_request")
+        return
     # The live Local Application controller uses zero-based model-call
     # indices: the first request is 0 and the 25-call envelope is 0..24.
     if type(index) is not int or isinstance(index, bool) or not 0 <= index < maximum:
@@ -1530,7 +1537,8 @@ def build_ollama_live_config(
     spec = resolve_cloud_model(alias)
     if not spec.transport_profile_declared and not spec.transport_verified:
         raise OllamaAdapterError("selected Ollama Cloud alias is not supported", kind="configuration")
-    if type(logical_call_ceiling) is not int or isinstance(logical_call_ceiling, bool) or not 1 <= logical_call_ceiling <= 512:
+    # Task 44: 0 means unbounded interactive execution.
+    if type(logical_call_ceiling) is not int or isinstance(logical_call_ceiling, bool) or not 0 <= logical_call_ceiling <= 512:
         raise OllamaAdapterError("logical call ceiling is invalid", kind="configuration")
     idle = spec.idle_timeout_seconds if idle_timeout_seconds is None else idle_timeout_seconds
     req = spec.request_timeout_seconds if request_timeout_seconds is None else request_timeout_seconds

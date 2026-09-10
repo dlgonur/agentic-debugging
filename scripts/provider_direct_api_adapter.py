@@ -181,6 +181,10 @@ def read_request(stdin_stream: Any) -> Mapping[str, Any]:
 
 
 def validate_logical_call_index(request: Mapping[str, Any], maximum: int) -> None:
+    # Task 44: ``maximum == 0`` means unbounded (no total-session
+    # progression ceiling); finite values remain for explicit callers only.
+    if type(maximum) is not int or isinstance(maximum, bool) or not 0 <= maximum <= 512:
+        raise ProviderDirectApiError("logical call ceiling is invalid", kind="configuration")
     # Same zero-based product envelope as the accepted Ollama/OpenCode
     # provider adapters (first request 0, envelope 0..N-1).
     protocol = request.get("protocol")
@@ -189,6 +193,13 @@ def validate_logical_call_index(request: Mapping[str, Any], maximum: int) -> Non
             "request is missing the protocol envelope", kind="invalid_request"
         )
     index = protocol.get("logical_model_call_index")
+    if maximum == 0:
+        if type(index) is not int or isinstance(index, bool) or index < 0:
+            raise ProviderDirectApiError(
+                "logical_model_call_index must be a non-negative integer",
+                kind="invalid_request",
+            )
+        return
     if type(index) is not int or isinstance(index, bool) or not 0 <= index < maximum:
         if type(index) is int and not isinstance(index, bool) and index >= maximum:
             raise ProviderDirectApiError(

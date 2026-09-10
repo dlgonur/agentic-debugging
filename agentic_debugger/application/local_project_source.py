@@ -63,8 +63,13 @@ _KNOWN_PARAMS = frozenset({"project_repo_path","project_head","isolated_workspac
 _PROVIDER_KINDS = frozenset({"ollama_cloud","opencode_go","commandcode_goat","configured"})
 _MAX_CMD_CHARS=2048
 _MAX_BUG_CHARS=4096
+#: Task 44: historical finite defaults retained as provenance constants
+#: only.  Generic Local Project execution is unbounded (None/0) and
+#: never consults these values.
 _DEFAULT_MAX_CONTROLLER_STEPS=64
 _DEFAULT_MAX_RETRIES=2
+#: Unbounded sentinel for the provider-adapter logical ceiling.
+_UNBOUNDED_LOGICAL_CEILING=0
 
 class LocalProjectSourceError(RuntimeError):
     pass
@@ -1205,17 +1210,13 @@ def run_local_project_session(ctx: ScenarioContext, params: Mapping[str, Any]) -
     )
 
     from agentic_debugger.application.model_gateway import ModelGateway
-    from agentic_debugger.application.session_runtime import (
-        local_project_model_call_ceiling,
-    )
-    # Task-26: ONE session-owned model-call ceiling.  Launch-time
-    # ModelBinding resolution (inside SessionLaunch / the fallback factory
-    # above), transport materialization, the live adapter request limit,
-    # and the controller model-call limit all derive from the SAME session
-    # budgets — an explicit SessionBudgets.max_model_calls is
-    # authoritative, the Local Project default (32) otherwise.  No second
-    # authority may reconstruct a different ceiling for this session.
-    max_model_requests = local_project_model_call_ceiling(session_launch.budgets)
+    # Task 44 (Unbounded Session Progress v1): Local Project execution
+    # is unbounded.  SessionBudgets count dimensions and the historical
+    # Local Project default (32) are telemetry/provenance only and are
+    # never consulted for execution authority.  The adapter receives the
+    # unbounded sentinel (0), the LiveModelAdapter and controller receive
+    # None.  Time/retry/repair/response bounds below are unchanged.
+    max_model_requests = _UNBOUNDED_LOGICAL_CEILING
     gateway = ModelGateway.default(config_root=config_root)
     model_binding = session_launch.model_binding
     if model_binding is None:
@@ -1296,14 +1297,16 @@ def run_local_project_session(ctx: ScenarioContext, params: Mapping[str, Any]) -
             continue
     demo_context=_LocalToolContext(isolated=isolated, tracked=tracked, task=local_task, probe=probe, observability=observability, command_environment=project_command_environment, pdb_worker_environment=pdb_worker_environment, executor=session_executor, capabilities=session_capabilities)
     registry=_build_local_registry(demo_context, pdb_policy=pdb_policy_for(policy), interactive_debugger_controls=False)
-    limits=LiveRunLimits(max_model_requests=max_model_requests, max_controller_steps=_DEFAULT_MAX_CONTROLLER_STEPS, max_elapsed_seconds=None, max_retries=_DEFAULT_MAX_RETRIES, max_directive_repairs=_DEFAULT_MAX_RETRIES, max_response_bytes=MAX_MODEL_RESPONSE_BYTES)
+    # Task 44: unbounded — request/step dimensions are None (telemetry
+    # only).  Retry/repair/response/time dimensions are unchanged.
+    limits=LiveRunLimits(max_model_requests=None, max_controller_steps=None, max_elapsed_seconds=None, max_retries=_DEFAULT_MAX_RETRIES, max_directive_repairs=_DEFAULT_MAX_RETRIES, max_response_bytes=MAX_MODEL_RESPONSE_BYTES)
     try:
         transport, live_config = gateway.create_transport(
             model_binding,
             cancel_check=ctx.token.check,
             activity_observer=ctx.liveness_reporter,
-            max_model_requests=max_model_requests,
-            max_controller_steps=_DEFAULT_MAX_CONTROLLER_STEPS,
+            max_model_requests=_UNBOUNDED_LOGICAL_CEILING,
+            max_controller_steps=_UNBOUNDED_LOGICAL_CEILING,
             max_response_bytes=MAX_MODEL_RESPONSE_BYTES,
             credential_binding=session_launch.credential_binding,
             credential_ticket=session_launch.credential_ticket,
@@ -1322,7 +1325,8 @@ def run_local_project_session(ctx: ScenarioContext, params: Mapping[str, Any]) -
     controller_obs=ControllerSessionEventAdapter(ControllerObservationContext(session_id=session_id, task_id=task_id, source_kind=source_kind, run_id=ctx.run_id), emitter=ctx.emitter)
     snapshot=ControllerSnapshot(run_id=run_id, task_id=task_id, state=initial_state, model_call_index=0, budget_limits=ControllerBudgetLimits.from_task_constraints(local_task.constraints), budget_state=ControllerBudgetState(), hypotheses=HypothesisLedger())
     model=_model_factory(demo_context, registry)
-    controller=DeterministicController(registry, model, ControllerRunConfig(max_model_calls=max_model_requests, require_pdb_evidence_before_patch=False), observer=controller_obs)
+    # Task 44: unbounded controller (None = no total-session ceiling).
+    controller=DeterministicController(registry, model, ControllerRunConfig(max_model_calls=None, require_pdb_evidence_before_patch=False), observer=controller_obs)
     try:
         result=controller.run(snapshot, cancel_check=ctx.token.check)
     except ModelExecutionError:

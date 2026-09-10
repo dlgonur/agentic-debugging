@@ -7,6 +7,7 @@
 **POST-V2 SESSION TOKEN USAGE TELEMETRY V1 (TASK 34) COMPLETE (2026-09-09).**
 **POST-V2 GLOBAL CLI LAUNCH ALIAS V1 (TASK 41) COMPLETE (2026-09-09).**
 **POST-V2 PROVIDER-OWNED MODEL REQUEST SIZE V1 (TASK 43) COMPLETE (2026-09-10).**
+**POST-V2 UNBOUNDED SESSION PROGRESS V1 (TASK 44) COMPLETE (2026-09-10).**
 
 Release tag `v0.1.0` exists at `d01f7a5`; cycle 1 closed at
 `docs/project-closeout.md`. The V2 architecture campaign (Candidates 06–30)
@@ -24,7 +25,11 @@ capability. Universal Model Execution Eligibility v1 (Task 42) is complete
 Provider-Owned Model Request Size v1 (Task 43) is complete (2026-09-10) as a
 post-V2 runtime policy correction: model request size is provider-owned
 repo-wide and no Agentic-Debugger-owned request-size ceiling remains on any
-execution route. No subsequent implementation priority selected. No V3 or
+execution route. Unbounded Session Progress v1 (Task 44) is complete
+(2026-09-10) as a post-V2 runtime policy correction: interactive/configured
+sessions have no Agentic-Debugger-owned total model-request, directive, or
+controller-step execution ceiling repo-wide; progress counters are telemetry
+only. No subsequent implementation priority selected. No V3 or
 new architecture campaign has been opened.
 
 ## V2 architecture outcomes (completed 2026-09-07)
@@ -143,10 +148,21 @@ failure visibility, and retry.
   pre-transport gates, CLI-arg command-line preflights); provider-originated size/context
   rejections surface truthfully as provider failures; historical values retained as
   unenforced provenance only; count/step/retry/time/credential/tool-safety ceilings unchanged.
+- [x] Task 44 — Unbounded Session Progress v1 (2026-09-10):
+  Repository-wide hard runtime rule: interactive/configured sessions have no
+  Agentic-Debugger-owned total model-request, directive, or controller-step
+  execution ceiling. Removed count-based termination authority on all generic
+  routes (controller `max_model_calls=None`, adapter `max_model_requests=None`,
+  provider-adapter logical ceiling `0`=unbounded for CommandCode/Direct-API/
+  OpenCode/Ollama/AGY/OpenCode-Go); counters remain observational telemetry.
+  Preserved single-operation retry/repair bounds, per-action tool budgets,
+  time/phase limits, response/output bounds, security/containment, and the
+  isolated frozen Level-32 treatment envelope (40) as provenance for official
+  runs only. STEP UI renders `STEP N` with no false `/M` budget.
 
 ## Active work
 
-After Task 43, no subsequent implementation priority is selected.
+After Task 44, no subsequent implementation priority is selected.
 No V3 or new architecture campaign has been opened.
 
 ## Product backlog

@@ -597,10 +597,12 @@ def test_scenario_g_no_downstream_rejection_at_boundaries(
     )
     assert len(captured_runs) == 1
     assert captured_runs[0]["task_id"] == LEVEL32_TASK_ID
-    assert captured_runs[0]["max_calls"] == 25
+    # Task 44: interactive Level-32 execution is unbounded (None);
+    # historical 25/25 values are provenance only.
+    assert captured_runs[0]["max_calls"] is None
     assert len(captured_limits) == 1
-    assert captured_limits[0].max_model_requests == 25
-    assert captured_limits[0].max_controller_steps == 25
+    assert captured_limits[0].max_model_requests is None
+    assert captured_limits[0].max_controller_steps is None
     assert captured_limits[0].max_retries == 1
     assert captured_limits[0].max_directive_repairs == 2
 

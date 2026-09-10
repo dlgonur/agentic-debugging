@@ -303,18 +303,14 @@ class LocalApplicationV1(App):
     def live_execution_state(self) -> Optional[LiveExecutionState]:
         if self._live_view is None:
             return None
+        # Task 44: interactive/configured sessions have no total
+        # model-request / directive / controller-step execution ceiling.
+        # Progress counters are telemetry only, so the live projection
+        # carries no finite ceilings — the STEP display renders as
+        # ``STEP N`` rather than ``STEP N / M``.  Historical rung/treatment
+        # values (24 lower-ladder, 40 Level-32) remain as provenance
+        # constants elsewhere and are never advertised as remaining budget.
         ceilings = KnownCeilings()
-        if self._live_view.task_id in LADDER_TASK_IDS and self._live_view.task_id != LEVEL32_TASK_ID:
-            from agentic_debugger.application.ollama_cloud_source import ladder_runtime_contract
-            contract = ladder_runtime_contract(self._live_view.task_id)
-            ceilings = KnownCeilings(contract.max_model_requests, contract.max_controller_steps)
-        elif self._live_view.task_id == LEVEL32_TASK_ID:
-            from agentic_debugger.evaluation.live import LiveTreatmentBudget
-            budget = LiveTreatmentBudget(max_retries=1)
-            ceilings = KnownCeilings(
-                budget.max_model_requests, budget.max_controller_steps,
-                budget.max_patch_attempts,
-            )
         return project_live_execution(
             self._live_view, mode=ExecutionMode.LIVE, ceilings=ceilings,
             snapshot=self._live_snapshot, now_monotonic=time.monotonic(),

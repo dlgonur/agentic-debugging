@@ -262,6 +262,14 @@ def read_request(stdin_stream: Any) -> Mapping[str, Any]:
 
 
 def validate_logical_call_index(request: Mapping[str, Any], maximum: int) -> None:
+    # Task 44 (Unbounded Session Progress v1): ``maximum == 0`` means
+    # unbounded interactive execution — any non-negative
+    # ``logical_model_call_index`` is accepted with no upper-bound
+    # termination.  A finite ``maximum`` is honored only for explicit
+    # callers (frozen treatments/deterministic harnesses); generic
+    # application sources always pass 0.
+    if type(maximum) is not int or isinstance(maximum, bool) or not 0 <= maximum <= 512:
+        raise CommandCodeAdapterError("logical call ceiling is invalid", kind=ERROR_KIND_CONFIGURATION)
     protocol = request.get("protocol")
     if not isinstance(protocol, Mapping):
         raise CommandCodeAdapterError("request is missing the protocol envelope", kind=ERROR_KIND_INVALID_REQUEST)
@@ -269,6 +277,13 @@ def validate_logical_call_index(request: Mapping[str, Any], maximum: int) -> Non
     # The live Local Application controller uses zero-based model-call
     # indices: the first request is 0 and an N-call envelope is 0..N-1
     # (same contract as the accepted Ollama Cloud adapter).
+    if maximum == 0:
+        if type(index) is not int or isinstance(index, bool) or index < 0:
+            raise CommandCodeAdapterError(
+                "logical_model_call_index must be a non-negative integer",
+                kind=ERROR_KIND_INVALID_REQUEST,
+            )
+        return
     if type(index) is not int or isinstance(index, bool) or not 0 <= index < maximum:
         if type(index) is int and not isinstance(index, bool) and index >= maximum:
             raise CommandCodeAdapterError(
@@ -526,7 +541,9 @@ def build_commandcode_live_config(
     from agentic_debugger.evaluation.live import LiveModelConfig as _LiveModelConfig
 
     model = validate_model_id(model_id)
-    if type(logical_call_ceiling) is not int or isinstance(logical_call_ceiling, bool) or not 1 <= logical_call_ceiling <= 512:
+    # Task 44: 0 means unbounded interactive execution (no total-session
+    # progression ceiling); finite values remain for explicit callers only.
+    if type(logical_call_ceiling) is not int or isinstance(logical_call_ceiling, bool) or not 0 <= logical_call_ceiling <= 512:
         raise CommandCodeAdapterError("logical call ceiling is invalid", kind=ERROR_KIND_CONFIGURATION)
     request_timeout = validate_timeout_seconds(
         DEFAULT_TIMEOUT_SECONDS if request_timeout_seconds is None else request_timeout_seconds

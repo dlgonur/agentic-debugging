@@ -60,6 +60,7 @@ claim is never treated as proof of a repair.
 Live execution is explicit. Model access routes through `ModelGateway` and user-configured providers (press `m`; fresh installs configure none). Credentials stay in
 `CredentialVault` and the OS secure store—never in source, argv, or evidence ([architecture](docs/architecture/model-providers-v1.md)).
 Model request size is provider-owned: Agentic Debugger sends the complete intended request and leaves size/context acceptance to the configured provider/transport.
+Interactive/configured sessions have no total model-request, directive, or controller-step execution ceiling; progress counters are telemetry only.
 
 ## Current status
 

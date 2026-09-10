@@ -67,15 +67,12 @@ SESSION_CAPABILITIES_VERSION = "session-capabilities/v1"
 #: strings of at most 4096 bytes, so the serialized spec must fit.
 SPEC_PARAM_MAX_CHARS = 4096
 
-#: The Local Project default effective model-call ceiling (Task-26): the
-#: ONE authority for the model-call dimension of a Local Project session.
-#: Launch-time ``ModelBinding`` resolution, transport materialization, the
-#: ``LiveModelAdapter`` request limit, and the ``DeterministicController``
-#: model-call limit all derive from the session budgets through
-#: :func:`local_project_model_call_ceiling` — never from independent
-#: defaults.  Explicit session budgets replace the default coherently;
-#: configured-source (64) and lower-ladder (task-specific) ceilings keep
-#: their own separate authorities.
+#: Historical Local Project default model-call ceiling (Task-26).
+#: Task 44: retained as provenance for pre-Task-44 evidence only.
+#: Generic Local Project execution is unbounded (None/0) and never
+#: consults this value or :func:`local_project_model_call_ceiling` for
+#: execution authority.  An explicit finite value is honored only by
+#: explicit callers (frozen/operator) that intentionally request a bound.
 LOCAL_PROJECT_DEFAULT_MAX_MODEL_CALLS = 32
 
 _MAX_DECLARATIONS_PER_CATEGORY = 32
@@ -1180,16 +1177,14 @@ class SessionLaunch:
 
 
 def local_project_model_call_ceiling(budgets: Any) -> int:
-    """The ONE effective model-call ceiling of a Local Project session.
+    """Historical effective model-call ceiling of a Local Project session.
 
-    The session-owned ``SessionBudgets.max_model_calls`` is authoritative
-    when explicitly supplied; otherwise the Local Project default (32)
-    applies.  Every model-call consumer of the session derives its limit
-    here — launch-time ``ModelBinding`` resolution, ``create_transport``
-    materialization, the live adapter request limit, and the controller
-    model-call limit — so no consumer can reconstruct a different
-    authority for the same session.  Fails closed on a non-SessionBudgets
-    input.
+    Task 44: retained for provenance/compat only.  Generic Local Project
+    execution is unbounded and never consults this function for
+    execution authority — the runtime passes ``None`` (Live/Controller)
+    and ``0`` (provider adapter) directly.  An explicit finite value is
+    honored only by explicit callers (frozen/operator) that intentionally
+    request a bound.  Fails closed on a non-SessionBudgets input.
     """
     from agentic_debugger.application.session import SessionBudgets
 

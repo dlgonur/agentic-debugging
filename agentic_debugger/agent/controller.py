@@ -373,13 +373,24 @@ def _resolve_observer_notify(observer: object) -> Callable[..., None]:
 
 @dataclass(frozen=True)
 class ControllerRunConfig:
-    max_model_calls: int = DEFAULT_MAX_MODEL_CALLS
+    # Task 44 (Unbounded Session Progress v1): ``max_model_calls`` is
+    # ``None`` for unbounded interactive/configured execution — the
+    # controller may serve model requests indefinitely and telemetry
+    # (``model_calls``/``steps``) grows without an execution ceiling.
+    # An explicit finite value remains honored ONLY for explicit callers
+    # (deterministic unit harnesses, frozen scientific treatments) that
+    # intentionally request a bound; generic application sources always
+    # pass ``None``.  Counters are telemetry, not execution authority
+    # for unrestricted sessions.
+    max_model_calls: int | None = None
     require_pdb_evidence_before_patch: bool = False
 
     def __post_init__(self) -> None:
-        if type(self.max_model_calls) is not int:
+        if self.max_model_calls is None:
+            pass
+        elif type(self.max_model_calls) is not int or isinstance(self.max_model_calls, bool):
             raise ControllerInputError("invalid max_model_calls")
-        if not 1 <= self.max_model_calls <= MAX_CONTROLLER_MODEL_CALLS:
+        elif not 1 <= self.max_model_calls <= MAX_CONTROLLER_MODEL_CALLS:
             raise ControllerInputError("invalid max_model_calls")
         if type(self.require_pdb_evidence_before_patch) is not bool:
             raise ControllerInputError("invalid require_pdb_evidence_before_patch")
@@ -851,7 +862,7 @@ class DeterministicController:
     observer: ControllerObserver = field(default_factory=NoopControllerObserver, compare=False)
     _canonical_registry: ToolRegistry = field(init=False, repr=False, compare=False)
     _model_method: Callable[..., object] = field(init=False, repr=False, compare=False)
-    _canonical_max_model_calls: int = field(init=False, repr=False, compare=False)
+    _canonical_max_model_calls: int | None = field(init=False, repr=False, compare=False)
     _canonical_require_pdb_evidence_before_patch: bool = field(init=False, repr=False, compare=False)
     _canonical_observer: ControllerObserver = field(init=False, repr=False, compare=False)
 
@@ -860,7 +871,12 @@ class DeterministicController:
         if type(self.config) is not ControllerRunConfig:
             _input("config")
         max_model_calls = self.config.max_model_calls
-        if type(max_model_calls) is not int or not 1 <= max_model_calls <= MAX_CONTROLLER_MODEL_CALLS:
+        # Task 44: None means unbounded (no total-session progression
+        # ceiling); an explicit finite value is honored only for explicit
+        # callers (tests/frozen treatments).
+        if max_model_calls is None:
+            pass
+        elif type(max_model_calls) is not int or isinstance(max_model_calls, bool) or not 1 <= max_model_calls <= MAX_CONTROLLER_MODEL_CALLS:
             _input("config")
         canonical_config = ControllerRunConfig(
             max_model_calls,
@@ -884,7 +900,12 @@ class DeterministicController:
             _input("registry")
         if type(self._canonical_registry) is not ToolRegistry:
             _invariant("registry")
-        if type(self._canonical_max_model_calls) is not int or not 1 <= self._canonical_max_model_calls <= MAX_CONTROLLER_MODEL_CALLS:
+        _max_calls = self._canonical_max_model_calls
+        if _max_calls is not None and (
+            type(_max_calls) is not int
+            or isinstance(_max_calls, bool)
+            or not 1 <= _max_calls <= MAX_CONTROLLER_MODEL_CALLS
+        ):
             _invariant("max_model_calls")
         if not inspect.isfunction(self._model_method) or not callable(self._model_method):
             _invariant("model_method")
@@ -913,7 +934,10 @@ class DeterministicController:
             _input("cancel_check")
         snapshot = _canonicalize_initial_snapshot(initial_snapshot)
         max_calls = self._canonical_max_model_calls
-        if snapshot.model_call_index + max_calls > MAX_CONTROLLER_MODEL_CALL_INDEX:
+        # Task 44: None means unbounded — no total-session progression
+        # ceiling.  The overflow guard below applies only when a finite
+        # bound was explicitly requested.
+        if max_calls is not None and snapshot.model_call_index + max_calls > MAX_CONTROLLER_MODEL_CALL_INDEX:
             _input("model_call_index")
 
         run_id = snapshot.run_id
@@ -1076,7 +1100,12 @@ class DeterministicController:
 
         while True:
             _check_cancelled()
-            if model_calls >= max_calls:
+            # Task 44: a finite ``max_calls`` is honored only when an
+            # explicit caller requested it (tests/frozen treatments).
+            # ``None`` means unbounded interactive execution: the loop
+            # continues for as long as the model/controller protocol
+            # permits, with ``model_calls``/``steps`` as telemetry only.
+            if max_calls is not None and model_calls >= max_calls:
                 before_state = state
                 state = _failure_state(state)
                 _emit(

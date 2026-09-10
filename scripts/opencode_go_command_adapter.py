@@ -468,9 +468,12 @@ def validate_logical_call_index(request: Mapping[str, Any], max_logical_calls: i
     closed; the guard does NOT limit the accepted transport-attempt index,
     so the accepted LiveModelAdapter directive-feedback corrections are
     unaffected.
+
+    Task 44: ``max_logical_calls == 0`` means unbounded interactive
+    execution — any index >= 1 is accepted with no upper-bound termination.
     """
-    if type(max_logical_calls) is not int or isinstance(max_logical_calls, bool) or max_logical_calls < 1:
-        return "max logical model calls must be a positive integer"
+    if type(max_logical_calls) is not int or isinstance(max_logical_calls, bool) or not 0 <= max_logical_calls <= 512:
+        return "max logical model calls must be a non-negative integer within [0, 512]"
     protocol = request.get("protocol")
     if not isinstance(protocol, Mapping):
         return "request carries no protocol metadata"
@@ -479,6 +482,8 @@ def validate_logical_call_index(request: Mapping[str, Any], max_logical_calls: i
         return "protocol.logical_model_call_index must be an integer"
     if index < 1:
         return f"logical model call index {index} is below the first allowed index (1)"
+    if max_logical_calls == 0:
+        return None
     if index > max_logical_calls:
         return f"logical model call index {index} exceeds the micro-run envelope (max {max_logical_calls})"
     return None

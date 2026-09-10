@@ -12,6 +12,7 @@ Session Token Usage Telemetry v1 (Task 34) COMPLETE (2026-09-09);
 Global CLI Launch Alias v1 (Task 41) COMPLETE (2026-09-09);
 Universal Model Execution Eligibility v1 (Task 42) COMPLETE (2026-09-09);
 Provider-Owned Model Request Size v1 (Task 43) COMPLETE (2026-09-10);
+Unbounded Session Progress v1 (Task 44) COMPLETE (2026-09-10);
 no subsequent implementation priority selected.)
 **Supersedes:** `outdated/docs-archive/status/project-closeout-2026-08-11.md` (the
 2026-08-11 S9 bounded-negative closeout, preserved unchanged as a historical
@@ -22,6 +23,16 @@ This is the single current reviewer/handoff status document. The historical
 technical narrative covering R1–R6 through 2026-08-13 is `docs/final-report.md`; the
 2026-08-11 scientific snapshot is archived verbatim at
 `outdated/docs-archive/reports/final-report-2026-08-11.md`.
+
+**2026-09-10 post-V2 capability update — Task 44 Unbounded Session Progress v1:**
+Unbounded Session Progress v1 (Task 44) COMPLETE (2026-09-10); no subsequent implementation priority selected.
+Task 44 established the repository-wide hard runtime rule that interactive/configured sessions have no
+Agentic-Debugger-owned total model-request, directive, or controller-step execution ceiling on
+`fix/unbounded-session-progress-v1`:
+- **Hard Runtime Rule:** "Agentic Debugger must not terminate an otherwise valid debugging session merely because it has reached an application-defined total number of model requests, controller directives, or controller progression steps."
+- **Removed count authority:** controller `max_model_calls=None`, adapter `max_model_requests=None`/`max_controller_steps=None`, and provider-adapter logical ceiling `0`=unbounded on all generic routes (CommandCode/Direct-API/OpenCode/Ollama/AGY/OpenCode-Go via the common authority); historical values (25 Level-32, 24 ladder, 64 general, 32 Local Project, 40 treatment) retained as unenforced provenance only.
+- **Preserved bounds:** single-operation retries/repairs, per-action tool budgets, time/phase limits, response/output bounds, security/containment, and the isolated frozen Level-32 treatment envelope (40) for official runs only; STEP UI renders `STEP N` with no false remaining budget; footer telemetry unchanged.
+This is a post-V2 runtime policy correction, not V3 or a new architecture campaign. No subsequent implementation priority has been selected by repository authority.
 
 **2026-09-10 post-V2 capability update — Task 43 Provider-Owned Model Request Size v1:**
 Provider-Owned Model Request Size v1 (Task 43) COMPLETE (2026-09-10); no subsequent implementation priority selected.
@@ -36,7 +47,7 @@ Universal Model Execution Eligibility v1 (Task 42) COMPLETE (2026-09-09); no sub
 Task 42 established the repository-wide hard product invariant that any model configured by the user with executable credentials must be runnable anywhere Agentic Debugger supports model execution, separating execution eligibility from scientific qualification on `fix/universal-model-execution-v1`:
 - **Hard Product Invariant:** "Any model that the user has made genuinely executable through a configured provider/API credential must be runnable anywhere Agentic Debugger supports model execution. Qualification may affect classification of the RESULT. Qualification must NOT control whether the model may EXECUTE."
 - **Level 32 Unlocked:** Capability Ladder Level 32 (`audreyr__cookiecutter-967`) previously blocked all non-qualified models. In Task 42, all executable provider models are enabled (`disabled=False`) in the model picker, show readiness `Ready Yes` with secondary note `"Selected model is outside frozen official Level-32 treatment"`, and dispatch to `SourceKind.CONFIGURED_MODEL`.
-- **Dual Source Dispatch:** Canonical qualified Ollama Cloud models continue to dispatch to `SourceKind.LEVEL32_OPERATOR` under the frozen operator contract (`policy="exact-pdb-level32-frozen"`). Non-qualified executable provider models dispatch to `SourceKind.CONFIGURED_MODEL` (`policy="pdb-on-uncertainty"`) with the Level-32 budget contract (25 model requests, 25 controller steps, 3600s time limit, 1 retry, 2 interactive directive repairs).
+- **Dual Source Dispatch:** Canonical qualified Ollama Cloud models continue to dispatch to `SourceKind.LEVEL32_OPERATOR` under the frozen operator contract (`policy="exact-pdb-level32-frozen"`). Non-qualified executable provider models dispatch to `SourceKind.CONFIGURED_MODEL` (`policy="pdb-on-uncertainty"`) with the Level-32 time/retry/repair contract (3600s time limit, 1 retry, 2 interactive directive repairs) and unbounded model-request/directive/step progression (Task 44; historical 25/25 values are provenance only).
 - **Single Controller Architecture Preserved:** Reuses the existing single-controller execution engine, `ModelBinding`, `CredentialVault`, and disposable workspace harness.
 - **Fail-Closed Runtime Blockers:** Concrete runtime impediments (missing API keys, unconfigured providers, offline unreachable endpoints) continue to fail closed and block execution truthfully.
 This is an additive post-V2 product capability, not V3 or a new architecture campaign. No subsequent implementation priority has been selected by repository authority.

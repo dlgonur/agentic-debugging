@@ -170,9 +170,14 @@ def run_ollama_cloud_session(ctx: ScenarioContext, params: Mapping[str, Any]) ->
     scenario = scenario_for(task_id)
     if not scenario.runtime_probe.exact_public_reproduction:
         raise ScenarioInputError("lower ladder rung is missing its exact-PDB scenario contract")
+    # Task 44: ladder execution is unbounded like every other generic
+    # session.  The rung contract contributes ONLY time/retry/repair
+    # dimensions and the exact-PDB proof binding; total-session
+    # request/step counts are telemetry only (None/0 = no execution
+    # ceiling).  Historical 24/24 values remain as provenance constants.
     limits = LiveRunLimits(
-        max_model_requests=contract.max_model_requests,
-        max_controller_steps=contract.max_controller_steps,
+        max_model_requests=None,
+        max_controller_steps=None,
         max_model_phase_seconds=contract.max_model_phase_seconds,
         max_retries=contract.max_retries,
         max_directive_repairs=contract.max_directive_repairs,
@@ -182,7 +187,7 @@ def run_ollama_cloud_session(ctx: ScenarioContext, params: Mapping[str, Any]) ->
     _progress(ctx, OperatorStage.PREFLIGHT)
     config, profile = _config(
         alias,
-        logical_call_ceiling=contract.max_model_requests,
+        logical_call_ceiling=0,
         idle_timeout_seconds=300,
         request_timeout_seconds=contract.max_model_phase_seconds,
     )
@@ -242,7 +247,7 @@ def run_ollama_cloud_session(ctx: ScenarioContext, params: Mapping[str, Any]) ->
             model_factory=model_factory,
             verifier_patch=verifier_patch,
             fail_on_controller_failure=True,
-            max_model_calls=contract.max_controller_steps,
+            max_model_calls=None,
             registry_pdb_policy=pdb_policy_for(policy),
         )
     except ModelExecutionError:
