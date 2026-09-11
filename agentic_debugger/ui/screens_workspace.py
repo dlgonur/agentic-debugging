@@ -57,6 +57,17 @@ from agentic_debugger.ui.screens_shared import (
     render_view_header,
 )
 from agentic_debugger.ui.theme import CANVAS, EVIDENCE, PRIMARY, SECONDARY, SUCCESS
+from agentic_debugger.ui.workspace_apply import (
+    apply_to_project_worker,
+    local_project_apply_candidate,
+    local_project_apply_proof,
+    report_apply_outcome,
+    session_directory,
+)
+from agentic_debugger.ui.workspace_modals import (
+    EffortModalScreen,
+    JumpToSequenceScreen,
+)
 from agentic_debugger.ui.widgets import (
     DebuggerPanel,
     EvidenceReviewPanel,
@@ -779,76 +790,17 @@ class WorkspaceScreen(Screen):
     def _local_project_apply_candidate(
         self,
     ) -> tuple[Optional[SessionViewState], Optional[str]]:
-        """(session-final view, active candidate patch text) or reasons."""
-        view = self._full_session_view()
-        if view is None or view.source_kind is not SourceKind.LOCAL_PROJECT:
-            return view, None
-        if not view.status.terminal:
-            return view, None
-        from agentic_debugger.application.presentation import active_candidate_attempt
-
-        attempt = active_candidate_attempt(view)
-        if attempt is None or not attempt.patch_text:
-            return view, None
-        return view, attempt.patch_text
+        return local_project_apply_candidate(self)
 
     def _session_directory(self) -> Optional[Path]:
-        if self._runner is not None:
-            try:
-                return Path(self._runner.worker.session_dir)
-            except Exception:
-                return None
-        if self.entry is not None and self.entry.directory:
-            return Path(self.entry.directory)
-        return None
+        return session_directory(self)
 
     def _local_project_apply_proof(
         self,
         view: SessionViewState,
         patch_text: str,
     ) -> tuple[Optional[Path], Optional[str], str]:
-        """Resolve and validate the independent certificate for one Apply.
-
-        Old sessions without the versioned certificate remain inspectable but
-        are deliberately not applyable.  A terminal/session-success claim is
-        insufficient: the independent verifier must have returned RESOLVED,
-        and its certificate must match both the recorded source HEAD and the
-        exact candidate bytes.
-        """
-        summary = view.verifier_summary
-        if (
-            summary is None
-            or summary.status != "COMPLETED"
-            or summary.outcome is None
-            or summary.outcome.value != "RESOLVED"
-        ):
-            return None, None, "candidate is not independently verified as RESOLVED"
-        session_dir = self._session_directory()
-        if session_dir is None:
-            return None, None, "session artifact directory is unavailable"
-        try:
-            from agentic_debugger.application.local_project import (
-                check_verification_certificate,
-                load_apply_verification_materials,
-                local_project_task_spec_sha256,
-            )
-
-            task, certificate = load_apply_verification_materials(session_dir)
-        except FileNotFoundError:
-            return None, None, "independent verification certificate is missing"
-        except Exception as exc:
-            return None, None, f"independent verification certificate is invalid: {exc}"
-        ok, reason = check_verification_certificate(
-            certificate,
-            expected_task_id=view.task_id,
-            expected_session_id=view.session_id or "",
-            expected_task_spec_sha256=local_project_task_spec_sha256(task),
-            expected_head=task.source_head_commit,
-            patch_text=patch_text,
-        )
-        if not ok:
-            return None, None, reason
-        return Path(task.source_repo_path), task.source_head_commit, "verified"
+        return local_project_apply_proof(self, view, patch_text)
 
     def check_action(self, action: str, parameters: tuple[Any, ...]) -> bool | None:
         if action == "cancel_live":
@@ -920,35 +872,10 @@ class WorkspaceScreen(Screen):
     def _apply_to_project_worker(
         self, repo_path: Path, expected_head: str, patch_text: str
     ) -> None:
-        """Gate + apply off the UI loop; report through the event loop."""
-        from agentic_debugger.application.local_project import (
-            apply_patch_to_project,
-            check_apply_gates,
-        )
-
-        try:
-            ok, reason = check_apply_gates(repo_path, expected_head, patch_text)
-            if not ok:
-                self._report_apply_outcome(False, f"Apply To Project blocked: {reason}")
-                return
-            success, msg = apply_patch_to_project(
-                repo_path,
-                patch_text,
-                expected_head=expected_head,
-            )
-            self._report_apply_outcome(success, msg if success else f"Apply failed: {msg}")
-        except Exception as exc:
-            self._report_apply_outcome(False, f"Apply To Project failed: {exc}")
+        apply_to_project_worker(self, repo_path, expected_head, patch_text)
 
     def _report_apply_outcome(self, success: bool, message: str) -> None:
-        try:
-            # Only App provides call_from_thread; a Screen/DOMNode has no
-            # such method, so the marshal must go through the running app.
-            self.app.call_from_thread(
-                lambda: self.notify(message, severity="information" if success else "error")
-            )
-        except Exception:
-            pass
+        report_apply_outcome(self, success, message)
 
     def live_cancel_event_seen(self) -> None:
         self._cancel_requested_ui = True
@@ -1056,77 +983,3 @@ class WorkspaceScreen(Screen):
             success = f"Copied {count} timeline events" if count else "Copied timeline"
             self._copy_to_clipboard(text, success)
             event.stop()
-
-
-class JumpToSequenceScreen(Screen):
-    """One compact input modal for jumping to a replay sequence."""
-
-    BINDINGS = [Binding("escape", "cancel", "Back")]
-
-    def __init__(
-        self,
-        on_submit: Any,
-        min_sequence: int = 0,
-        max_sequence: Optional[int] = None,
-    ) -> None:
-        super().__init__()
-        self._on_submit = on_submit
-        self._min_sequence = min_sequence
-        self._max_sequence = max_sequence
-
-    def compose(self) -> ComposeResult:
-        with Static(id="jump-dialog"):
-            yield Static(f"[bold {PRIMARY}]Jump to sequence[/]", id="jump-title")
-            placeholder = (
-                f"sequence number ({self._min_sequence}–{self._max_sequence})"
-                if self._max_sequence is not None
-                else "sequence number"
-            )
-            yield Input(id="jump-input", placeholder=placeholder)
-            hint = (
-                f"[dim]enter: jump ({self._min_sequence}–{self._max_sequence}) · escape: cancel[/]"
-                if self._max_sequence is not None
-                else "[dim]enter: jump · escape: cancel[/]"
-            )
-            yield Static(hint, id="jump-hint")
-
-    def on_mount(self) -> None:
-        self.query_one("#jump-input", Input).focus()
-
-    def on_input_submitted(self, event: Input.Submitted) -> None:
-        if event.input.id != "jump-input":
-            return
-        raw = event.input.value.strip()
-        sequence: Optional[int] = None
-        if raw:
-            try:
-                sequence = int(raw)
-            except ValueError:
-                self.notify("Sequence must be a whole number.", severity="warning")
-                return
-        self._on_submit(sequence)
-        self.app.pop_screen()
-
-    def action_cancel(self) -> None:
-        self.app.pop_screen()
-
-
-class EffortModalScreen(Screen):
-    """Read-only 'what the agent tried' projection modal."""
-
-    BINDINGS = [
-        Binding("escape", "close_effort", "Close"),
-        Binding("enter", "close_effort", "Close"),
-        Binding("w", "close_effort", "Close"),
-    ]
-
-    def __init__(self, body: str) -> None:
-        super().__init__()
-        self._body = body
-
-    def compose(self) -> ComposeResult:
-        with VerticalScroll(id="effort-dialog"):
-            yield Static(self._body, id="effort-body")
-
-    def action_close_effort(self) -> None:
-        self.app.pop_screen()
