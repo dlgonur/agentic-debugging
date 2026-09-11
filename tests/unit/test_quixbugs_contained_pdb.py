@@ -375,15 +375,65 @@ def test_pdb_runtime_bundle_hashes_match_accepted_repository_files(tmp_path: Pat
     hashes = materialize_pdb_runtime_bundle(destination)
     import hashlib
 
+    from agentic_debugger.quixbugs.contained_pdb import _PDB_RUNTIME_MODULES
+
     pkg_dir = ROOT / "agentic_debugger"
     assert hashes["agentic_debugger/__init__.py"] == hashlib.sha256((pkg_dir / "__init__.py").read_bytes()).hexdigest()
-    assert hashes["agentic_debugger/runtime/pdb_worker.py"] == hashlib.sha256((pkg_dir / "runtime" / "pdb_worker.py").read_bytes()).hexdigest()
-    assert hashes["agentic_debugger/runtime/pdb_protocol.py"] == hashlib.sha256((pkg_dir / "runtime" / "pdb_protocol.py").read_bytes()).hexdigest()
-    assert hashes["agentic_debugger/runtime/exceptions.py"] == hashlib.sha256((pkg_dir / "runtime" / "exceptions.py").read_bytes()).hexdigest()
+    assert set(_PDB_RUNTIME_MODULES) >= {
+        "pdb_worker.py", "pdb_worker_execution.py", "pdb_worker_inspection.py",
+        "pdb_worker_lifecycle.py", "pdb_worker_limits.py", "pdb_worker_paths.py",
+        "pdb_worker_values.py", "pdb_worker_frames.py", "pdb_worker_safeeval.py",
+        "pdb_worker_postmortem.py", "pdb_worker_runners.py",
+        "pdb_protocol.py", "exceptions.py",
+    }
+    for name in _PDB_RUNTIME_MODULES:
+        relative = f"agentic_debugger/runtime/{name}"
+        assert hashes[relative] == hashlib.sha256((pkg_dir / "runtime" / name).read_bytes()).hexdigest()
+        assert (destination / "agentic_debugger" / "runtime" / name).is_file()
+    # No unrelated runtime modules may ride along: the bundle stays minimal.
+    bundled = {
+        path.name
+        for path in (destination / "agentic_debugger" / "runtime").iterdir()
+        if path.name != "__init__.py"
+    }
+    assert bundled == set(_PDB_RUNTIME_MODULES)
     # The bundled runtime/__init__.py is deliberately a stub, not the real one.
     assert (destination / "agentic_debugger" / "runtime" / "__init__.py").read_text(encoding="utf-8") == ""
     real_runtime_init = (pkg_dir / "runtime" / "__init__.py").read_text(encoding="utf-8")
     assert real_runtime_init != ""
+
+
+def _import_bundled_worker(bundle: Path) -> "subprocess.CompletedProcess[str]":
+    import subprocess
+    import sys
+
+    return subprocess.run(
+        [sys.executable, "-c", "import agentic_debugger.runtime.pdb_worker as w; print(w.PdbWorker.__name__)"],
+        cwd=bundle,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+
+def test_pdb_runtime_bundle_worker_imports_from_bundle(tmp_path: Path) -> None:
+    """The materialized bundle is launchable: the worker imports standalone."""
+    destination = tmp_path / "bundle"
+    materialize_pdb_runtime_bundle(destination)
+    completed = _import_bundled_worker(destination)
+    assert completed.returncode == 0, completed.stderr
+    assert "PdbWorker" in completed.stdout
+
+
+def test_pdb_runtime_bundle_missing_module_fails_deterministically(tmp_path: Path) -> None:
+    """A missing extracted dependency fails the bundled import, not later."""
+    destination = tmp_path / "bundle"
+    materialize_pdb_runtime_bundle(destination)
+    (destination / "agentic_debugger" / "runtime" / "pdb_worker_limits.py").unlink()
+    completed = _import_bundled_worker(destination)
+    assert completed.returncode != 0
+    assert "ModuleNotFoundError" in completed.stderr
+    assert "pdb_worker_limits" in completed.stderr
 
 
 def test_pdb_runtime_bundle_refuses_existing_destination(tmp_path: Path) -> None:

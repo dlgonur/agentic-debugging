@@ -125,7 +125,27 @@ _DEFAULT_STARTUP_TIMEOUT_SECONDS = 30.0
 _DEFAULT_REQUEST_TIMEOUT_SECONDS = 15.0
 _DEFAULT_SHUTDOWN_TIMEOUT_SECONDS = 10.0
 
-_PDB_RUNTIME_MODULES = ("pdb_worker.py", "pdb_protocol.py", "exceptions.py")
+#: Exact transitive closure of the worker's in-package runtime imports.
+#: ``pdb_worker.py`` is the bootstrap/dispatch facade; the remaining
+#: ``pdb_worker_*`` modules are its focused responsibilities (limits, paths,
+#: values, frames, safeeval, postmortem, runners, execution, inspection,
+#: lifecycle). Every entry is required to launch the worker; the bundle test
+#: proves a missing entry fails the import deterministically.
+_PDB_RUNTIME_MODULES = (
+    "pdb_worker.py",
+    "pdb_worker_execution.py",
+    "pdb_worker_inspection.py",
+    "pdb_worker_lifecycle.py",
+    "pdb_worker_limits.py",
+    "pdb_worker_paths.py",
+    "pdb_worker_values.py",
+    "pdb_worker_frames.py",
+    "pdb_worker_safeeval.py",
+    "pdb_worker_postmortem.py",
+    "pdb_worker_runners.py",
+    "pdb_protocol.py",
+    "exceptions.py",
+)
 
 #: The reviewed runtime probe for the pinned buggy python_programs/gcd.py.
 #: ``call_source`` is drawn from the docstring example already present in the
@@ -160,8 +180,10 @@ def materialize_pdb_runtime_bundle(destination: Path) -> dict[str, str]:
     """Copy the minimal, pure-stdlib PDB worker code into ``destination``.
 
     Only the exact files the worker needs to run are copied
-    (``agentic_debugger/__init__.py``, ``agentic_debugger/runtime/exceptions.py``,
-    ``agentic_debugger/runtime/pdb_protocol.py``, ``agentic_debugger/runtime/pdb_worker.py``),
+    (``agentic_debugger/__init__.py``, the ``pdb_worker*`` facade plus its
+    focused responsibility modules, ``pdb_protocol.py``, and
+    ``exceptions.py`` — see ``_PDB_RUNTIME_MODULES`` for the exact
+    transitive closure),
     byte-identical to the accepted repository copies (hashes are returned for
     provenance evidence). ``agentic_debugger/runtime/__init__.py`` is
     deliberately written as an empty stub rather than copied verbatim: the

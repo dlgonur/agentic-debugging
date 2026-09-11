@@ -33,7 +33,9 @@ from pathlib import Path
 
 import pytest
 
-from agentic_debugger.runtime import pdb_worker as worker_module
+from agentic_debugger.runtime import pdb_worker_execution as execution_module
+from agentic_debugger.runtime import pdb_worker_postmortem as postmortem_module
+from agentic_debugger.runtime import pdb_worker_values as values_module
 from agentic_debugger.runtime.exceptions import PdbSessionStateError
 from agentic_debugger.runtime.pdb_protocol import (
     MAX_LINE_LENGTH,
@@ -43,8 +45,9 @@ from agentic_debugger.runtime.pdb_protocol import (
     serialize_response,
 )
 from agentic_debugger.runtime.pdb_session import PdbSession, PdbSessionState
-from agentic_debugger.runtime.pdb_worker import (
-    PdbWorker,
+from agentic_debugger.runtime.pdb_worker import PdbWorker
+from agentic_debugger.runtime.pdb_worker_frames import _collect_bounded_locals
+from agentic_debugger.runtime.pdb_worker_limits import (
     _MAX_BYTES_PREVIEW,
     _POST_MORTEM_EXC_ARGS_MAX_SCAN,
     _POST_MORTEM_LOCALS_SCAN_CEILING,
@@ -53,17 +56,18 @@ from agentic_debugger.runtime.pdb_worker import (
     _POST_MORTEM_MAX_LOCALS,
     _POST_MORTEM_MAX_TEXT_UTF8,
     _POST_MORTEM_TRUNCATION_MARKER,
+)
+from agentic_debugger.runtime.pdb_worker_postmortem import (
     _bounded_traceback_frames,
     _capture_post_mortem_evidence_pure,
-    _collect_bounded_locals,
     _has_traceback,
     _post_mortem_bounded_text,
     _post_mortem_missing_traceback_response,
     _safe_exception_error_message,
     _safe_exception_message,
     _safe_exception_type_name,
-    _safe_local_summary,
 )
+from agentic_debugger.runtime.pdb_worker_values import _safe_local_summary
 from agentic_debugger.runtime.workspace import TaskWorkspace
 
 
@@ -1012,13 +1016,13 @@ def test_safe_exception_message_large_exact_bytes_never_fully_decoded(monkeypatc
     # text must pass through it, so the largest string it ever sees proves
     # the decode input was a bounded prefix, never the complete 2 MB object.
     seen = []
-    real_preview = worker_module._utf8_preview
+    real_preview = values_module._utf8_preview
 
     def spying_preview(value, maximum):
         seen.append(str.__len__(value))
         return real_preview(value, maximum)
 
-    monkeypatch.setattr(worker_module, "_utf8_preview", spying_preview)
+    monkeypatch.setattr(postmortem_module, "_utf8_preview", spying_preview)
     payload = b"x" * (2 * 10**6)
     message = _safe_exception_message(ValueError(payload))
     assert seen and max(seen) <= _MAX_BYTES_PREVIEW
@@ -1175,7 +1179,7 @@ def test_safe_exception_message_literal_ellipsis_no_omission_unchanged():
 def test_safe_exception_message_budget_smaller_than_marker_no_marker(monkeypatch):
     # With a total budget smaller than the 3-byte marker, no marker may be
     # emitted; the rendered prefix is preserved and stays within the budget.
-    monkeypatch.setattr(worker_module, "_POST_MORTEM_MAX_EXC_MESSAGE_UTF8", 2)
+    monkeypatch.setattr(postmortem_module, "_POST_MORTEM_MAX_EXC_MESSAGE_UTF8", 2)
     exc = ValueError("a", "b")
     message = _safe_exception_message(exc)
     assert _POST_MORTEM_TRUNCATION_MARKER not in message
@@ -1364,7 +1368,7 @@ def test_worker_missing_traceback_real_branch_emits_authoritative_response(monke
     try:
         worker = PdbWorker()
         worker._protocol_stdout = out
-        monkeypatch.setattr(worker_module, "_has_traceback", lambda captured: False)
+        monkeypatch.setattr(execution_module, "_has_traceback", lambda captured: False)
         worker._execute_post_mortem_target(
             "raising_target.py",
             str((root / "raising_target.py").resolve()),

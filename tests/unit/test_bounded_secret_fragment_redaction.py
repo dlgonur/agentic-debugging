@@ -965,7 +965,7 @@ def test_redactor_structure_preview_requires_explicit_marking():
 
 
 def test_worker_truncation_marker_constant_matches_pdb_worker():
-    from agentic_debugger.runtime.pdb_worker import (
+    from agentic_debugger.runtime.pdb_worker_limits import (
         _POST_MORTEM_TRUNCATION_MARKER,
     )
 

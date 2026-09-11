@@ -2185,7 +2185,7 @@ class TestRunToBreakpointIntegration:
     def test_worker_read_bounded_fd_short_reads(self, ws_run):
         import os as _os
         from agentic_debugger.runtime.pdb_worker import PdbWorker
-        from agentic_debugger.runtime.pdb_worker import _BINARY_OPEN_FLAG
+        from agentic_debugger.runtime.pdb_worker_limits import _BINARY_OPEN_FLAG
         d = Path(ws_run.root)
         f = d / "worker_short_read.py"
         f.write_bytes(b"abc" + b"def" + b"ghi")
@@ -2201,7 +2201,7 @@ class TestRunToBreakpointIntegration:
     def test_worker_read_bounded_fd_empty(self, ws_run):
         import os as _os
         from agentic_debugger.runtime.pdb_worker import PdbWorker
-        from agentic_debugger.runtime.pdb_worker import _BINARY_OPEN_FLAG
+        from agentic_debugger.runtime.pdb_worker_limits import _BINARY_OPEN_FLAG
         d = Path(ws_run.root)
         f = d / "worker_empty_read.py"
         f.write_bytes(b"")
@@ -2217,8 +2217,8 @@ class TestRunToBreakpointIntegration:
     def test_worker_read_bounded_fd_exact_limit(self, ws_run):
         import os as _os
         from agentic_debugger.runtime.pdb_worker import PdbWorker
-        from agentic_debugger.runtime.pdb_worker import _BINARY_OPEN_FLAG
-        from agentic_debugger.runtime.pdb_worker import _MAX_TARGET_SOURCE_BYTES
+        from agentic_debugger.runtime.pdb_worker_limits import _BINARY_OPEN_FLAG
+        from agentic_debugger.runtime.pdb_worker_limits import _MAX_TARGET_SOURCE_BYTES
         d = Path(ws_run.root)
         f = d / "worker_exact_limit.py"
         f.write_bytes(b"x" * _MAX_TARGET_SOURCE_BYTES)
@@ -2235,8 +2235,8 @@ class TestRunToBreakpointIntegration:
     def test_worker_read_bounded_fd_over_limit(self, ws_run):
         import os as _os
         from agentic_debugger.runtime.pdb_worker import PdbWorker
-        from agentic_debugger.runtime.pdb_worker import _BINARY_OPEN_FLAG
-        from agentic_debugger.runtime.pdb_worker import _MAX_TARGET_SOURCE_BYTES
+        from agentic_debugger.runtime.pdb_worker_limits import _BINARY_OPEN_FLAG
+        from agentic_debugger.runtime.pdb_worker_limits import _MAX_TARGET_SOURCE_BYTES
         d = Path(ws_run.root)
         f = d / "worker_over_limit.py"
         f.write_bytes(b"x" * (_MAX_TARGET_SOURCE_BYTES + 1))
@@ -2273,7 +2273,7 @@ class TestRunToBreakpointIntegration:
     # 48k. Worker end-to-end over-limit rejection via raw protocol
     def test_worker_over_limit_rejection(self, ws_run):
         import json as _json
-        from agentic_debugger.runtime.pdb_worker import _MAX_TARGET_SOURCE_BYTES
+        from agentic_debugger.runtime.pdb_worker_limits import _MAX_TARGET_SOURCE_BYTES
         d = Path(ws_run.root)
         f = d / "worker_huge.py"
         f.write_bytes(b"x = 1\n" + b"x" * (_MAX_TARGET_SOURCE_BYTES))
@@ -3824,13 +3824,14 @@ class TestPersistentPauseRunnerWeakRef:
             worker._send_response = lambda r: responses.append(r)
             worker._target_started = True
             runner_ref = [None]
-            saved_runner_class = _pw._PdbPersistentRunner
+            from agentic_debugger.runtime import pdb_worker_runners as _pwr
+            saved_runner_class = _pwr._PdbPersistentRunner
             class CapturingRunner(saved_runner_class):
                 def __new__(cls, *a, **kw):
                     inst = super().__new__(cls)
                     runner_ref[0] = _wr.ref(inst)
                     return inst
-            _pw._PdbPersistentRunner = CapturingRunner
+            _pwr._PdbPersistentRunner = CapturingRunner
             try:
                 with worker._condition:
                     worker._lifecycle['state'] = 'starting'
@@ -3854,7 +3855,7 @@ class TestPersistentPauseRunnerWeakRef:
                 worker._request_target_termination()
                 thread.join(timeout=3.0)
             finally:
-                _pw._PdbPersistentRunner = saved_runner_class
+                _pwr._PdbPersistentRunner = saved_runner_class
                 _os.chdir(saved_cwd)
         finally:
             import shutil as _shutil
@@ -3873,13 +3874,14 @@ class TestPersistentPauseRunnerWeakRef:
             worker._send_response = lambda r: responses.append(r)
             worker._target_started = True
             runner_ref = [None]
-            saved_runner_class = _pw._PdbPersistentRunner
+            from agentic_debugger.runtime import pdb_worker_runners as _pwr
+            saved_runner_class = _pwr._PdbPersistentRunner
             class CapturingRunner(saved_runner_class):
                 def __new__(cls, *a, **kw):
                     inst = super().__new__(cls)
                     runner_ref[0] = _wr.ref(inst)
                     return inst
-            _pw._PdbPersistentRunner = CapturingRunner
+            _pwr._PdbPersistentRunner = CapturingRunner
             try:
                 with worker._condition:
                     worker._lifecycle['state'] = 'starting'
@@ -3898,7 +3900,7 @@ class TestPersistentPauseRunnerWeakRef:
                 _gc.collect()
                 assert runner_weakref() is None, "Persistent runner remained strongly referenced"
             finally:
-                _pw._PdbPersistentRunner = saved_runner_class
+                _pwr._PdbPersistentRunner = saved_runner_class
                 _os.chdir(saved_cwd)
         finally:
             import shutil as _shutil
@@ -3917,13 +3919,14 @@ class TestPersistentPauseRunnerWeakRef:
             worker._send_response = lambda r: responses.append(r)
             worker._target_started = True
             runner_ref = [None]
-            saved_runner_class = _pw._PdbPersistentRunner
+            from agentic_debugger.runtime import pdb_worker_runners as _pwr
+            saved_runner_class = _pwr._PdbPersistentRunner
             class CapturingRunner(saved_runner_class):
                 def __new__(cls, *a, **kw):
                     inst = super().__new__(cls)
                     runner_ref[0] = _wr.ref(inst)
                     return inst
-            _pw._PdbPersistentRunner = CapturingRunner
+            _pwr._PdbPersistentRunner = CapturingRunner
             try:
                 with worker._condition:
                     worker._lifecycle['state'] = 'starting'
@@ -3942,7 +3945,7 @@ class TestPersistentPauseRunnerWeakRef:
                 _gc.collect()
                 assert runner_weakref() is None, "Persistent runner remained strongly referenced"
             finally:
-                _pw._PdbPersistentRunner = saved_runner_class
+                _pwr._PdbPersistentRunner = saved_runner_class
                 _os.chdir(saved_cwd)
         finally:
             import shutil as _shutil
@@ -3961,13 +3964,14 @@ class TestPersistentPauseRunnerWeakRef:
             worker._send_response = lambda r: responses.append(r)
             worker._target_started = True
             runner_ref = [None]
-            saved_runner_class = _pw._PdbPersistentRunner
+            from agentic_debugger.runtime import pdb_worker_runners as _pwr
+            saved_runner_class = _pwr._PdbPersistentRunner
             class CapturingRunner(saved_runner_class):
                 def __new__(cls, *a, **kw):
                     inst = super().__new__(cls)
                     runner_ref[0] = _wr.ref(inst)
                     return inst
-            _pw._PdbPersistentRunner = CapturingRunner
+            _pwr._PdbPersistentRunner = CapturingRunner
             try:
                 with worker._condition:
                     worker._lifecycle['state'] = 'starting'
@@ -3994,7 +3998,7 @@ class TestPersistentPauseRunnerWeakRef:
                 _gc.collect()
                 assert runner_weakref() is None, "Persistent runner remained strongly referenced"
             finally:
-                _pw._PdbPersistentRunner = saved_runner_class
+                _pwr._PdbPersistentRunner = saved_runner_class
                 _os.chdir(saved_cwd)
         finally:
             import shutil as _shutil
@@ -5604,6 +5608,7 @@ class TestSafeEvaluationWorkerInvariant:
             target_thread.start()
             assert target_thread.is_alive()
         worker._target_thread = target_thread
+        saved_canonical = None
         if condition == "missing_frame":
             worker._lifecycle["_paused_frame"] = None
         elif condition == "invalid_generation":
@@ -5611,7 +5616,12 @@ class TestSafeEvaluationWorkerInvariant:
         elif condition == "outside_workspace":
             worker._workspace_root_real = os.path.realpath(tempfile.gettempdir())
         elif condition == "cannot_canonicalize":
-            worker._canonical_workspace_frame_script = lambda frame: None
+            # Fault injection at the authoritative seam: the inspection
+            # module owns workspace-frame canonicalization after the
+            # worker decomposition, so force its failure there.
+            import agentic_debugger.runtime.pdb_worker_inspection as _inspection_module
+            saved_canonical = _inspection_module.canonical_workspace_frame_script
+            _inspection_module.canonical_workspace_frame_script = lambda frame, root: None
 
         try:
             worker._handle_safe_eval_expression(PdbRequest(
@@ -5636,6 +5646,9 @@ class TestSafeEvaluationWorkerInvariant:
             assert worker._running is True
             assert worker._unsafe is False
         finally:
+            if saved_canonical is not None:
+                import agentic_debugger.runtime.pdb_worker_inspection as _inspection_restore
+                _inspection_restore.canonical_workspace_frame_script = saved_canonical
             with worker._condition:
                 if worker._lifecycle["state"] == "paused":
                     worker._lifecycle["state"] = "terminating"

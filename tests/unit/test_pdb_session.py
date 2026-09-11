@@ -4810,7 +4810,7 @@ class TestSafeEvaluationSuccessfulResultValidation:
 class TestSafeExpressionInterpreter:
     @staticmethod
     def _evaluate(expression, local_values=None):
-        from agentic_debugger.runtime.pdb_worker import (
+        from agentic_debugger.runtime.pdb_worker_safeeval import (
             _parse_safe_expression,
             _SafeExpressionInterpreter,
         )
@@ -4878,7 +4878,7 @@ class TestSafeExpressionInterpreter:
         ],
     )
     def test_structurally_rejected(self, expression):
-        from agentic_debugger.runtime.pdb_worker import _SafeEvaluationError
+        from agentic_debugger.runtime.pdb_worker_safeeval import _SafeEvaluationError
         with pytest.raises(_SafeEvaluationError):
             self._evaluate(expression, {"x": 1, "y": [], "value": []})
 
@@ -4905,14 +4905,14 @@ class TestSafeExpressionInterpreter:
     def test_unsafe_or_failed_operations_are_bounded(
         self, expression, local_values
     ):
-        from agentic_debugger.runtime.pdb_worker import _SafeEvaluationError
+        from agentic_debugger.runtime.pdb_worker_safeeval import _SafeEvaluationError
         with pytest.raises(_SafeEvaluationError) as caught:
             self._evaluate(expression, local_values)
         assert caught.value.args
         assert len(str(caught.value).encode("utf-8")) <= 4096
 
     def test_ast_node_depth_identifier_and_arithmetic_bounds(self):
-        from agentic_debugger.runtime.pdb_worker import _SafeEvaluationError
+        from agentic_debugger.runtime.pdb_worker_safeeval import _SafeEvaluationError
         expressions = [
             " + ".join(["1"] * 30),
             "+" * 13 + "1",
@@ -4937,7 +4937,7 @@ class TestSafeExpressionInterpreter:
     def test_finite_arithmetic_cannot_overflow_to_nonfinite(
         self, expression
     ):
-        from agentic_debugger.runtime.pdb_worker import _SafeEvaluationError
+        from agentic_debugger.runtime.pdb_worker_safeeval import _SafeEvaluationError
         with pytest.raises(_SafeEvaluationError, match="Finite arithmetic"):
             self._evaluate(expression, {"huge": 1 << 1023})
 
@@ -4946,9 +4946,8 @@ class TestSafeExpressionInterpreter:
         assert self._evaluate("1e307 + 1e307") == 2e307
 
     def test_hostile_hooks_are_never_invoked(self):
-        from agentic_debugger.runtime.pdb_worker import (
-            _SafeEvaluationError, _summarize_value,
-        )
+        from agentic_debugger.runtime.pdb_worker_safeeval import _SafeEvaluationError
+        from agentic_debugger.runtime.pdb_worker_values import _summarize_value
         calls = []
 
         class Hostile:
@@ -5019,7 +5018,7 @@ class TestSafeExpressionInterpreter:
         ],
     )
     def test_oversized_requested_dictionary_key_fails_before_scan(self, key):
-        from agentic_debugger.runtime.pdb_worker import _SafeEvaluationError
+        from agentic_debugger.runtime.pdb_worker_safeeval import _SafeEvaluationError
 
         with pytest.raises(_SafeEvaluationError, match="safe bounds"):
             self._evaluate(
@@ -5040,7 +5039,7 @@ class TestSafeExpressionInterpreter:
     def test_frame_local_collision_never_invokes_hostile_equality(
         self, tmp_path
     ):
-        from agentic_debugger.runtime.pdb_worker import _SafeEvaluationError
+        from agentic_debugger.runtime.pdb_worker_safeeval import _SafeEvaluationError
         marker = tmp_path / "frame-local-collision.txt"
         calls = []
 
@@ -5076,7 +5075,7 @@ class TestSafeExpressionInterpreter:
         assert not marker.exists()
 
     def test_frame_local_enumeration_uses_paired_values_and_bound(self):
-        from agentic_debugger.runtime.pdb_worker import (
+        from agentic_debugger.runtime.pdb_worker_frames import (
             _frame_locals_entries, _frame_locals_lookup,
         )
 
@@ -5102,7 +5101,7 @@ class TestSafeExpressionInterpreter:
         assert failure == "Frame locals exceed 4096-entry scan limit"
 
     def test_parser_recursion_and_step_overflow_are_bounded(self, monkeypatch):
-        import agentic_debugger.runtime.pdb_worker as worker_module
+        import agentic_debugger.runtime.pdb_worker_safeeval as worker_module
         with monkeypatch.context() as context:
             context.setattr(
                 worker_module.ast, "parse",
@@ -5120,7 +5119,7 @@ class TestSafeExpressionInterpreter:
                 self._evaluate("value + 1", {"value": 1})
 
     def test_exact_builtin_subclasses_are_rejected_without_hooks(self):
-        from agentic_debugger.runtime.pdb_worker import _SafeEvaluationError
+        from agentic_debugger.runtime.pdb_worker_safeeval import _SafeEvaluationError
         calls = []
 
         class HostileList(list):
@@ -5136,7 +5135,7 @@ class TestSafeExpressionInterpreter:
         assert calls == []
 
     def test_dictionary_scan_limit_and_unsafe_key(self):
-        from agentic_debugger.runtime.pdb_worker import _SafeEvaluationError
+        from agentic_debugger.runtime.pdb_worker_safeeval import _SafeEvaluationError
         mapping = {index: index for index in range(257)}
         with pytest.raises(_SafeEvaluationError, match="256-entry"):
             self._evaluate("mapping[256]", {"mapping": mapping})
@@ -5156,7 +5155,7 @@ class TestSafeExpressionInterpreter:
         ],
     )
     def test_constant_bounds_and_types(self, expression):
-        from agentic_debugger.runtime.pdb_worker import _SafeEvaluationError
+        from agentic_debugger.runtime.pdb_worker_safeeval import _SafeEvaluationError
         with pytest.raises(_SafeEvaluationError):
             self._evaluate(expression)
 
@@ -5281,7 +5280,7 @@ def test_safe_evaluation_status_recovery_from_unknown(mock_workspace):
 def test_safe_expression_ast_is_collectable():
     import gc
     import weakref
-    from agentic_debugger.runtime.pdb_worker import (
+    from agentic_debugger.runtime.pdb_worker_safeeval import (
         _parse_safe_expression, _SafeExpressionInterpreter,
     )
     parsed = _parse_safe_expression("value + 1")
