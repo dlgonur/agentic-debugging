@@ -122,10 +122,21 @@ def test_facade_reexports_are_implementation_objects():
     assert facade.list_provider_models is setup.list_provider_models
 
 
-def test_facade_all_covers_baseline():
+def test_facade_all_matches_baseline_exactly():
     import agentic_debugger.ui.screens as facade
 
-    assert set(BASELINE_ALL) <= set(facade.__all__)
+    # Behavior-preserving contract: wildcard/public API is exactly the
+    # baseline 9-name sequence — ordered equality, not subset/superset.
+    assert facade.__all__ == BASELINE_ALL
+
+
+def test_star_import_matches_baseline():
+    # `from ... import *` without an explicit list exposes exactly __all__.
+    namespace: dict = {}
+    exec("from agentic_debugger.ui.screens import *", namespace)
+    for name in BASELINE_ALL:
+        assert name in namespace, name
+    assert [n for n in namespace if not n.startswith("__")] == BASELINE_ALL
 
 
 def test_no_impl_module_imports_facade():
