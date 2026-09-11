@@ -1219,7 +1219,10 @@ class TestStuckThread:
             session._stdout_thread = stuck
 
             with pytest.raises(PdbSessionError, match="did not stop"):
-                session._terminate_and_cleanup()
+                from agentic_debugger.runtime.pdb_session_transport import (
+                    terminate_and_cleanup as _transport_terminate_for_test,
+                )
+                _transport_terminate_for_test(session)
 
             blocker.set()
             stuck.join(timeout=1.0)
@@ -1505,7 +1508,10 @@ class TestRunToBreakpointValidation:
 
     def test_breakpoint_ordering(self, mock_workspace):
         session, _ = _setup(mock_workspace, [_hello_resp()])
-        bps = session._validate_breakpoints([5, 1, 3])
+        from agentic_debugger.runtime.pdb_session_validation import (
+            validate_breakpoints as _validate_bps_for_test,
+        )
+        bps = _validate_bps_for_test([5, 1, 3])
         assert bps == [1, 3, 5]
         session.stop()
 
@@ -2021,7 +2027,11 @@ class TestCleanupFailure:
             session._stdout_thread = stuck
             session._reader_error.set()
 
-            session._schedule_overflow_cleanup()
+            from agentic_debugger.runtime.pdb_session_transport import (
+                schedule_overflow_cleanup as _schedule_for_test,
+                terminate_and_cleanup as _terminate_for_test,
+            )
+            _schedule_for_test(session)
             session._reader_cleanup_done.wait(timeout=5.0)
             assert session._reader_cleanup_error is not None
             assert "did not stop" in str(session._reader_cleanup_error)
@@ -2029,7 +2039,7 @@ class TestCleanupFailure:
 
             blocker.set()
             stuck.join(timeout=1.0)
-            session._terminate_and_cleanup()
+            _terminate_for_test(session)
             assert session._proc is None
 
 
@@ -2038,17 +2048,23 @@ class TestRunToBreakpointRepairs:
 
     def test_cross_drive_commonpath_raises_pdb_error(self, mock_workspace):
         s = PdbSession(mock_workspace)
-        with patch("agentic_debugger.runtime.pdb_session.os.path.commonpath",
+        with patch("agentic_debugger.runtime.pdb_session_validation.os.path.commonpath",
                    side_effect=ValueError("no common drive")):
             with pytest.raises(PdbProtocolError, match="containment check"):
-                s._read_validated_workspace_script("test.py")
+                from agentic_debugger.runtime.pdb_session_validation import (
+                    read_validated_workspace_script as _read_ws_for_test,
+                )
+                _read_ws_for_test(s._workspace.root, "test.py")
 
     def test_commonpath_oserror_raises_pdb_error(self, mock_workspace):
         s = PdbSession(mock_workspace)
-        with patch("agentic_debugger.runtime.pdb_session.os.path.commonpath",
+        with patch("agentic_debugger.runtime.pdb_session_validation.os.path.commonpath",
                    side_effect=OSError("commonpath failed")):
             with pytest.raises(PdbProtocolError, match="containment check"):
-                s._read_validated_workspace_script("test.py")
+                from agentic_debugger.runtime.pdb_session_validation import (
+                    read_validated_workspace_script as _read_ws_for_test2,
+                )
+                _read_ws_for_test2(s._workspace.root, "test.py")
 
     def test_reject_utf8_surrogate_script(self, mock_workspace):
         session, _ = _setup(mock_workspace, [_hello_resp(), _ping_resp(2)])
@@ -2071,11 +2087,17 @@ class TestRunToBreakpointRepairs:
     def test_check_utf8_strict_raises_on_surrogate(self, mock_workspace):
         s = PdbSession(mock_workspace)
         with pytest.raises(PdbProtocolError, match="non-UTF-8"):
-            s._check_utf8_strict("\ud800", "test")
+            from agentic_debugger.runtime.pdb_session_validation import (
+                check_utf8_strict as _check_utf8_for_test,
+            )
+            _check_utf8_for_test("\ud800", "test")
 
     def test_check_utf8_strict_passes_normal(self, mock_workspace):
         s = PdbSession(mock_workspace)
-        s._check_utf8_strict("normal.py", "script")
+        from agentic_debugger.runtime.pdb_session_validation import (
+            check_utf8_strict as _check_utf8_for_test2,
+        )
+        _check_utf8_for_test2("normal.py", "script")
 
     def test_binary_open_flag_portable(self, mock_workspace):
         from agentic_debugger.runtime.pdb_session import _BINARY_OPEN_FLAG as bf
@@ -2089,7 +2111,10 @@ class TestRunToBreakpointRepairs:
         s = PdbSession(mock_workspace)
         fd = _os.open(str(f), _os.O_RDONLY | getattr(_os, "O_BINARY", 0))
         try:
-            result = s._read_bounded_fd(fd)
+            from agentic_debugger.runtime.pdb_session_validation import (
+                read_bounded_fd as _read_fd_for_test,
+            )
+            result = _read_fd_for_test(fd)
             assert result == b"abcdefghi"
         finally:
             _os.close(fd)
@@ -2101,37 +2126,48 @@ class TestRunToBreakpointRepairs:
         s = PdbSession(mock_workspace)
         fd = _os.open(str(f), _os.O_RDONLY | getattr(_os, "O_BINARY", 0))
         try:
-            result = s._read_bounded_fd(fd)
+            from agentic_debugger.runtime.pdb_session_validation import (
+                read_bounded_fd as _read_fd_for_test2,
+            )
+            result = _read_fd_for_test2(fd)
             assert result == b""
         finally:
             _os.close(fd)
 
     def test_session_read_bounded_fd_exact_limit(self, mock_workspace):
-        from agentic_debugger.runtime.pdb_session import _MAX_TARGET_SOURCE_BYTES
-        from agentic_debugger.runtime.pdb_session import PdbSession as _Ps
+        from agentic_debugger.runtime.pdb_session_limits import (
+            _MAX_TARGET_SOURCE_BYTES,
+        )
+        from agentic_debugger.runtime.pdb_session_validation import (
+            read_bounded_fd as _read_fd_for_test3,
+        )
         d = Path(mock_workspace.root)
         f = d / "exact_limit_test.py"
         data = b"x" * _MAX_TARGET_SOURCE_BYTES
         f.write_bytes(data)
         fd = _os.open(str(f), _os.O_RDONLY | getattr(_os, "O_BINARY", 0))
         try:
-            result = _Ps._read_bounded_fd(fd)
+            result = _read_fd_for_test3(fd)
             assert isinstance(result, bytes)
             assert len(result) == _MAX_TARGET_SOURCE_BYTES
         finally:
             _os.close(fd)
 
     def test_session_read_bounded_fd_over_limit(self, mock_workspace):
-        from agentic_debugger.runtime.pdb_session import _MAX_TARGET_SOURCE_BYTES
-        from agentic_debugger.runtime.pdb_session import PdbSession as _Ps
+        from agentic_debugger.runtime.pdb_session_limits import (
+            _MAX_TARGET_SOURCE_BYTES as _MAX_SRC_FOR_TEST,
+        )
+        from agentic_debugger.runtime.pdb_session_validation import (
+            read_bounded_fd as _read_fd_for_test4,
+        )
         d = Path(mock_workspace.root)
         f = d / "over_limit_test.py"
-        data = b"x" * (_MAX_TARGET_SOURCE_BYTES + 1)
+        data = b"x" * (_MAX_SRC_FOR_TEST + 1)
         f.write_bytes(data)
         fd = _os.open(str(f), _os.O_RDONLY | getattr(_os, "O_BINARY", 0))
         try:
             with pytest.raises(PdbProtocolError, match="exceeds maximum source"):
-                _Ps._read_bounded_fd(fd)
+                _read_fd_for_test4(fd)
         finally:
             _os.close(fd)
 
@@ -2354,10 +2390,12 @@ class TestPausedTargetValidationBeforeSend:
         session.stop()
 
     def test_oversized_source_rejected(self, mock_workspace):
-        from agentic_debugger.runtime.pdb_session import _MAX_TARGET_SOURCE_BYTES
+        from agentic_debugger.runtime.pdb_session_limits import (
+            _MAX_TARGET_SOURCE_BYTES as _MAX_SRC_FOR_OVERSIZE,
+        )
         d = Path(mock_workspace.root)
         f = d / "huge_test.py"
-        f.write_bytes(b"x = 1\n" + b"# " + b"x" * _MAX_TARGET_SOURCE_BYTES)
+        f.write_bytes(b"x = 1\n" + b"# " + b"x" * _MAX_SRC_FOR_OVERSIZE)
         session, mp = _setup(mock_workspace, [_hello_resp(), _ping_resp(2)])
         orig_send = session._send_and_receive
         send_calls = []
@@ -4371,14 +4409,17 @@ class TestInspectionResponseEnvelopeRepair:
         assert _unbounded_response_size(below_limit) == MAX_LINE_LENGTH - 1
         assert _unbounded_response_size(at_limit) == MAX_LINE_LENGTH
         assert _unbounded_response_size(above_limit) == MAX_LINE_LENGTH + 1
-        PdbSession._validate_successful_inspection_response_size(
+        from agentic_debugger.runtime.pdb_session_inspection import (
+            validate_successful_inspection_response_size as _validate_size,
+        )
+        _validate_size(
             below_limit, "get_stack_summary"
         )
-        PdbSession._validate_successful_inspection_response_size(
+        _validate_size(
             at_limit, "get_stack_summary"
         )
         with pytest.raises(PdbProtocolError, match="protocol line limit"):
-            PdbSession._validate_successful_inspection_response_size(
+            _validate_size(
                 above_limit, "get_stack_summary"
             )
 
@@ -4770,7 +4811,7 @@ class TestSafeEvaluationSuccessfulResultValidation:
     def test_oversized_complete_response_cleans_session(
         self, mock_workspace, monkeypatch
     ):
-        import agentic_debugger.runtime.pdb_session as session_module
+        import agentic_debugger.runtime.pdb_session_inspection as inspection_module
         leaf = _summary_for_kind("str")
         leaf.update({
             "value": "x" * 2048, "size": 2048, "truncated": False,
@@ -4794,7 +4835,7 @@ class TestSafeEvaluationSuccessfulResultValidation:
         )
         assert _unbounded_response_size(response) > 65536
         monkeypatch.setattr(
-            session_module, "_MAX_SAFE_EVAL_RESULT_BYTES", 1024 * 1024
+            inspection_module, "_MAX_SAFE_EVAL_RESULT_BYTES", 1024 * 1024
         )
         session, _, _ = _ready_inspection_session(mock_workspace, result)
         try:

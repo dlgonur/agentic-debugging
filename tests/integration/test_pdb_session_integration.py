@@ -1484,7 +1484,9 @@ class TestRunToBreakpointIntegration:
 
     # 22. Malformed result validation test (direct validation)
     def test_malformed_result_validation(self, ws_run):
-        from agentic_debugger.runtime.pdb_session import PdbSession as _Ps
+        from agentic_debugger.runtime.pdb_session_outcomes import (
+            validate_run_result as _validate_run_for_test,
+        )
         bad_result = {"status": "breakpoint", "script": 123, "line": 5, "function": "main"}
         bad_resp = PdbResponse(
             protocol_version=PROTOCOL_VERSION,
@@ -1494,7 +1496,7 @@ class TestRunToBreakpointIntegration:
             error="",
         )
         with pytest.raises(PdbProtocolError, match="script must be"):
-            _Ps._validate_run_result(bad_resp)
+            _validate_run_for_test(bad_resp)
 
     # 23. Context-manager stop remains clean after a completed target run
     def test_context_manager_stop_after_run(self, ws_run):
@@ -2110,10 +2112,13 @@ class TestRunToBreakpointIntegration:
             normalized = "identity_test.py"
 
             from unittest.mock import patch as _patch
-            with _patch("agentic_debugger.runtime.pdb_session.os.path.samestat",
+            with _patch("agentic_debugger.runtime.pdb_session_validation.os.path.samestat",
                        return_value=False):
                 with pytest.raises(PdbProtocolError, match="script file changed"):
-                    session._read_validated_workspace_script(normalized)
+                    from agentic_debugger.runtime.pdb_session_validation import (
+                        read_validated_workspace_script as _read_ws_for_it,
+                    )
+                    _read_ws_for_it(session._workspace.root, normalized)
 
             resp = session.ping()
             assert resp.success is True
@@ -2251,7 +2256,9 @@ class TestRunToBreakpointIntegration:
     # 48j. Session end-to-end over-limit rejection
     def test_session_over_limit_rejection(self, ws_run):
         import os as _os
-        from agentic_debugger.runtime.pdb_session import _MAX_TARGET_SOURCE_BYTES
+        from agentic_debugger.runtime.pdb_session_limits import (
+            _MAX_TARGET_SOURCE_BYTES,
+        )
         d = Path(ws_run.root)
         f = d / "huge_test.py"
         f.write_bytes(b"x = 1\n" + b"# " + b"x" * (_MAX_TARGET_SOURCE_BYTES))
