@@ -23,9 +23,10 @@ touches the owner working tree.
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 from pathlib import Path
-from typing import Optional
+from typing import Mapping, Optional
 
 from agentic_debugger.application import ApplicationInputError
 from agentic_debugger.application.local_project_contracts import (
@@ -44,14 +45,12 @@ from agentic_debugger.application.local_project_git import (
     assert_path_inside_workspace,
     capture_launch_cwd,
     cleanup_isolated_worktree,
-    cleanup_parent_tmpdir,
     create_isolated_worktree,
     get_dirty_summary,
     get_git_root,
     get_head_commit,
     get_launch_cwd,
     has_uncommitted_changes,
-    inventory_tracked_python_files,
     is_git_worktree,
     list_child_directories,
     reset_launch_cwd,
@@ -59,6 +58,169 @@ from agentic_debugger.application.local_project_git import (
     set_launch_cwd_for_tests,
     validate_local_project,
 )
+
+
+def inventory_tracked_python_files(
+    isolated: Path,
+    *,
+    environment: Optional[Mapping[str, str]] = None,
+) -> list[str]:
+    """Return sorted tracked Python files via `git ls-files`, bounded.
+
+    Uses `git ls-files -z` as authority (tracked files only, no untracked,
+    no .git). Filters for `*.py`, excludes `.git` (never returned), checks
+    symlink escape via `assert_path_inside_workspace`, and enforces a
+    deterministic bound (200 files, 1 MiB each). If no Python files, fail
+    clearly. If too large, fail clearly rather than silently dropping.
+
+    ``environment`` is an explicit child-process mapping supplied by the
+    session's V2 execution-environment authority (the project-command role
+    for Local Project worker use).  When ``None`` the historical
+    parent-inheritance behavior is preserved for direct non-product/UI
+    callers; the real Local Project worker always supplies it so the Git
+    child never implicitly inherits worker control/model/provider state.
+    """
+    import subprocess
+
+    if environment is not None:
+        if not isinstance(environment, Mapping):
+            raise ApplicationInputError(
+                "environment must be a mapping of strings or None"
+            )
+        for name, value in environment.items():
+            if type(name) is not str or not name or type(value) is not str:
+                raise ApplicationInputError(
+                    "environment must map non-empty strings to strings"
+                )
+        child_env: Optional[dict[str, str]] = dict(environment)
+    else:
+        child_env = None
+
+    try:
+        result = subprocess.run(["git", "ls-files", "-z"],
+            stdin=subprocess.DEVNULL,
+            cwd=str(isolated),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=10,
+            env=child_env,
+        )
+    except Exception as exc:
+        raise ApplicationInputError(f"git ls-files failed: {exc}") from exc
+    if result.returncode != 0:
+        raise ApplicationInputError(f"git ls-files failed: {result.stderr.decode(errors='replace')[:200]}")
+    raw = result.stdout.split(b"\x00")
+    files: list[str] = []
+    for b in raw:
+        if not b:
+            continue
+        try:
+            p = b.decode("utf-8")
+        except UnicodeDecodeError:
+            continue
+        if p.startswith(".git/") or p == ".git":
+            continue
+        if not p.endswith(".py"):
+            continue
+        # Symlink and size checks
+        try:
+            assert_path_inside_workspace(isolated, p)
+        except ApplicationInputError:
+            continue
+        try:
+            size = (isolated / p).stat().st_size
+            if size > 1024 * 1024:
+                continue
+        except OSError:
+            continue
+        files.append(p.replace("\\", "/"))
+    files = sorted(set(files))
+    if not files:
+        raise ApplicationInputError("No supported Python source files found.")
+    if len(files) > 200:
+        raise ApplicationInputError(f"Repository too large for bounded v1 inventory: {len(files)} Python files exceed 200 limit.")
+    return files
+
+
+def cleanup_parent_tmpdir(
+    parent_tmpdir: Path,
+    repo_root: Path,
+    *,
+    environment: Optional[Mapping[str, str]] = None,
+) -> bool:
+    """Cleanup the full parent temp dir and verify Git registration pruned.
+
+    Verified means: isolated filesystem path gone, parent gone, and `git
+    worktree list --porcelain` no longer contains the isolated path.
+
+    ``environment`` is the explicit project-safe child mapping from the
+    session's V2 execution-environment authority.  The normal Local
+    Project worker always supplies it so the ``git worktree prune`` /
+    ``git worktree list`` children never implicitly inherit worker
+    control/model/provider state.  ``None`` preserves the historical
+    inheritance behavior for direct non-product callers (supervisor
+    post-mortem, UI teardown, tests).
+    """
+    if environment is not None:
+        if not isinstance(environment, Mapping):
+            raise ApplicationInputError(
+                "environment must be a mapping of strings or None"
+            )
+        for name, value in environment.items():
+            if type(name) is not str or not name or type(value) is not str:
+                raise ApplicationInputError(
+                    "environment must map non-empty strings to strings"
+                )
+        child_env: Optional[dict[str, str]] = dict(environment)
+    else:
+        child_env = None
+    isolated_path = None
+    try:
+        cand = parent_tmpdir / "worktree"
+        if cand.exists():
+            isolated_path = cand
+    except Exception:
+        pass
+    if parent_tmpdir.exists():
+        try:
+            shutil.rmtree(parent_tmpdir, ignore_errors=True)
+        except Exception:
+            pass
+        try:
+            subprocess.run(["git", "worktree", "prune"],
+                stdin=subprocess.DEVNULL,
+                cwd=str(repo_root),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=10.0,
+                env=child_env,
+            )
+        except Exception:
+            pass
+    fs_gone = not parent_tmpdir.exists()
+    git_pruned = True
+    try:
+        result = subprocess.run(["git", "worktree", "list", "--porcelain"],
+            stdin=subprocess.DEVNULL,
+            cwd=str(repo_root),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=10.0,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=child_env,
+        )
+        if result.returncode == 0:
+            if isolated_path is not None:
+                git_pruned = str(isolated_path.resolve()) not in result.stdout
+            else:
+                git_pruned = str(parent_tmpdir.resolve()) not in result.stdout
+        else:
+            git_pruned = False
+    except Exception:
+        git_pruned = False
+    return fs_gone and git_pruned
 
 
 # ---------------------------------------------------------------------------
