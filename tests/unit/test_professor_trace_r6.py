@@ -1254,6 +1254,9 @@ def test_pristine_tracked_only_checkout_regeneration(tmp_path) -> None:
     # 2. The candidate's new files (tracked by the owner commit).
     candidate_new = [
         "agentic_debugger/evaluation/professor_trace_r6.py",
+        "agentic_debugger/evaluation/r6_evidence.py",
+        "agentic_debugger/evaluation/r6_audit.py",
+        "agentic_debugger/evaluation/r6_trace.py",
         "tests/unit/test_professor_trace_r6.py",
         "scripts/build_r6_frozen_evidence_capsule.py",
         "docs/professor_traces/README.md",
