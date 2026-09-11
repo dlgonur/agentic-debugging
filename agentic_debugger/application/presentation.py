@@ -68,6 +68,7 @@ from agentic_debugger.application.presentation_views import (
     PatchAttemptView,
     PatchStage,
     PresentationIdentity,
+    SessionStatus,
     SessionViewState,
     SourceView,
     TimelineEntry,
