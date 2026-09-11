@@ -128,7 +128,7 @@ or external-dataset campaigns as ordinary validation.
 ## Instruction maintenance
 
 Keep this file concise, durable, actionable, and repository-specific. Update it
-only when instruction maintenance is explicitly in scope or Onur/FirstMate has
+only when instruction maintenance is explicitly in scope or Onur/Yaver has
 authorized a consequential durable rule change. Do not add task state, SHAs,
 campaign snapshots, fixed test counts, machine-local paths, generic workflow
 policy, or rules better enforced by code or tests.
