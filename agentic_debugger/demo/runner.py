@@ -89,8 +89,14 @@ from agentic_debugger.demo.report_records import (
     deterministic_view,
 )
 from agentic_debugger.evaluation.runner import bounded_error, load_task, normalize_output
+from agentic_debugger.demo.tools import build_registry
 from agentic_debugger.evaluation.verifier import EvaluationVerifier
 from agentic_debugger.events.logger import JsonlEventLogger
+from agentic_debugger.events.replay import (
+    ReplayError,
+    replay_events,
+    semantic_projection,
+)
 from agentic_debugger.events.schema import EventType, ObservationStatus
 from agentic_debugger.runtime.workspace import TaskWorkspace
 
