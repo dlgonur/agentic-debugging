@@ -608,7 +608,7 @@ def test_resolve_incompatible_model_protocol_raises_error(
         ),
     )
     monkeypatch.setattr(
-        "agentic_debugger.application.model_gateway.effective_model_protocol",
+        "agentic_debugger.application.model_gateway_resolution.effective_model_protocol",
         lambda kind, model: (_ for _ in ()).throw(
             ProviderConnectionError("incompatible protocol format")
         ),
@@ -1907,10 +1907,10 @@ def test_candidate_17_finding_1_generic_missing_cred_structured_facts(
     # 1B: Missing credential + incompatible model protocol -> IncompatibleModelError
     # Repair 25: snapshot-pure seam is authoritative; mock it as well.
     with patch(
-        "agentic_debugger.application.model_gateway.effective_model_protocol",
+        "agentic_debugger.application.model_gateway_resolution.effective_model_protocol",
         side_effect=ProviderConnectionError("Unsupported protocol for model"),
     ), patch(
-        "agentic_debugger.application.model_gateway.effective_model_protocol_for_config",
+        "agentic_debugger.application.model_gateway_resolution.effective_model_protocol_for_config",
         side_effect=ProviderConnectionError("Unsupported protocol for model"),
     ):
         with pytest.raises(IncompatibleModelError, match="incompatible"):
@@ -2268,8 +2268,8 @@ def test_candidate_18_finding_1_historical_incompatible_protocol_fails_before_li
 
     with patch("agentic_debugger.application.model_providers._legacy_for_config", return_value=(False, "no CLI")), \
          patch("agentic_debugger.application.model_providers.resolve_provider_live_config", side_effect=_bomb), \
-         patch("agentic_debugger.application.model_gateway.is_protocol_executable", return_value=False), \
-         patch("agentic_debugger.application.model_gateway.is_protocol_executable_for_config", return_value=False):
+         patch("agentic_debugger.application.model_gateway_resolution.is_protocol_executable", return_value=False), \
+         patch("agentic_debugger.application.model_gateway_resolution.is_protocol_executable_for_config", return_value=False):
         with pytest.raises(IncompatibleModelError, match="not executable"):
             gateway.resolve("cc_incompat_18", "model-1")
 
@@ -2707,7 +2707,7 @@ def test_candidate_18_finding_3_resolve_incomplete_provider_config_fails_closed(
         enabled=True,
     )
     monkeypatch.setattr(
-        "agentic_debugger.application.model_gateway.get_provider_config",
+        "agentic_debugger.application.model_gateway_resolution.get_provider_config",
         lambda p: incomplete_cfg if p == "incomplete_p" else None,
     )
 
@@ -2845,7 +2845,10 @@ def test_candidate_19_firstmate_repro_a_resolver_exception_fails_closed(
 
     # Inject unexpected protocol resolver failure
     with patch(
-        "agentic_debugger.application.model_gateway.effective_model_protocol",
+        "agentic_debugger.application.model_gateway_resolution.effective_model_protocol",
+        side_effect=RuntimeError("synthetic protocol resolver failure"),
+    ), patch(
+        "agentic_debugger.application.model_gateway_transport.effective_model_protocol",
         side_effect=RuntimeError("synthetic protocol resolver failure"),
     ):
         pf = gateway.static_preflight(binding)
@@ -2963,7 +2966,9 @@ def test_candidate_19_legacy_binding_unaffected_by_direct_protocol(
         assert binding.route == ROUTE_LEGACY_CLI
 
         # Even if effective_model_protocol would fail, legacy route does not consult it
-        with patch("agentic_debugger.application.model_gateway.effective_model_protocol",
+        with patch("agentic_debugger.application.model_gateway_resolution.effective_model_protocol",
+                   side_effect=RuntimeError("must not be called for legacy CLI")), \
+             patch("agentic_debugger.application.model_gateway_transport.effective_model_protocol",
                    side_effect=RuntimeError("must not be called for legacy CLI")):
             pf = gateway.static_preflight(binding)
             assert pf.is_runnable is True
@@ -3087,7 +3092,10 @@ def test_candidate_19_provider_api_model_id_corroboration_fails_closed(
 
     # ProviderConnectionError case
     with patch(
-        "agentic_debugger.application.model_gateway.provider_api_model_id",
+        "agentic_debugger.application.model_gateway_resolution.provider_api_model_id",
+        side_effect=ProviderConnectionError("invalid model identity"),
+    ), patch(
+        "agentic_debugger.application.model_gateway_transport.provider_api_model_id",
         side_effect=ProviderConnectionError("invalid model identity"),
     ):
         pf = gateway.static_preflight(binding)
@@ -3099,7 +3107,10 @@ def test_candidate_19_provider_api_model_id_corroboration_fails_closed(
 
     # Unexpected Exception case
     with patch(
-        "agentic_debugger.application.model_gateway.provider_api_model_id",
+        "agentic_debugger.application.model_gateway_resolution.provider_api_model_id",
+        side_effect=RuntimeError("unexpected api model error"),
+    ), patch(
+        "agentic_debugger.application.model_gateway_transport.provider_api_model_id",
         side_effect=RuntimeError("unexpected api model error"),
     ):
         pf = gateway.static_preflight(binding)
