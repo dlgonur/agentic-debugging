@@ -36,6 +36,32 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Mapping, Optional, Tuple
 
+from agentic_debugger.ui.app_support import (
+    curated_task_ids,
+    curated_task_options,
+    configured_source_name,
+    default_history_root,
+    deterministic_source_name,
+    make_session_id,
+    repository_root,
+    task_display_option,
+    task_display_title,
+)
+from agentic_debugger.ui.live_callbacks import (
+    live_events_ui,
+    live_failure_ui,
+    live_liveness_ui,
+    live_started_ui,
+    maybe_auto_retry,
+    on_live_events,
+    on_live_failure,
+    on_live_liveness,
+    on_live_started,
+    on_live_terminal,
+    release_live_runner,
+    retry_live_session,
+    live_terminal_ui,
+)
 from textual.app import App
 from textual.binding import Binding
 
@@ -123,86 +149,6 @@ _AUTO_RETRY_TERMINALS: frozenset[
         (SessionStatus.TIMED_OUT, SessionTerminationReason.TIMEOUT),
     }
 )
-
-
-def task_display_title(task_id: str, repo_root: Optional[Path] = None) -> str:
-    """Return a human-readable title for a task id.
-
-    Tries loading the task title from task.json under the repository root,
-    then checks curated mapping, and falls back to task_id if unavailable.
-    """
-    if repo_root is not None:
-        task_json = (
-            Path(repo_root)
-            / "agentic_debugger"
-            / "datasets"
-            / "curated"
-            / task_id
-            / "task.json"
-        )
-        if task_json.is_file():
-            try:
-                import json
-
-                with open(task_json, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                    if isinstance(data, dict) and data.get("title"):
-                        return str(data["title"])
-            except Exception:
-                pass
-    if task_id == "local-project-debug":
-        return "Local Project Debug"
-    if task_id in _CURATED_TASK_TITLES:
-        return _CURATED_TASK_TITLES[task_id]
-    if task_id in LADDER_TASK_IDS:
-        return ladder_task_metadata(task_id).title
-    return task_id
-
-
-def task_display_option(
-    task_id: str, repo_root: Optional[Path] = None
-) -> tuple[str, str]:
-    """Return (label, task_id) for dropdown selectors."""
-    title = task_display_title(task_id, repo_root)
-    if title != task_id:
-        return f"{title} · {task_id}", task_id
-    return task_id, task_id
-
-
-def deterministic_source_name() -> str:
-    """The one production deterministic worker source (Task 7)."""
-    from agentic_debugger.application.deterministic_source import (
-        DETERMINISTIC_SOURCE_NAME,
-    )
-
-    return DETERMINISTIC_SOURCE_NAME
-
-
-def configured_source_name() -> str:
-    """The one production configured command-model worker source (Task 8)."""
-    from agentic_debugger.application.configured_source import (
-        CONFIGURED_SOURCE_NAME,
-    )
-
-    return CONFIGURED_SOURCE_NAME
-
-
-def default_history_root() -> Path:
-    """The application-owned run root (``%LOCALAPPDATA%/AgenticDebugger``)."""
-    return application_default_history_root()
-
-
-def repository_root() -> Path:
-    """The repository root owning the installed package."""
-    import agentic_debugger
-
-    return Path(agentic_debugger.__file__).resolve().parent.parent
-
-
-def make_session_id() -> str:
-    """One validated application session id (``sess-<utc>-<rand>``)."""
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-    return f"sess-{stamp}-{secrets.token_hex(3)}"
 
 
 class LocalApplicationV1(App):
@@ -413,41 +359,10 @@ class LocalApplicationV1(App):
     # -- live sessions ------------------------------------------------------
 
     def curated_task_ids(self) -> Tuple[str, ...]:
-        """The canonical deterministic-session task catalog.
-
-        Discovery comes from the live curated fixture directory; only tasks
-        the accepted deterministic demo source actually has a scenario for
-        are offered (starting any other fixture would fail at scenario
-        resolution).  This is the repository's own catalog, never a second
-        list.
-        """
-        from agentic_debugger.demo.catalog import scenario_ids
-        from agentic_debugger.demo.runner import curated_task_ids
-
-        supported = set(scenario_ids())
-        return tuple(
-            task_id
-            for task_id in curated_task_ids(self._repository_root)
-            if task_id in supported
-        )
+        return curated_task_ids(self)
 
     def curated_task_options(self) -> Tuple[Tuple[str, str], ...]:
-        """All accepted session tasks exposed by the product picker.
-
-        Repository-native curated tasks come first so a fresh installation
-        opens on a provider-free, runnable workflow.  Research capability
-        rungs follow in their frozen relative order and remain available when
-        their source-checkout operator is present.
-        """
-
-        ladder = ladder_task_options()
-        ladder_ids = {task_id for _, task_id in ladder}
-        curated = tuple(
-            task_display_option(task_id, self._repository_root)
-            for task_id in self.curated_task_ids()
-            if task_id not in ladder_ids
-        )
-        return curated + ladder
+        return curated_task_options(self)
 
     def configured_profiles(self) -> Tuple[Tuple[ProfileSummary, ...], Optional[str]]:
         """Safe profile summaries for the Start screen, plus a load error.
@@ -1025,187 +940,43 @@ class LocalApplicationV1(App):
     # -- live callbacks (runner thread -> event loop) -----------------------
 
     def _on_live_started(self) -> None:
-        try:
-            self.call_from_thread(self._live_started_ui)
-        except Exception:
-            pass
+        on_live_started(self)
 
     def _live_started_ui(self) -> None:
-        workspace = self._live_workspace
-        if workspace is not None and workspace.is_mounted:
-            workspace.refresh_live()
+        live_started_ui(self)
 
     def _on_live_events(self, events: Tuple[SessionEvent, ...]) -> None:
-        try:
-            self.call_from_thread(self._live_events_ui, events)
-        except Exception:
-            pass
+        on_live_events(self, events)
 
     def _live_events_ui(self, events: Tuple[SessionEvent, ...]) -> None:
-        if self._live_view is None:
-            return
-        for event in events:
-            if event.sequence <= self._live_last_sequence:
-                continue
-            self._live_last_sequence = event.sequence
-            self._live_view = reduce_event(self._live_view, event)
-            # A journal prefix is already retained by the worker and reduced
-            # into the bounded timeline. Keep only a bounded compatibility
-            # tail; never create a second unbounded event log in the app.
-            self._live_events = (self._live_events + (event,))[-2000:]
-        workspace = self._live_workspace
-        if workspace is not None and workspace.is_mounted:
-            workspace.refresh_live()
+        live_events_ui(self, events)
 
-    def _on_live_liveness(
-        self, generation: int, session_id: str, liveness: WorkerLiveness
-    ) -> None:
-        try:
-            self.call_from_thread(self._live_liveness_ui, generation, session_id, liveness)
-        except Exception:
-            pass
+    def _on_live_liveness(self, payload):
+        on_live_liveness(self, payload)
 
-    def _live_liveness_ui(
-        self, generation: int, session_id: str, liveness: WorkerLiveness
-    ) -> None:
-        if (
-            self._live_view is None
-            or self._live_view.status.terminal
-            or generation != self._live_generation
-            or self._live_identity is None
-            or self._live_identity.session_id != session_id
-        ):
-            return
-        self._live_snapshot = EphemeralSnapshot(
-            generation=self._live_generation,
-            request_index=liveness.request_index,
-            request_elapsed_seconds=liveness.request_elapsed_seconds,
-            last_activity_age_seconds=liveness.last_activity_age_seconds,
-            transport_alive=liveness.transport_alive,
-            watchdog_idle_seconds=liveness.watchdog_idle_seconds,
-            received_monotonic=time.monotonic(),
-        )
-        workspace = self._live_workspace
-        if workspace is not None and workspace.is_mounted:
-            workspace.refresh_live()
+    def _live_liveness_ui(self, payload):
+        live_liveness_ui(self, payload)
 
     def retry_live_session(self) -> bool:
-        """Restart the most recent retryable live session with identical
-        parameters, linked to the original session in the journal.
-
-        A manual retry is a single explicit attempt: it starts with a
-        zero auto-retry budget, so it can never mint a fresh auto-retry
-        chain.  Returns False when a session is active or no retryable
-        start request is captured.  The re-start re-validates everything
-        (model availability, project cleanliness); a changed environment
-        fails closed instead of silently degrading.
-        """
-        if self._live_runner is not None:
-            return False
-        request = self._live_retry_request
-        if not request:
-            return False
-        original = request["session_id"]
-        self._live_retry_request = None
-        try:
-            # remaining=0: a manual retry is one explicit attempt and can
-            # never start another automatic chain.
-            request["invoke"](original, remaining=0)
-            return True
-        except Exception as exc:
-            self.notify(f"Retry failed: {exc}", severity="error", title="Retry")
-            return False
+        return retry_live_session(self)
 
     def _maybe_auto_retry(self, result: object) -> None:
-        """Start one linked retry when the terminal failure is retryable.
-
-        Retryable failures are transient or model-capability failures where
-        a fresh attempt can genuinely succeed: transport/provider errors,
-        timeouts, controller crashes, and directive exhaustion.  The
-        worker's real timeout terminal is ``TIMED_OUT`` + ``TIMEOUT``, so
-        eligibility is the exact status/reason pair
-        (``_AUTO_RETRY_TERMINALS``), never the reason alone.  User
-        cancellations, interrupts, cleanup failures, honest unresolved
-        verifier outcomes, and any inconsistent status/reason combination
-        fail closed.
-        """
-        if self._live_auto_retry_budget <= 0 or not isinstance(result, SessionResult):
-            return
-        if (result.status, result.termination_reason) not in _AUTO_RETRY_TERMINALS:
-            return
-        self._live_auto_retry_budget -= 1
-        request = self._live_retry_request
-        if not request:
-            return
-        original = request["session_id"]
-        remaining = self._live_auto_retry_budget
-        self._live_retry_request = None
-        try:
-            request["invoke"](original, remaining=remaining)
-            self.notify(
-                f"Session failed ({result.termination_reason.value}); "
-                f"auto-retrying ({remaining} attempt(s) remaining).",
-                severity="warning",
-                title="Auto-retry",
-            )
-        except Exception as exc:
-            self.notify(f"Auto-retry failed: {exc}", severity="error", title="Auto-retry")
+        maybe_auto_retry(self, result)
 
     def _on_live_terminal(self, result: SessionResult, registration_error: Optional[str]) -> None:
-        try:
-            self.call_from_thread(self._live_terminal_ui, result, registration_error)
-        except Exception:
-            pass
+        on_live_terminal(self, result, registration_error)
 
     def _live_terminal_ui(self, result: object, registration_error: Optional[str]) -> None:
-        workspace = self._live_workspace
-        if workspace is not None:
-            # The workspace records the terminal itself (its ``is_mounted``
-            # guard handles a fast worker that finished before the mount).
-            workspace.show_live_terminal(result, registration_error)
-        # The terminal has been delivered: the runner is finished (its own
-        # supervision thread closes the worker right after this callback), so
-        # the app no longer considers it active and another session may start.
-        self._release_live_runner()
-        self._maybe_auto_retry(result)
-        home = self.screen
-        if isinstance(home, HomeScreen):
-            home.refresh_history()
+        live_terminal_ui(self, result, registration_error)
 
     def _on_live_failure(self, diagnostic: str) -> None:
-        try:
-            self.call_from_thread(self._live_failure_ui, diagnostic)
-        except Exception:
-            pass
+        on_live_failure(self, diagnostic)
 
     def _live_failure_ui(self, diagnostic: str) -> None:
-        workspace = self._live_workspace
-        if workspace is not None:
-            workspace.show_live_failure(diagnostic)
-        else:
-            self.notify(diagnostic, severity="error", title="Live session")
-        # A startup/supervision failure is terminal for the runner: release
-        # ownership so a retry can start another session.  The runner's own
-        # supervision path performs the final worker handle close.
-        #
-        # This path intentionally has no SessionResult and therefore no
-        # terminal status/reason pair, so it never reaches
-        # ``_maybe_auto_retry`` (which only speaks the terminal contract);
-        # the captured retry request stays armed and the failure is
-        # manual-retry-only (``r``).  No synthetic terminal is invented.
-        self._release_live_runner()
+        live_failure_ui(self, diagnostic)
 
     def _release_live_runner(self) -> None:
-        """Drop application ownership of a finished/failed live runner.
-
-        Only the runner's own supervision thread closes the worker, so this
-        never joins the runner thread from the event loop (that would
-        deadlock the terminal callback, which the driver thread is waiting
-        on).  The recorded presentation data (``live_view``/``live_events``)
-        stays available for reopening and replay parity.
-        """
-        self._live_runner = None
-        self._live_workspace = None
+        release_live_runner(self)
 
 
 __all__ = [
