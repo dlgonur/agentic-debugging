@@ -3050,13 +3050,15 @@ def test_controller_tool_pdb_verifier_event_and_cleanup_interruptions_are_schema
     validate_live_report(_single_case_report(verifier_case))
 
     monkeypatch.undo()
-    monkeypatch.setattr(live_module, "project_controller_run", lambda *args, **kwargs: (_ for _ in ()).throw(KeyboardInterrupt))
+    from agentic_debugger.evaluation import live_finalize as live_finalize_module
+    monkeypatch.setattr(live_finalize_module, "project_controller_run", lambda *args, **kwargs: (_ for _ in ()).throw(KeyboardInterrupt))
     event_case = _case(workspace_parent, ScriptedTransport(_patch()))
     assert event_case.status is LiveCaseStatus.INCOMPLETE
     validate_live_report(_single_case_report(event_case))
 
     monkeypatch.undo()
-    monkeypatch.setattr(live_module, "_remove_owned_case_dir", lambda *args, **kwargs: (_ for _ in ()).throw(KeyboardInterrupt))
+    from agentic_debugger.evaluation import live_operation as live_operation_module
+    monkeypatch.setattr(live_operation_module, "_remove_owned_case_dir", lambda *args, **kwargs: (_ for _ in ()).throw(KeyboardInterrupt))
     cleanup_case = _case(workspace_parent, FailAfterFirstTransport())
     assert cleanup_case.status is LiveCaseStatus.INCOMPLETE
     assert cleanup_case.reporting["cleanup"] == "failed"
@@ -3141,7 +3143,8 @@ def test_evaluation_interruption_retains_cases_and_counts(workspace_parent):
 
 def test_cleanup_and_evaluation_cleanup_failures_are_reported(workspace_parent, monkeypatch):
     from agentic_debugger.evaluation import live as live_module
-    monkeypatch.setattr(live_module, "_remove_owned_case_dir", lambda *args, **kwargs: (False, "controlled case cleanup failure"))
+    from agentic_debugger.evaluation import live_operation as live_operation_module
+    monkeypatch.setattr(live_operation_module, "_remove_owned_case_dir", lambda *args, **kwargs: (False, "controlled case cleanup failure"))
     failed = _case(workspace_parent, FailAfterFirstTransport())
     assert failed.status is LiveCaseStatus.CLEANUP_FAILED
     monkeypatch.undo()
@@ -3162,7 +3165,8 @@ def test_verifier_and_event_failures_are_distinct(workspace_parent, monkeypatch)
     monkeypatch.setattr(live_module.EvaluationVerifier, "evaluate", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("verifier failure")))
     verifier_failed = _case(workspace_parent, ScriptedTransport(_patch()))
     assert verifier_failed.status is LiveCaseStatus.VERIFIER_FAILED
-    monkeypatch.setattr(live_module, "project_controller_run", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("event failure")))
+    from agentic_debugger.evaluation import live_finalize as live_finalize_module
+    monkeypatch.setattr(live_finalize_module, "project_controller_run", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("event failure")))
     event_failed = _case(workspace_parent, ScriptedTransport(_patch()))
     assert event_failed.status is LiveCaseStatus.EVENT_REPORTING_FAILED
 
@@ -3227,11 +3231,11 @@ def test_cli_rejects_internal_malformed_configured_report_before_writing(workspa
 
 
 def test_cleanup_failure_has_exit_one_contract(workspace_parent, monkeypatch):
-    from agentic_debugger.evaluation import live as live_module
     from agentic_debugger.evaluation import live_cli as live_cli_module
+    from agentic_debugger.evaluation import live_operation as live_operation_module
     config_path = workspace_parent / "config.json"
     config_path.write_text(json.dumps({"model_name": "local-fake", "command": ["not-launched"]}))
-    monkeypatch.setattr(live_module, "_remove_owned_case_dir", lambda *args, **kwargs: (False, "controlled cleanup failure"))
+    monkeypatch.setattr(live_operation_module, "_remove_owned_case_dir", lambda *args, **kwargs: (False, "controlled cleanup failure"))
     cleanup_report = run_live_evaluation(repository_root=ROOT, authorization=LiveExecutionAuthorization.authorize(True, True), config=config(), limits=LiveRunLimits(max_model_requests=2, max_controller_steps=2), task_ids=(TASK_ID,), policies=(DemoPolicy.STATIC_BASELINE,), repetitions=1, workspace_parent=workspace_parent, transport_factory=lambda *args: FailAfterFirstTransport())
     validate_live_report(cleanup_report)
     monkeypatch.setattr(live_cli_module, "run_live_evaluation", lambda **kwargs: cleanup_report)
