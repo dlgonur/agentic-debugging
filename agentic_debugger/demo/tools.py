@@ -1,47 +1,29 @@
-"""Real tool handlers for the Task 9 demonstration.
+"""The deterministic demonstration tool registry.
 
-Every handler delegates to an already-accepted component:
+This module owns :func:`build_registry` — the deterministic construction
+of the controller-visible tool registry (every tool name, action
+schema, argument validation, bounded diagnostics, PDB proof semantics,
+and validation-evidence readiness) — plus the public demo-tool import
+surface.
 
-============================  =======================================
-Controller action             Backing implementation
-============================  =======================================
-``run_reproduction``          ``runtime.test_runner.TestRunner``
-``get_failure_trace``         ``runtime.pdb_session.PdbSession.run_post_mortem``
-``run_regression_tests``      ``runtime.test_runner.TestRunner``
-``find_function``             ``skills.search_skills.find_function``
-``get_source_window``         ``skills.file_skills.get_source_window``
-``apply_patch``               ``runtime.patcher.PatchManager``
-``syntax_check``              ``runtime.patcher.PatchManager``
-``start_pdb_session``         ``runtime.pdb_session.PdbSession``
-``get_stack_summary``         ``runtime.pdb_session.PdbSession``
-``get_frame_locals``          ``runtime.pdb_session.PdbSession``
-``safe_eval_expression``      ``runtime.pdb_session.PdbSession``
-``continue_pdb_session``      ``runtime.pdb_session.PdbSession``
-``step_pdb_session``          ``runtime.pdb_session.PdbSession``
-``next_pdb_session``          ``runtime.pdb_session.PdbSession``
-``stop_pdb_session``          ``runtime.pdb_session.PdbSession``
-``classify_outcome``          ``evaluation.outcome_taxonomy``
-============================  =======================================
+Architecture (one-way dependency graph):
 
-``express_root_cause_hypothesis`` is the one handler with no backing runtime
-component: it records the offline model's own localization and root-cause
-claim so the evaluator can score it against the task oracle.
-
-Handlers never fabricate a success.  A component that raises is surfaced as a
-``rejected``/``error``/``timeout`` observation through the accepted tool
-registry, and the controller reacts to the observation it actually received.
+* :mod:`agentic_debugger.demo.diagnostics` — bounded-safe helpers and
+  validation readiness;
+* :mod:`agentic_debugger.demo.pdb_probe` — the disposable debugger
+  target preparation (:class:`PdbProbe`);
+* :mod:`agentic_debugger.demo.context` — the mutable
+  :class:`DemoToolContext`;
+* this module — the tool registry and the public surface.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
-import os
-import shutil
 from collections.abc import Mapping
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Optional, Sequence
+from typing import Any, Callable, Optional
 
 from agentic_debugger.agent.controller_policy import (
     ActionName,
@@ -61,16 +43,31 @@ from agentic_debugger.application.source_snapshots import (
     SourceSnapshotStage,
     capture_source_snapshot,
 )
-from agentic_debugger.demo.catalog import (
-    PROBE_DRIVER_FUNCTION,
-    DemoScenario,
-    exact_pytest_driver_source,
-    probe_driver_source,
-    resolve_probe_breakpoint,
-)
-from agentic_debugger.demo.sanitize import (
+from agentic_debugger.demo.catalog import PROBE_DRIVER_FUNCTION
+from agentic_debugger.demo.context import DemoToolContext
+from agentic_debugger.demo.diagnostics import (
+    EXACT_PROOF_SOURCE_WINDOW_RADIUS,
+    MAX_DIAGNOSTIC_CHARS,
     MAX_RAW_FAILURE_OUTPUT_CHARS,
-    sanitize_failure_output,
+    MAX_VERIFIER_FAILURE_DETAIL_CHARS,
+    SOURCE_WINDOW_RADIUS,
+    DemoToolError,
+    _json_safe,
+    _safe_rejection,
+    _validator,
+    bounded_diagnostic,
+    bounded_diagnostic_text,
+    legal_reproduction_phases,
+    pytest_argv,
+    reproduction_failure_output,
+    reproduction_failure_output_raw,
+    task_target_module_path,
+    validation_classification_ready,
+)
+from agentic_debugger.demo.pdb_probe import (
+    PdbProbe,
+    opaque_workspace_id,
+    prepare_pdb_probe,
 )
 from agentic_debugger.evaluation.outcome_taxonomy import classify_outcome
 from agentic_debugger.evaluation.runner import bounded_error, normalize_output
@@ -92,600 +89,11 @@ from agentic_debugger.runtime.patcher import (
     PatchManager,
     build_bounded_patch_failure_payload,
 )
-from agentic_debugger.runtime.execution import VerifiedExecutionContext
 from agentic_debugger.runtime.pdb_session import PdbSession
 from agentic_debugger.runtime.test_runner import TestRunKind, TestRunner
 from agentic_debugger.runtime.workspace import TaskWorkspace
 from agentic_debugger.skills.file_skills import get_source_window
 from agentic_debugger.skills.search_skills import find_function
-
-#: Source-window radius used by the demonstration.  Small enough to keep the
-#: observation payload bounded and stable, large enough to show the defect.
-SOURCE_WINDOW_RADIUS = 6
-#: The exact lowest-rung proof exposes one complete small target function so
-#: breakpoint selection and diagnosis are based on public source, not guesses.
-EXACT_PROOF_SOURCE_WINDOW_RADIUS = 12
-
-
-def legal_reproduction_phases(state: ControllerState) -> tuple[str, ...]:
-    """Return the phase values accepted by run_reproduction in a state."""
-
-    if state is ControllerState.REPRODUCE:
-        return ("baseline",)
-    if state is ControllerState.VALIDATE:
-        return ("post_patch",)
-    return ()
-
-
-def validation_classification_ready(
-    post_patch_f2p_passed: object,
-    regression_passed: object,
-) -> bool:
-    """Return whether both required Validate evidence values have been collected.
-
-    ``False`` is collected evidence (the check failed).  Only ``None`` means
-    the corresponding evidence has not been gathered yet.  This helper never
-    invents a pass/fail value.
-    """
-
-    return post_patch_f2p_passed is not None and regression_passed is not None
-
-#: Maximum characters of a bounded diagnostic retained for reporting.
-MAX_DIAGNOSTIC_CHARS = 400
-
-#: Maximum characters of the RAW reproduction failure output retained in
-#: the evidence payload (audit-only; never rendered into a model prompt).
-MAX_RAW_FAILURE_OUTPUT_CHARS = 4000
-
-#: Tail window of a failing-test record output fed back to the model after a
-#: real verifier run (the exception/assertion summary is at the end).
-MAX_VERIFIER_FAILURE_DETAIL_CHARS = 900
-
-
-def _safe_rejection(message: str) -> ToolRejectedError:
-    return ToolRejectedError(message, safe_diagnostic=message)
-
-
-class DemoToolError(RuntimeError):
-    """Raised for demonstration harness misuse rather than tool failure."""
-
-
-def _observation_id_for_action(action: Action) -> str:
-    """Derive the controller's detached observation id for this action."""
-
-    prefix = "action-"
-    if not action.action_id.startswith(prefix):
-        raise DemoToolError("controller action id is not canonical")
-    suffix = action.action_id[len(prefix):]
-    if not suffix.isdigit():
-        raise DemoToolError("controller action id has no numeric observation index")
-    return "observation-" + suffix
-
-
-def bounded_diagnostic_text(text: str, workspace_root: Optional[str] = None) -> str:
-    """Apply the established bounded-diagnostic pipeline to ready text.
-
-    The ``bounded_diagnostic`` pipeline after exception formatting
-    (normalize/bound, control-character strip, ``MAX_DIAGNOSTIC_CHARS``
-    cut).  Split out so callers that must transform the FULL text first
-    (e.g. redact before any cut) can reuse the identical bounding.
-    """
-    text = normalize_output(text, workspace_root)
-    text = "".join(char if 0x20 <= ord(char) != 0x7F else " " for char in text).strip()
-    if len(text) > MAX_DIAGNOSTIC_CHARS:
-        text = text[: MAX_DIAGNOSTIC_CHARS - 3] + "..."
-    return text or "tool failure"
-
-
-def bounded_diagnostic(exc: BaseException, workspace_root: Optional[str] = None) -> str:
-    """Bound a diagnostic and strip disposable workspace paths out of it.
-
-    Diagnostics land in the deterministic section of the demonstration result
-    document, so a raw ``PermissionError`` naming a ``mkdtemp`` directory would
-    make that section unstable.  Normalisation reuses the accepted verifier
-    helper so the demo and the verifier redact identically.
-    """
-
-    return bounded_diagnostic_text(bounded_error(exc), workspace_root)
-
-
-def _json_safe(value: Any, label: str) -> Any:
-    try:
-        return json.loads(json.dumps(value, ensure_ascii=False, allow_nan=False, sort_keys=True))
-    except (TypeError, ValueError, OverflowError) as exc:
-        raise ToolExecutionError(f"{label} is not JSON-compatible") from exc
-
-
-def _bounded_tail(text: str, maximum: int) -> str:
-    """Keep the tail of ``text`` at most ``maximum`` characters."""
-    if len(text) <= maximum:
-        return text
-    marker = "... [output truncated] ...\n"
-    return marker + text[-(maximum - len(marker)):]
-
-
-def task_target_module_path(task: DebugTask) -> str:
-    """Mechanically select the single writable production module.
-
-    Uses the public task constraint ``constraints.allowed_write_paths``:
-    exactly one writable ``.py`` path outside ``tests``.  Identical rule to
-    the R5 launcher (reported design choice; no oracle data).
-    """
-    allowed = list(task.constraints.allowed_write_paths)
-    candidates = [p for p in allowed if p.endswith(".py") and not p.startswith("tests/")]
-    if len(candidates) != 1:
-        raise DemoToolError(
-            "task must declare exactly one writable production .py path, "
-            f"got {sorted(allowed)!r}"
-        )
-    return candidates[0]
-
-
-def reproduction_failure_output(
-    result: Any,
-    workspace_root: Optional[str],
-    script_path: str,
-    original_line_count: int,
-) -> str:
-    """SANITIZED reproduction diagnostic of the executed test command.
-
-    ``result`` is a ``TestRunResult``.  The raw stdout/stderr of the
-    executed command is consumed by the common deterministic sanitizer
-    (``sanitize.sanitize_failure_output``), which derives the bounded
-    structured production diagnostic and never forwards hidden-test
-    content (test source, assertions, node ids, literals).  Empty when the
-    command produced nothing.
-    """
-    command = result.command_result
-    raw = (command.stdout or "") + "\n" + (command.stderr or "")
-    if not raw.strip():
-        return ""
-    diagnostic = sanitize_failure_output(
-        raw, workspace_root, script_path, original_line_count
-    )
-    return diagnostic.text
-
-
-def reproduction_failure_output_raw(
-    result: Any, workspace_root: Optional[str]
-) -> str:
-    """Bounded, normalized RAW failure output — evidence only.
-
-    Retained for auditability of the sanitizer's mechanical derivation;
-    never rendered into a model prompt.
-    """
-    command = result.command_result
-    raw = (command.stdout or "") + "\n" + (command.stderr or "")
-    if not raw.strip():
-        return ""
-    normalized = normalize_output(raw, workspace_root)
-    return _bounded_tail(normalized, MAX_RAW_FAILURE_OUTPUT_CHARS)
-
-
-def _validator(
-    required: dict[str, type],
-    optional: Optional[dict[str, type]] = None,
-    *,
-    enums: Optional[dict[str, tuple[object, ...]]] = None,
-    minimums: Optional[dict[str, int]] = None,
-) -> Callable[[dict[str, object]], dict[str, object]]:
-    """Build a strict argument validator that rejects unknown keys."""
-
-    optional = optional or {}
-    enums = enums or {}
-    minimums = minimums or {}
-    known = set(required) | set(optional)
-
-    def validate(arguments: dict[str, object]) -> dict[str, object]:
-        if type(arguments) is not dict:
-            raise _safe_rejection("arguments must be a mapping")
-        unknown = sorted(set(arguments) - known)
-        if unknown:
-            raise _safe_rejection(f"unknown argument: {unknown[0]}")
-        missing = sorted(set(required) - set(arguments))
-        if missing:
-            raise _safe_rejection(f"missing argument: {missing[0]}")
-        for name, expected in {**required, **optional}.items():
-            if name not in arguments:
-                continue
-            value = arguments[name]
-            if type(value) is not expected:
-                raise _safe_rejection(f"argument {name} has the wrong type")
-            if expected is str and not value:
-                raise _safe_rejection(f"argument {name} must be non-empty")
-            if expected is int and value < 0:
-                raise _safe_rejection(f"argument {name} must be non-negative")
-            if expected is int and name in minimums and value < minimums[name]:
-                raise _safe_rejection(
-                    f"argument {name} must be at least {minimums[name]}"
-                )
-            if name in enums and value not in enums[name]:
-                raise _safe_rejection(f"argument {name} has an unsupported value")
-        return dict(arguments)
-
-    def type_name(expected: type) -> str:
-        return {str: "string", int: "integer", bool: "boolean"}.get(
-            expected, expected.__name__
-        )
-
-    properties = {}
-    for name, expected in {**required, **optional}.items():
-        constraint = {"type": type_name(expected)}
-        if expected is str:
-            constraint["min_length"] = 1
-        if expected is int:
-            constraint["minimum"] = minimums.get(name, 0)
-        if name in enums:
-            constraint["enum"] = list(enums[name])
-        properties[name] = constraint
-    validate.argument_contract = {  # type: ignore[attr-defined]
-        "required": list(required),
-        "properties": properties,
-        "additional_properties": False,
-    }
-    return validate
-
-
-def pytest_argv(base: Sequence[str], node_ids: Sequence[str]) -> list[str]:
-    """Rebuild a manifest pytest argv for an explicit set of node ids."""
-
-    argv: list[str] = []
-    replaced = False
-    for item in base:
-        if "::" in item:
-            if not replaced:
-                argv.extend(node_ids)
-                replaced = True
-            continue
-        argv.append(item)
-    if not replaced:
-        argv.extend(node_ids)
-    return argv
-
-
-@dataclass(frozen=True)
-class PdbProbe:
-    """A prepared, disposable debugger target derived from the fixture."""
-
-    source_dir: Path
-    parent_dir: Path
-    script: str
-    breakpoint_line: int
-    focus_function: str
-    exact_public_reproduction: bool = False
-    reproduction_argv: tuple[str, ...] = ()
-    reproduction_node: str = ""
-    workspace_id: str = ""
-    production_file_sha256: str = ""
-
-
-def opaque_workspace_id(workspace: TaskWorkspace) -> str:
-    """Return a provider-safe identity derived from the actual workspace root."""
-
-    return hashlib.sha256(
-        str(Path(workspace.root).resolve()).encode("utf-8")
-    ).hexdigest()[:24]
-
-
-def prepare_pdb_probe(
-    fixture_dir: Path,
-    scenario: DemoScenario,
-    parent_dir: Path,
-    *,
-    model_selects_breakpoint: bool = False,
-    task: Optional[DebugTask] = None,
-    model_visible_task_mapping: Optional[Mapping[str, Any]] = None,
-) -> PdbProbe:
-    """Copy the canonical fixture and append one module-level probe driver.
-
-    The canonical fixture is never written to.  The copy receives a single
-    appended driver function plus its call so the focus function actually runs
-    under the debugger.  The accepted demo resolves its fixed breakpoint from
-    the fixture AST.  The tuned-debugger pilot can instead leave the stored
-    breakpoint unset (0) so the live model must supply ``breakpoint_line``.
-    """
-
-    probe = scenario.runtime_probe
-    source_dir = parent_dir / f"probe-{scenario.task_id}"
-    if source_dir.exists():
-        raise DemoToolError(f"probe source directory already exists: {source_dir}")
-    shutil.copytree(fixture_dir, source_dir, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
-    module = source_dir / probe.module_path
-    if not module.is_file():
-        raise DemoToolError(f"probe module is missing from the fixture: {probe.module_path}")
-    original = module.read_text(encoding="utf-8")
-    breakpoint_line = (
-        0 if model_selects_breakpoint else resolve_probe_breakpoint(original, probe)
-    )
-    exact = probe.exact_public_reproduction
-    if exact and task is not None:
-        # The probe workspace is provider-visible execution state.  Keep the
-        # evaluator oracle and fixed revision out of it while retaining the
-        # public task contract needed by tooling.
-        visible_task = (
-            model_visible_task_mapping
-            if model_visible_task_mapping is not None
-            else task.agent_visible_mapping()
-        )
-        (source_dir / "task.json").write_text(
-            json.dumps(visible_task, sort_keys=True, indent=2) + "\n",
-            encoding="utf-8",
-            newline="\n",
-        )
-    reproduction_argv: tuple[str, ...] = ()
-    reproduction_node = ""
-    if exact:
-        if task is None:
-            raise DemoToolError("exact PDB probe requires the loaded task")
-        reproduction_argv = tuple(task.reproduction.argv)
-        nodes = tuple(task.tests.fail_to_pass)
-        if len(nodes) != 1:
-            raise DemoToolError("exact PDB proof requires one public failing pytest node")
-        reproduction_node = nodes[0]
-        marker = ("-m", "pytest")
-        try:
-            marker_index = next(
-                index for index in range(len(reproduction_argv) - 1)
-                if reproduction_argv[index:index + 2] == marker
-            )
-        except StopIteration as exc:
-            raise DemoToolError("exact PDB reproduction must use python -m pytest") from exc
-        pytest_args = reproduction_argv[marker_index + 2:]
-        if reproduction_node not in pytest_args:
-            raise DemoToolError("exact PDB reproduction argv does not name the public failing node")
-        driver = exact_pytest_driver_source(probe, tuple(pytest_args))
-    else:
-        driver = probe_driver_source(probe)
-    module.write_text(original + driver, encoding="utf-8", newline="\n")
-    production_file_sha256 = hashlib.sha256(module.read_bytes()).hexdigest()
-    workspace_id = hashlib.sha256(str(source_dir.resolve()).encode("utf-8")).hexdigest()[:24]
-    return PdbProbe(
-        source_dir=source_dir,
-        parent_dir=parent_dir,
-        script=probe.module_path,
-        breakpoint_line=breakpoint_line,
-        focus_function=probe.focus_function,
-        exact_public_reproduction=exact,
-        reproduction_argv=reproduction_argv,
-        reproduction_node=reproduction_node,
-        workspace_id=workspace_id,
-        production_file_sha256=production_file_sha256,
-    )
-
-
-class DemoToolContext:
-    """Mutable execution state shared by the demonstration tool handlers."""
-
-    def __init__(
-        self,
-        *,
-        task: DebugTask,
-        workspace: TaskWorkspace,
-        patch: str,
-        probe: Optional[PdbProbe],
-        execution_context: Optional[VerifiedExecutionContext] = None,
-        pdb_session_factory: Callable[[TaskWorkspace], PdbSession] = PdbSession,
-        verifier_feedback_fn: Optional[Callable[[DebugTask, str], dict[str, Any]]] = None,
-        observability: Any = None,
-        official_patch_compatibility: bool = False,
-    ) -> None:
-        self.task = task
-        self.workspace = workspace
-        self.patch = patch
-        self.candidate_patch = ""
-        self.probe = probe
-        self.execution_context = execution_context
-        # Defaults to plain host-local ``PdbSession`` construction, preserving
-        # the accepted demo/live behavior exactly. A caller that must run the
-        # debugger over external/untrusted code (e.g. a contained WSL/
-        # Bubblewrap boundary) injects a factory that builds a session bound
-        # to that boundary instead -- the host-local path is never implied.
-        self.pdb_session_factory = pdb_session_factory
-        # Optional real-verifier feedback callback: when set, every accepted
-        # candidate patch is evaluated by the independent EvaluationVerifier
-        # and a bounded feedback record is attached to the apply_patch
-        # observation.  The callback returns a JSON-compatible mapping or
-        # raises (the error is bounded into the observation, never a crash).
-        self.verifier_feedback_fn = verifier_feedback_fn
-        # Historical record of every verifier-feedback run (attempt order).
-        self.verifier_feedback_history: list[dict[str, Any]] = []
-        self.test_runner = TestRunner(workspace, execution_context=execution_context)
-        self.patch_manager = PatchManager(
-            workspace,
-            list(task.constraints.allowed_write_paths),
-            list(task.constraints.denied_write_paths),
-            official_patch_compatibility=official_patch_compatibility,
-        )
-        # Optional Task-4 observability producer (``SessionObservability`` or
-        # an object with the same emit methods).  When set, the tool handlers
-        # project real debugger/patch/source/diagnosis facts into validated
-        # application events.  Observability is strictly observational: a
-        # failure is swallowed and never changes a tool result or the demo.
-        self.observability = observability
-        # Patch attempts are counted per apply_patch invocation; rejected,
-        # apply-failed, and reverted attempts share the same attempt index.
-        self.patch_attempt_index = 0
-        # Best-effort initial source snapshot of the pristine task source
-        # (the disposable workspace copy is pristine at construction).
-        if observability is not None:
-            self._capture_initial_source()
-
-        self.tool_calls: list[str] = []
-        self.tool_errors: list[dict[str, str]] = []
-        self.baseline_failure_reproduced: Optional[bool] = None
-        self.post_patch_f2p_passed: Optional[bool] = None
-        self.regression_passed: Optional[bool] = None
-        self.patch_applied = False
-        self.patch_changed_files: tuple[str, ...] = ()
-        self.syntax_passed: Optional[bool] = None
-        self.declared_localization: Optional[dict[str, str]] = None
-        self.controller_outcome: Optional[str] = None
-
-        self.pdb_session: Optional[PdbSession] = None
-        self.pdb_workspace: Optional[TaskWorkspace] = None
-        self.pdb_pause_generation: Optional[int] = None
-        self.pdb_observation_names: list[str] = []
-        self.pdb_session_started = False
-        self.interactive_pdb_session_started = False
-        self.pdb_proof_contract: Optional[dict[str, Any]] = None
-        self.pdb_proof_observations: dict[str, dict[str, Any]] = {}
-
-    def record_pdb_proof_observation(
-        self, action: Action, payload: dict[str, Any], *, proof: dict[str, Any]
-    ) -> dict[str, Any]:
-        """Attach exact-runtime identity to a model-visible tool result."""
-
-        if self.probe is None or not self.probe.exact_public_reproduction:
-            return payload
-        observation_id = _observation_id_for_action(action)
-        detached = _json_safe(payload, action.name)
-        detached["proof"] = _json_safe(proof, "pdb proof")
-        self.pdb_proof_observations[observation_id] = detached
-        return detached
-
-    def validate_bound_diagnosis(
-        self, action: Action, evidence_refs: object, observed_values: object
-    ) -> dict[str, Any]:
-        if self.probe is None or not self.probe.exact_public_reproduction:
-            return {}
-        if type(evidence_refs) is not list or not evidence_refs:
-            raise _safe_rejection("exact PDB diagnosis requires evidence_refs")
-        if any(type(item) is not str or not item for item in evidence_refs):
-            raise _safe_rejection("evidence_refs must contain observation ids")
-        if type(observed_values) is not dict or not observed_values:
-            raise _safe_rejection("exact PDB diagnosis requires observed_values")
-        if self.pdb_proof_contract is None:
-            raise _safe_rejection("exact PDB evidence is not available")
-        referenced = [self.pdb_proof_observations.get(item) for item in evidence_refs]
-        if any(item is None for item in referenced):
-            raise _safe_rejection("diagnosis references a stale or nonexistent observation")
-        locals_payload = next(
-            (item for item in referenced if item and item.get("locals") is not None),
-            None,
-        )
-        if locals_payload is None:
-            raise _safe_rejection("diagnosis must reference frame locals")
-        locals_by_name = {
-            item.get("name"): item.get("value")
-            for item in locals_payload.get("locals", [])
-            if type(item) is dict and type(item.get("name")) is str
-        }
-        if any(name not in locals_by_name or locals_by_name[name] != value for name, value in observed_values.items()):
-            raise _safe_rejection("diagnosis runtime value is absent from referenced locals")
-        step_seen = any(
-            item and item.get("proof") == self.pdb_proof_contract
-            and item.get("state") == "paused"
-            for item in referenced
-        )
-        if not step_seen:
-            raise _safe_rejection("diagnosis must reference a paused step or next observation")
-        return {
-            "evidence_refs": list(evidence_refs),
-            "observed_values": _json_safe(observed_values, "observed_values"),
-            "proof_contract": _json_safe(self.pdb_proof_contract, "proof contract"),
-        }
-
-    def validation_evidence_ready(self) -> bool:
-        """Return whether classify_outcome has both required evidence values."""
-
-        return validation_classification_ready(
-            self.post_patch_f2p_passed, self.regression_passed
-        )
-
-    def clear_validation_evidence(self) -> None:
-        """Forget controller-validation evidence after the candidate changes."""
-
-        self.post_patch_f2p_passed = None
-        self.regression_passed = None
-        self.controller_outcome = None
-
-    # -- observability helpers ---------------------------------------------
-
-    def observe(self, fn: Callable[[], None]) -> None:
-        """Run one observability projection; failure never changes execution.
-
-        Mirrors the controller's observer rule: an ordinary ``Exception`` in
-        observability is swallowed and never alters a tool decision, result,
-        budget, or cleanup.  ``BaseException`` propagates.
-        """
-        if self.observability is None:
-            return
-        try:
-            fn()
-        except Exception:
-            pass
-
-    def _capture_initial_source(self) -> None:
-        """Emit one bounded initial source snapshot for the task target.
-
-        Best-effort: any failure is swallowed (observability never changes
-        the demonstration), and only the declared production module path is
-        captured -- never tests, oracles, or unrelated files.
-        """
-        try:
-            module_path = task_target_module_path(self.task)
-            snapshot = capture_source_snapshot(
-                self.workspace.root, module_path, SourceSnapshotStage.INITIAL
-            )
-        except Exception:
-            return
-        self.observe(lambda: self.observability.source_snapshot(snapshot))
-
-    def _capture_changed_source(self, stage: SourceSnapshotStage) -> None:
-        """Emit one bounded source snapshot per currently changed file."""
-        for path in self.patch_changed_files:
-            try:
-                snapshot = capture_source_snapshot(
-                    self.workspace.root, path, stage
-                )
-            except Exception:
-                continue
-            self.observe(
-                lambda captured=snapshot: self.observability.source_snapshot(captured)
-            )
-
-    # -- lifecycle ---------------------------------------------------------
-
-    def release_pdb(self) -> list[BaseException]:
-        """Stop the session and delete its workspace; never raise."""
-
-        errors: list[BaseException] = []
-        session = self.pdb_session
-        if session is not None:
-            try:
-                session.stop()
-            except BaseException as exc:  # noqa: BLE001 - cleanup must continue
-                # Keep the handle so an outer cleanup pass can retry rather
-                # than losing the only reference to a live worker process.
-                errors.append(exc)
-            else:
-                self.pdb_session = None
-        workspace = self.pdb_workspace
-        if workspace is not None:
-            try:
-                workspace.cleanup()
-                if os.path.exists(workspace.root):
-                    raise DemoToolError("PDB workspace root remains after cleanup")
-            except BaseException as exc:  # noqa: BLE001 - cleanup must continue
-                errors.append(exc)
-            else:
-                self.pdb_workspace = None
-        return errors
-
-    def record_error(self, action: str, exc: BaseException) -> None:
-        """Retain a bounded, path-normalized diagnostic naming what failed."""
-
-        self.tool_errors.append(
-            {"action": action, "diagnostic": bounded_diagnostic(exc, self.workspace.root)}
-        )
-
-    # -- helpers -----------------------------------------------------------
-
-    def require_session(self, action: str) -> PdbSession:
-        if self.pdb_session is None:
-            raise _safe_rejection(f"{action} requires an active PDB session")
-        return self.pdb_session
-
 
 def _ok(payload: dict[str, Any], summary: str) -> ToolResult:
     return ToolResult(ObservationStatus.OK, payload, summary)
