@@ -62,14 +62,16 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 from agentic_debugger.application.events import contains_credential_shape
-from agentic_debugger.application import provider_connections as _pc
+from agentic_debugger.application import provider_config as _provider_config
+from agentic_debugger.application import provider_credentials as _credentials
+from agentic_debugger.application import provider_identity as _identity
 
 #: Accepted direct-credential source kinds re-used verbatim from the
 #: provider core (safe constants, never patched).
-CREDENTIAL_SOURCE_SAVED = _pc.CREDENTIAL_SOURCE_SAVED
-CREDENTIAL_SOURCE_SESSION_KEY = _pc.CREDENTIAL_SOURCE_SESSION_KEY
-CREDENTIAL_SOURCE_ENVIRONMENT = _pc.CREDENTIAL_SOURCE_ENVIRONMENT
-CREDENTIAL_SOURCE_CLI_AUTH_STORE = _pc.CREDENTIAL_SOURCE_CLI_AUTH_STORE
+CREDENTIAL_SOURCE_SAVED = _credentials.CREDENTIAL_SOURCE_SAVED
+CREDENTIAL_SOURCE_SESSION_KEY = _credentials.CREDENTIAL_SOURCE_SESSION_KEY
+CREDENTIAL_SOURCE_ENVIRONMENT = _credentials.CREDENTIAL_SOURCE_ENVIRONMENT
+CREDENTIAL_SOURCE_CLI_AUTH_STORE = _credentials.CREDENTIAL_SOURCE_CLI_AUTH_STORE
 
 __all__ = [
     "CREDENTIAL_SOURCE_EXTERNAL_CLI",
@@ -124,8 +126,8 @@ _ENDPOINT_BOUND_SOURCE_KINDS = frozenset(
 #: Safe, stable identities for the external CLI credential authorities.
 #: These name the OWNING TOOL, never a secret, a path, or its contents.
 _EXTERNAL_CLI_SOURCE_REFS = {
-    _pc.TRANSPORT_OPENCODE_GO: "opencode CLI auth (external)",
-    _pc.TRANSPORT_COMMANDCODE_GOAT: "commandcode CLI auth (external)",
+    _identity.TRANSPORT_OPENCODE_GO: "opencode CLI auth (external)",
+    _identity.TRANSPORT_COMMANDCODE_GOAT: "commandcode CLI auth (external)",
 }
 
 _AUTHORITY_RE = __import__("re").compile(r"[0-9a-f]{64}")
@@ -142,7 +144,7 @@ def _cli_auth_store_location_fingerprint() -> str:
     import hashlib
     import os
 
-    from agentic_debugger.application.provider_connections import (
+    from agentic_debugger.application.provider_credentials import (
         opencode_auth_store_path,
     )
 
@@ -264,15 +266,15 @@ class CredentialBinding:
         # Auth-mode coherence is structural: a no-auth binding carries no
         # credential source, and a credential-requiring auth mode can never
         # carry a no-auth source.
-        if self.auth_mode not in _pc.AUTH_MODES:
+        if self.auth_mode not in _identity.AUTH_MODES:
             raise CredentialVaultError(
                 "CredentialBinding auth_mode is not an accepted authentication mode"
             )
-        if self.auth_mode == _pc.AUTH_NONE and self.source_kind != CREDENTIAL_SOURCE_NONE:
+        if self.auth_mode == _identity.AUTH_NONE and self.source_kind != CREDENTIAL_SOURCE_NONE:
             raise CredentialVaultError(
                 "CredentialBinding with no-auth mode must use the 'none' source kind"
             )
-        if self.source_kind == CREDENTIAL_SOURCE_NONE and self.auth_mode != _pc.AUTH_NONE:
+        if self.source_kind == CREDENTIAL_SOURCE_NONE and self.auth_mode != _identity.AUTH_NONE:
             raise CredentialVaultError(
                 "CredentialBinding 'none' source kind requires the no-auth mode"
             )
@@ -410,7 +412,7 @@ class CredentialLease:
         (the same variable the trusted transport merges into the adapter
         request child).  Never argv, never journals, never other roles.
         """
-        from agentic_debugger.application.provider_connections import (
+        from agentic_debugger.application.provider_credentials import (
             provider_session_credential_variable,
         )
 
@@ -551,13 +553,15 @@ class CredentialVault:
         false and ``recovery_required`` is true; a no-auth provider is
         ready by construction without fabricating a credential.
         """
-        from agentic_debugger.application.provider_connections import (
+        from agentic_debugger.application.provider_identity import (
             AUTH_NONE,
+        )
+        from agentic_debugger.application.provider_credentials import (
             provider_endpoint_binding_valid,
             provider_environment_variable,
         )
 
-        cfg = _pc.get_provider_config(provider_id)
+        cfg = _provider_config.get_provider_config(provider_id)
         if cfg is None:
             return CredentialReadiness(
                 provider_id=provider_id,
@@ -585,7 +589,7 @@ class CredentialVault:
                 reason="Provider is disabled (edit provider to re-enable it)",
                 is_enabled=False,
             )
-        if _pc.is_provider_quarantined(provider_id):
+        if _provider_config.is_provider_quarantined(provider_id):
             return CredentialReadiness(
                 provider_id=provider_id,
                 is_configured=True,
@@ -611,7 +615,7 @@ class CredentialVault:
                 reason=None,
             )
 
-        source = _pc.credential_source_for(provider_id)
+        source = _credentials.credential_source_for(provider_id)
         if source is not None:
             return CredentialReadiness(
                 provider_id=provider_id,
@@ -627,7 +631,7 @@ class CredentialVault:
         # Not ready: distinguish endpoint-binding invalidation (ambient
         # sources are canonical-endpoint-bound) from a plain missing
         # credential, using the accepted provider-core rules verbatim.
-        from agentic_debugger.application.provider_connections import (
+        from agentic_debugger.application.provider_identity import (
             _contract_for_config,
         )
 
@@ -674,7 +678,7 @@ class CredentialVault:
         readiness = self.readiness(provider_id)
         if not readiness.credential_ready:
             return None
-        cfg = _pc.get_provider_config(provider_id)
+        cfg = _provider_config.get_provider_config(provider_id)
         if cfg is None:  # pragma: no cover - readiness already gated this
             return None
         if readiness.source_kind == CREDENTIAL_SOURCE_NONE:
@@ -695,7 +699,7 @@ class CredentialVault:
             # issuance provenance (repair 22, F5) is untrusted: the
             # binding fails closed instead of stamping a foreign secret
             # with the current authority.
-            from agentic_debugger.application.provider_connections import (
+            from agentic_debugger.application.provider_credentials import (
                 _credential_is_usable,
                 peek_session_key,
                 provider_session_credential_authority_variable,
@@ -739,10 +743,10 @@ class CredentialVault:
         """
         from agentic_debugger.application.model_providers import _legacy_for_config
 
-        cfg = _pc.get_provider_config(provider_id)
-        if cfg is None or not cfg.enabled or _pc.is_provider_quarantined(provider_id):
+        cfg = _provider_config.get_provider_config(provider_id)
+        if cfg is None or not cfg.enabled or _provider_config.is_provider_quarantined(provider_id):
             return None
-        if cfg.auth_mode == _pc.AUTH_NONE:
+        if cfg.auth_mode == _identity.AUTH_NONE:
             return None
         legacy_ok, _reason = _legacy_for_config(cfg)
         if not legacy_ok:
@@ -791,20 +795,20 @@ class CredentialVault:
         result is SAFE metadata only and may be carried on the
         SessionLaunch.
         """
-        from agentic_debugger.application.provider_connections import (
+        from agentic_debugger.application.provider_credentials import (
             _credential_is_usable,
             provider_session_credential_authority_variable,
             provider_session_credential_variable,
         )
 
-        cfg = _pc.get_provider_config(provider_id)
-        if cfg is None or not cfg.enabled or _pc.is_provider_quarantined(provider_id):
+        cfg = _provider_config.get_provider_config(provider_id)
+        if cfg is None or not cfg.enabled or _provider_config.is_provider_quarantined(provider_id):
             return None
         if route in ("configured_profile", "qualified_ladder", "offline"):
             return None
         if route == "legacy_cli":
             return self.external_cli_authority(provider_id)
-        if cfg.auth_mode == _pc.AUTH_NONE:
+        if cfg.auth_mode == _identity.AUTH_NONE:
             return self.safe_binding(provider_id)
         channel = provider_session_credential_variable(provider_id)
         authority_var = provider_session_credential_authority_variable(provider_id)
@@ -879,13 +883,13 @@ class CredentialVault:
                 "transport authorization requires a CredentialBinding"
             )
         provider_id = binding.provider_id
-        cfg = _pc.get_provider_config(provider_id)
+        cfg = _provider_config.get_provider_config(provider_id)
         if cfg is None:
             raise CredentialUnavailableError(
                 f"Credential unavailable for provider {provider_id!r}: "
                 "the provider is not configured"
             )
-        if _pc.is_provider_quarantined(provider_id):
+        if _provider_config.is_provider_quarantined(provider_id):
             raise CredentialUnavailableError(
                 f"Credential unavailable for provider {provider_id!r}: "
                 "credential state requires recovery. Edit provider and save "
@@ -913,8 +917,10 @@ class CredentialVault:
             CREDENTIAL_SOURCE_ENVIRONMENT,
             CREDENTIAL_SOURCE_CLI_AUTH_STORE,
         ):
-            from agentic_debugger.application.provider_connections import (
+            from agentic_debugger.application.provider_identity import (
                 _contract_for_config,
+            )
+            from agentic_debugger.application.provider_credentials import (
                 provider_endpoint_binding_valid,
             )
 
@@ -989,7 +995,7 @@ class CredentialVault:
         # unchanged runtime identity still authorizes, while provider
         # authority drift fails stale BEFORE any secret read.
         self.authorize_binding_for_transport(binding)
-        cfg = _pc.get_provider_config(provider_id)
+        cfg = _provider_config.get_provider_config(provider_id)
 
         if binding.source_kind == CREDENTIAL_SOURCE_NONE:
             return None
@@ -1227,7 +1233,7 @@ class CredentialVault:
                     raise CredentialVaultError(
                         "expected provider authority requires a provider identity"
                     ) from None
-            authority_cfg = _pc.get_provider_config(authority_provider)
+            authority_cfg = _provider_config.get_provider_config(authority_provider)
             current_authority = (
                 _provider_authority(authority_cfg)
                 if authority_cfg is not None
@@ -1303,7 +1309,7 @@ class CredentialVault:
         canonical endpoint binding remains valid; quarantined and no-auth
         providers forward nothing.
         """
-        from agentic_debugger.application.provider_connections import (
+        from agentic_debugger.application.provider_credentials import (
             provider_session_credential_environment as _hop,
         )
 
@@ -1326,7 +1332,7 @@ class CredentialVault:
         atomically with verified rollback, and credential values never
         leave the transaction boundary (including error text).
         """
-        from agentic_debugger.application.provider_connections import (
+        from agentic_debugger.application.provider_management import (
             commit_provider_and_credential,
         )
 
@@ -1341,7 +1347,7 @@ class CredentialVault:
         configuration, cached catalog, quarantine bookkeeping owned by the
         provider-deletion transaction, or any historical session evidence.
         """
-        from agentic_debugger.application.provider_connections import (
+        from agentic_debugger.application.provider_credentials import (
             clear_session_key,
             delete_secure_credential,
             load_secure_credential,
@@ -1352,7 +1358,7 @@ class CredentialVault:
             deleted = delete_secure_credential(provider_id)
             remaining = load_secure_credential(provider_id)
             if not deleted or remaining is not None:
-                raise _pc.ProviderConnectionError(
+                raise _identity.ProviderConnectionError(
                     "provider credential cleanup could not be completed"
                 )
         clear_session_key(provider_id)
@@ -1382,7 +1388,7 @@ def _canonical_source_ref(provider_id: str, source_kind: str) -> Optional[str]:
     strings are never accepted merely because they do not resemble an API
     key.  Names and path-derived fingerprints only; never secret content.
     """
-    from agentic_debugger.application.provider_connections import (
+    from agentic_debugger.application.provider_credentials import (
         credential_slot_name,
         provider_environment_variable,
         provider_session_credential_variable,
@@ -1405,7 +1411,7 @@ def _canonical_source_ref(provider_id: str, source_kind: str) -> Optional[str]:
         # path or any CLI-owned secret.
         return _cli_auth_store_location_fingerprint()
     if source_kind == CREDENTIAL_SOURCE_EXTERNAL_CLI:
-        cfg = _pc.get_provider_config(provider_id)
+        cfg = _provider_config.get_provider_config(provider_id)
         profile = getattr(cfg, "transport_profile", None) if cfg is not None else None
         return _EXTERNAL_CLI_SOURCE_REFS.get(profile)
     return None  # none
@@ -1424,7 +1430,7 @@ def _resolve_bound_value(provider_id: str, binding: CredentialBinding) -> Option
     ``None`` and the caller fails closed instead of silently switching
     sources.
     """
-    from agentic_debugger.application.provider_connections import (
+    from agentic_debugger.application.provider_credentials import (
         _read_opencode_auth_store_key,
         load_secure_credential,
         opencode_auth_store_path,
@@ -1453,12 +1459,14 @@ def _resolve_bound_value(provider_id: str, binding: CredentialBinding) -> Option
         raw = os.environ.get(provider_session_credential_variable(provider_id))
         value = raw if _credential_is_usable(raw) else None
     elif kind == CREDENTIAL_SOURCE_ENVIRONMENT:
-        from agentic_debugger.application.provider_connections import (
-            provider_environment_variable,
+        from agentic_debugger.application.provider_identity import (
             _contract_for_config,
         )
+        from agentic_debugger.application.provider_credentials import (
+            provider_environment_variable,
+        )
 
-        cfg = _pc.get_provider_config(provider_id)
+        cfg = _provider_config.get_provider_config(provider_id)
         contract = _contract_for_config(cfg) if cfg is not None else None
         var = (
             contract.env_var

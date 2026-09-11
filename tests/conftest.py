@@ -13,6 +13,7 @@ from typing import Dict, Optional
 import pytest
 
 from agentic_debugger.application import provider_connections as pc
+from agentic_debugger.application import provider_credentials as _provider_credentials
 
 
 @pytest.fixture(autouse=True)
@@ -30,29 +31,33 @@ def _global_provider_test_isolation(
 
     # In-memory mock for OS secure store so tests never touch real Windows Credential Manager
     # unless a test is explicitly marked for native secure store execution.
+    # Task 47: the doubles are installed on BOTH the facade and the canonical
+    # provider_credentials authority over ONE shared dict, so facade-direct
+    # test calls and canonical-internal reads observe the same store.
     if not request.node.get_closest_marker("native_secure_store"):
         monkeypatch.setenv("AGENTIC_DEBUGGER_DISABLE_SECURE_STORE", "1")
         _secure_store: Dict[str, str] = {}
-        monkeypatch.setattr(
-            pc,
-            "save_secure_credential",
-            lambda kind, val: _secure_store.__setitem__(kind, val) or True,
-        )
-        monkeypatch.setattr(
-            pc,
-            "load_secure_credential",
-            lambda kind: _secure_store.get(kind),
-        )
-        monkeypatch.setattr(
-            pc,
-            "has_secure_credential",
-            lambda kind: kind in _secure_store,
-        )
-        monkeypatch.setattr(
-            pc,
-            "delete_secure_credential",
-            lambda kind: _secure_store.pop(kind, None) is not None,
-        )
+        for _target in (pc, _provider_credentials):
+            monkeypatch.setattr(
+                _target,
+                "save_secure_credential",
+                lambda kind, val: _secure_store.__setitem__(kind, val) or True,
+            )
+            monkeypatch.setattr(
+                _target,
+                "load_secure_credential",
+                lambda kind: _secure_store.get(kind),
+            )
+            monkeypatch.setattr(
+                _target,
+                "has_secure_credential",
+                lambda kind: kind in _secure_store,
+            )
+            monkeypatch.setattr(
+                _target,
+                "delete_secure_credential",
+                lambda kind: _secure_store.pop(kind, None) is not None,
+            )
 
     pc.clear_all_session_keys()
     yield

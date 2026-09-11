@@ -38,8 +38,10 @@ def _clean_session_keys():
 
 @pytest.fixture(autouse=True)
 def _isolated_cache(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setattr(pc, "catalog_cache_path", lambda: tmp_path / "absent.json")
-    monkeypatch.setattr(pc, "opencode_auth_store_path", lambda: tmp_path / "missing-auth.json")
+    monkeypatch.setattr("agentic_debugger.application.provider_catalog.catalog_cache_path", lambda: tmp_path / "absent.json")
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.catalog_cache_path", lambda: tmp_path / "absent.json")
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.opencode_auth_store_path", lambda: tmp_path / "missing-auth.json")
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.opencode_auth_store_path", lambda: tmp_path / "missing-auth.json")
     monkeypatch.setattr(
         pc, "provider_configurations_path", lambda: tmp_path / "provider-configurations.json"
     )
@@ -108,7 +110,8 @@ class TestRouteDecision:
             json.dumps({"opencode-go": {"type": "api", "key": "store-key"}}),
             encoding="utf-8",
         )
-        monkeypatch.setattr(pc, "opencode_auth_store_path", lambda: store)
+        monkeypatch.setattr("agentic_debugger.application.provider_credentials.opencode_auth_store_path", lambda: store)
+        monkeypatch.setattr("agentic_debugger.application.provider_connections.opencode_auth_store_path", lambda: store)
         monkeypatch.delenv("OPENCODE_API_KEY", raising=False)
         config, provenance = mp.resolve_provider_live_config(
             "opencode_go", "opencode-go/deepseek-v4-flash"

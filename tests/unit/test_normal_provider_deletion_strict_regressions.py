@@ -47,8 +47,10 @@ def _mock_secure_store(monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
     monkeypatch.setattr(
         pc, "save_secure_credential", lambda pid, val: store.__setitem__(pid, val) or True
     )
-    monkeypatch.setattr(pc, "load_secure_credential", lambda pid: store.get(pid))
-    monkeypatch.setattr(pc, "has_secure_credential", lambda pid: pid in store)
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.load_secure_credential", lambda pid: store.get(pid))
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.load_secure_credential", lambda pid: store.get(pid))
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.has_secure_credential", lambda pid: pid in store)
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.has_secure_credential", lambda pid: pid in store)
     monkeypatch.setattr(
         pc, "delete_secure_credential", lambda pid: store.pop(pid, None) is not None
     )
@@ -92,7 +94,8 @@ def test_normal_delete_credential_failure_and_retry(
     assert pc.load_cached_catalog("commandcode_goat") is not None
 
     # Fault-inject credential deletion failure
-    monkeypatch.setattr(pc, "delete_secure_credential", lambda pid: False)
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.delete_secure_credential", lambda pid: False)
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.delete_secure_credential", lambda pid: False)
 
     with pytest.raises(pc.ProviderConnectionError) as exc_info:
         pc.delete_provider_config("commandcode_goat")
@@ -107,7 +110,8 @@ def test_normal_delete_credential_failure_and_retry(
     assert pc.load_secure_credential("commandcode_goat") == "OLD_USER_KEY"
 
     # Restore and retry — must succeed and purge all reusable state
-    monkeypatch.setattr(pc, "delete_secure_credential", lambda pid: store.pop(pid, None) is not None)
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.delete_secure_credential", lambda pid: store.pop(pid, None) is not None)
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.delete_secure_credential", lambda pid: store.pop(pid, None) is not None)
     assert pc.delete_provider_config("commandcode_goat") is True
     assert pc.get_provider_config("commandcode_goat") is None
     assert pc.load_secure_credential("commandcode_goat") is None
@@ -332,7 +336,8 @@ def test_normal_delete_final_config_save_failure(
     def failing_save(configs):
         raise pc.ProviderConnectionError("injected final save failure")
 
-    monkeypatch.setattr(pc, "save_provider_configurations", failing_save)
+    monkeypatch.setattr("agentic_debugger.application.provider_config.save_provider_configurations", failing_save)
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.save_provider_configurations", failing_save)
 
     with pytest.raises(pc.ProviderConnectionError) as exc_info:
         pc.delete_provider_config("test_provider")
@@ -344,7 +349,8 @@ def test_normal_delete_final_config_save_failure(
     # Purge may have already happened — provider is now disconnected but still present
     # (session key is cleared; we verify recovery is possible)
 
-    monkeypatch.setattr(pc, "save_provider_configurations", original_save)
+    monkeypatch.setattr("agentic_debugger.application.provider_config.save_provider_configurations", original_save)
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.save_provider_configurations", original_save)
     assert pc.delete_provider_config("test_provider") is True
     assert pc.get_provider_config("test_provider") is None
 

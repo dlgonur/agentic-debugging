@@ -62,10 +62,14 @@ class _FakeStdin:
 @pytest.fixture(autouse=True)
 def _clean_session_keys(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     pc.clear_all_session_keys()
-    monkeypatch.setattr(pc, "opencode_auth_store_path", lambda: tmp_path / "missing-auth.json")
-    monkeypatch.setattr(pc, "load_secure_credential", lambda kind: None)
-    monkeypatch.setattr(pc, "has_secure_credential", lambda kind: False)
-    monkeypatch.setattr(pc, "provider_configurations_path", lambda: tmp_path / "provider-configurations.json")
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.opencode_auth_store_path", lambda: tmp_path / "missing-auth.json")
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.opencode_auth_store_path", lambda: tmp_path / "missing-auth.json")
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.load_secure_credential", lambda kind: None)
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.load_secure_credential", lambda kind: None)
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.has_secure_credential", lambda kind: False)
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.has_secure_credential", lambda kind: False)
+    monkeypatch.setattr("agentic_debugger.application.provider_config.provider_configurations_path", lambda: tmp_path / "provider-configurations.json")
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.provider_configurations_path", lambda: tmp_path / "provider-configurations.json")
     for name in (
         "OPENCODE_API_KEY",
         "COMMAND_CODE_API_KEY",
@@ -139,7 +143,8 @@ def fake_opencode(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
                 json.dumps({"opencode-go": {"type": "api", "key": SECRET}}),
                 encoding="utf-8",
             )
-            monkeypatch.setattr(pc, "opencode_auth_store_path", lambda: store)
+            monkeypatch.setattr("agentic_debugger.application.provider_credentials.opencode_auth_store_path", lambda: store)
+            monkeypatch.setattr("agentic_debugger.application.provider_connections.opencode_auth_store_path", lambda: store)
             monkeypatch.delenv("OPENCODE_API_KEY", raising=False)
             # V2-04: the CLI-auth value is resolved worker-side and issued
             # to the adapter under the private session credential channel.

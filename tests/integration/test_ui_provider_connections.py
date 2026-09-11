@@ -368,13 +368,25 @@ def test_home_screen_m_binding_and_row_opens_providers(tmp_path: Path) -> None:
 def test_add_custom_provider_and_manual_model_dialogs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config_file = tmp_path / "provider-configurations.json"
     monkeypatch.setattr(
+        "agentic_debugger.application.provider_config.provider_configurations_path",
+        lambda: config_file,
+    )
+    monkeypatch.setattr(
         "agentic_debugger.application.provider_connections.provider_configurations_path",
         lambda: config_file,
     )
     _store = {}
     monkeypatch.setattr(
+        "agentic_debugger.application.provider_credentials.save_secure_credential",
+        lambda k, v: _store.__setitem__(k, v) or True,
+    )
+    monkeypatch.setattr(
         "agentic_debugger.application.provider_connections.save_secure_credential",
         lambda k, v: _store.__setitem__(k, v) or True,
+    )
+    monkeypatch.setattr(
+        "agentic_debugger.application.provider_credentials.load_secure_credential",
+        lambda k: _store.get(k),
     )
     monkeypatch.setattr(
         "agentic_debugger.application.provider_connections.load_secure_credential",
@@ -429,6 +441,10 @@ def test_capability_ladder_isolation_with_custom_provider(tmp_path: Path, monkey
     """Custom provider models are never eligible for Capability Ladder targets."""
     config_file = tmp_path / "provider-configurations.json"
     monkeypatch.setattr(
+        "agentic_debugger.application.provider_config.provider_configurations_path",
+        lambda: config_file,
+    )
+    monkeypatch.setattr(
         "agentic_debugger.application.provider_connections.provider_configurations_path",
         lambda: config_file,
     )
@@ -466,6 +482,10 @@ def test_capability_ladder_isolation_with_custom_provider(tmp_path: Path, monkey
 def test_action_buttons_and_compact_footer_rendering(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Action buttons render full labels and footer hint adapts to geometry without obsolete key shortcut."""
     config_file = tmp_path / "provider-configurations.json"
+    monkeypatch.setattr(
+        "agentic_debugger.application.provider_config.provider_configurations_path",
+        lambda: config_file,
+    )
     monkeypatch.setattr(
         "agentic_debugger.application.provider_connections.provider_configurations_path",
         lambda: config_file,
@@ -507,11 +527,19 @@ def test_add_provider_save_and_discover_flow(tmp_path: Path, monkeypatch: pytest
 
     config_file = tmp_path / "provider-configurations.json"
     monkeypatch.setattr(
+        "agentic_debugger.application.provider_config.provider_configurations_path",
+        lambda: config_file,
+    )
+    monkeypatch.setattr(
         "agentic_debugger.application.provider_connections.provider_configurations_path",
         lambda: config_file,
     )
     fake_key = "test-fast-pilot-key-88"
     received_keys: dict[str, str] = {}
+    monkeypatch.setattr(
+        "agentic_debugger.application.provider_credentials.save_secure_credential",
+        lambda kind, key: received_keys.__setitem__(kind, key) or True,
+    )
     monkeypatch.setattr(
         "agentic_debugger.application.provider_connections.save_secure_credential",
         lambda kind, key: received_keys.__setitem__(kind, key) or True,
@@ -581,18 +609,34 @@ def test_edit_provider_commandcode_goat_pilot_typing_and_credential_preservation
 
     config_file = tmp_path / "provider-configurations.json"
     monkeypatch.setattr(
+        "agentic_debugger.application.provider_config.provider_configurations_path",
+        lambda: config_file,
+    )
+    monkeypatch.setattr(
         "agentic_debugger.application.provider_connections.provider_configurations_path",
         lambda: config_file,
     )
     fake_key = "fake-sk-goat-edit-key-42"
     secure_store: dict[str, str] = {}
     monkeypatch.setattr(
+        "agentic_debugger.application.provider_credentials.save_secure_credential",
+        lambda kind, key: secure_store.__setitem__(kind, key) or True,
+    )
+    monkeypatch.setattr(
         "agentic_debugger.application.provider_connections.save_secure_credential",
         lambda kind, key: secure_store.__setitem__(kind, key) or True,
     )
     monkeypatch.setattr(
+        "agentic_debugger.application.provider_credentials.load_secure_credential",
+        lambda kind: secure_store.get(kind),
+    )
+    monkeypatch.setattr(
         "agentic_debugger.application.provider_connections.load_secure_credential",
         lambda kind: secure_store.get(kind),
+    )
+    monkeypatch.setattr(
+        "agentic_debugger.application.provider_credentials.has_secure_credential",
+        lambda kind: kind in secure_store,
     )
     monkeypatch.setattr(
         "agentic_debugger.application.provider_connections.has_secure_credential",
@@ -812,6 +856,10 @@ def test_refresh_without_credential_error_copy(
     """Acceptance regression: refresh failure guidance points to Edit provider, not obsolete Connect API key."""
     config_file = tmp_path / "provider-configurations.json"
     monkeypatch.setattr(
+        "agentic_debugger.application.provider_config.provider_configurations_path",
+        lambda: config_file,
+    )
+    monkeypatch.setattr(
         "agentic_debugger.application.provider_connections.provider_configurations_path",
         lambda: config_file,
     )
@@ -961,6 +1009,10 @@ def test_custom_provider_delete_confirmation_and_cancel_flow(
     """Deleting a custom provider opens a confirmation dialog that can be cancelled without deleting."""
     config_file = tmp_path / "provider-configurations.json"
     monkeypatch.setattr(
+        "agentic_debugger.application.provider_config.provider_configurations_path",
+        lambda: config_file,
+    )
+    monkeypatch.setattr(
         "agentic_debugger.application.provider_connections.provider_configurations_path",
         lambda: config_file,
     )
@@ -1019,17 +1071,33 @@ def test_custom_provider_delete_confirmed_removes_config_and_updates_selection(
     """Confirming custom provider deletion removes config, secure credential, and safely updates selection."""
     config_file = tmp_path / "provider-configurations.json"
     monkeypatch.setattr(
+        "agentic_debugger.application.provider_config.provider_configurations_path",
+        lambda: config_file,
+    )
+    monkeypatch.setattr(
         "agentic_debugger.application.provider_connections.provider_configurations_path",
         lambda: config_file,
     )
     store = {}
     monkeypatch.setattr(
+        "agentic_debugger.application.provider_credentials.save_secure_credential",
+        lambda k, v: store.__setitem__(k, v) or True,
+    )
+    monkeypatch.setattr(
         "agentic_debugger.application.provider_connections.save_secure_credential",
         lambda k, v: store.__setitem__(k, v) or True,
     )
     monkeypatch.setattr(
+        "agentic_debugger.application.provider_credentials.load_secure_credential",
+        lambda k: store.get(k),
+    )
+    monkeypatch.setattr(
         "agentic_debugger.application.provider_connections.load_secure_credential",
         lambda k: store.get(k),
+    )
+    monkeypatch.setattr(
+        "agentic_debugger.application.provider_credentials.delete_secure_credential",
+        lambda k: store.pop(k, None) is not None,
     )
     monkeypatch.setattr(
         "agentic_debugger.application.provider_connections.delete_secure_credential",
@@ -1088,6 +1156,10 @@ def test_provider_delete_returns_to_empty_state(
     """Deleting a user-configured provider returns Provider Manager to zero configured providers."""
     config_file = tmp_path / "provider-configurations.json"
     monkeypatch.setattr(
+        "agentic_debugger.application.provider_config.provider_configurations_path",
+        lambda: config_file,
+    )
+    monkeypatch.setattr(
         "agentic_debugger.application.provider_connections.provider_configurations_path",
         lambda: config_file,
     )
@@ -1140,6 +1212,10 @@ def test_provider_manager_performance_navigation_does_not_churn_io(
     """Arrow navigation in Provider Manager uses cached state without network or disk config churn."""
     config_file = tmp_path / "provider-configurations.json"
     monkeypatch.setattr(
+        "agentic_debugger.application.provider_config.provider_configurations_path",
+        lambda: config_file,
+    )
+    monkeypatch.setattr(
         "agentic_debugger.application.provider_connections.provider_configurations_path",
         lambda: config_file,
     )
@@ -1156,6 +1232,10 @@ def test_provider_manager_performance_navigation_does_not_churn_io(
         load_counts[0] += 1
         return original_load()
 
+    monkeypatch.setattr(
+        "agentic_debugger.application.provider_config.load_provider_configurations",
+        counted_load,
+    )
     monkeypatch.setattr(
         "agentic_debugger.application.provider_connections.load_provider_configurations",
         counted_load,
@@ -1317,13 +1397,20 @@ def test_add_provider_dialog_secure_save_failure_commits_nothing_and_keeps_dialo
     """
     config_file = tmp_path / "provider-configurations.json"
     monkeypatch.setattr(
+        "agentic_debugger.application.provider_config.provider_configurations_path",
+        lambda: config_file,
+    )
+    monkeypatch.setattr(
         "agentic_debugger.application.provider_connections.provider_configurations_path",
         lambda: config_file,
     )
     store: dict[str, str] = {}
-    monkeypatch.setattr(pc, "save_secure_credential", lambda k, v: False)
-    monkeypatch.setattr(pc, "load_secure_credential", lambda k: store.get(k))
-    monkeypatch.setattr(pc, "has_secure_credential", lambda k: k in store)
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.save_secure_credential", lambda k, v: False)
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.save_secure_credential", lambda k, v: False)
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.load_secure_credential", lambda k: store.get(k))
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.load_secure_credential", lambda k: store.get(k))
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.has_secure_credential", lambda k: k in store)
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.has_secure_credential", lambda k: k in store)
     discovered: list[str] = []
     monkeypatch.setattr(
         pc,
@@ -1367,14 +1454,22 @@ def test_edit_provider_dialog_secure_save_failure_keeps_original_authoritative(
     original provider (name, endpoint) authoritative."""
     config_file = tmp_path / "provider-configurations.json"
     monkeypatch.setattr(
+        "agentic_debugger.application.provider_config.provider_configurations_path",
+        lambda: config_file,
+    )
+    monkeypatch.setattr(
         "agentic_debugger.application.provider_connections.provider_configurations_path",
         lambda: config_file,
     )
     store: dict[str, str] = {}
-    monkeypatch.setattr(pc, "save_secure_credential", lambda k, v: store.__setitem__(k, v) or True)
-    monkeypatch.setattr(pc, "load_secure_credential", lambda k: store.get(k))
-    monkeypatch.setattr(pc, "has_secure_credential", lambda k: k in store)
-    monkeypatch.setattr(pc, "delete_secure_credential", lambda k: store.pop(k, None) is not None)
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.save_secure_credential", lambda k, v: store.__setitem__(k, v) or True)
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.save_secure_credential", lambda k, v: store.__setitem__(k, v) or True)
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.load_secure_credential", lambda k: store.get(k))
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.load_secure_credential", lambda k: store.get(k))
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.has_secure_credential", lambda k: k in store)
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.has_secure_credential", lambda k: k in store)
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.delete_secure_credential", lambda k: store.pop(k, None) is not None)
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.delete_secure_credential", lambda k: store.pop(k, None) is not None)
 
     pc.add_provider_config(
         name="Original",
@@ -1385,7 +1480,8 @@ def test_edit_provider_dialog_secure_save_failure_keeps_original_authoritative(
     assert store.get("original") == "fake-old-key"
 
     # Now force the replacement save to fail
-    monkeypatch.setattr(pc, "save_secure_credential", lambda k, v: False)
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.save_secure_credential", lambda k, v: False)
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.save_secure_credential", lambda k, v: False)
     app = make_app(tmp_path)
 
     async def actions(pilot):

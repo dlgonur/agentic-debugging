@@ -31,11 +31,16 @@ def _isolate_and_configure_user_owned_registry(
     Ollama/OpenCode/CommandCode must configure them exactly as an
     operator would.
     """
-    monkeypatch.setattr(pc, "catalog_cache_path", lambda: tmp_path / "absent-cache.json")
-    monkeypatch.setattr(pc, "provider_configurations_path", lambda: tmp_path / "provider-configurations.json")
-    monkeypatch.setattr(pc, "load_secure_credential", lambda kind: None)
-    monkeypatch.setattr(pc, "has_secure_credential", lambda kind: False)
-    monkeypatch.setattr(pc, "opencode_auth_store_path", lambda: tmp_path / "missing-auth.json")
+    monkeypatch.setattr("agentic_debugger.application.provider_catalog.catalog_cache_path", lambda: tmp_path / "absent-cache.json")
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.catalog_cache_path", lambda: tmp_path / "absent-cache.json")
+    monkeypatch.setattr("agentic_debugger.application.provider_config.provider_configurations_path", lambda: tmp_path / "provider-configurations.json")
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.provider_configurations_path", lambda: tmp_path / "provider-configurations.json")
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.load_secure_credential", lambda kind: None)
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.load_secure_credential", lambda kind: None)
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.has_secure_credential", lambda kind: False)
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.has_secure_credential", lambda kind: False)
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.opencode_auth_store_path", lambda: tmp_path / "missing-auth.json")
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.opencode_auth_store_path", lambda: tmp_path / "missing-auth.json")
     for name in (
         "OPENCODE_API_KEY",
         "COMMAND_CODE_API_KEY",
@@ -181,7 +186,8 @@ class TestModelListing:
         pc.clear_all_session_keys()
         monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
         monkeypatch.delenv("AGENTIC_DEBUGGER_OLLAMA_API_KEY", raising=False)
-        monkeypatch.setattr(pc, "load_secure_credential", lambda kind: None)
+        monkeypatch.setattr("agentic_debugger.application.provider_credentials.load_secure_credential", lambda kind: None)
+        monkeypatch.setattr("agentic_debugger.application.provider_connections.load_secure_credential", lambda kind: None)
         models = mp.list_provider_models(include_ollama=True)
         kimi3 = next((m for m in models if m.model_id == "kimi-k3:cloud"), None)
         assert kimi3 is not None
@@ -257,7 +263,8 @@ class TestResolution:
         pc.clear_all_session_keys()
         monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
         monkeypatch.delenv("AGENTIC_DEBUGGER_OLLAMA_API_KEY", raising=False)
-        monkeypatch.setattr(pc, "load_secure_credential", lambda kind: None)
+        monkeypatch.setattr("agentic_debugger.application.provider_credentials.load_secure_credential", lambda kind: None)
+        monkeypatch.setattr("agentic_debugger.application.provider_connections.load_secure_credential", lambda kind: None)
         with pytest.raises(mp.ProviderRegistryError) as excinfo:
             mp.resolve_provider_live_config(mp.PROVIDER_KIND_OLLAMA, "kimi-k3:cloud")
         assert "no usable credential source" in str(excinfo.value)

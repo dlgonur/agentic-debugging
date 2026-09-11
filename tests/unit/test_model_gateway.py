@@ -615,15 +615,18 @@ def test_resolve_incompatible_model_protocol_raises_error(
     )
     # Repair 25: snapshot-pure helpers are the authority-relevant seam;
     # mock them as well so the incompatible-protocol failure is exercised
-    # through the single-snapshot path.
+    # through the single-snapshot path. Decomposition v1: these helpers live
+    # in provider_protocols; the canonical namespace is patched (the facade
+    # re-exports the identical objects but intra-module lookups resolve in
+    # the canonical module).
     monkeypatch.setattr(
-        "agentic_debugger.application.provider_connections.resolve_model_protocol_for_config",
+        "agentic_debugger.application.provider_protocols.resolve_model_protocol_for_config",
         lambda cfg, model: (_ for _ in ()).throw(
             ProviderConnectionError("incompatible protocol format")
         ),
     )
     monkeypatch.setattr(
-        "agentic_debugger.application.provider_connections.effective_model_protocol_for_config",
+        "agentic_debugger.application.provider_protocols.effective_model_protocol_for_config",
         lambda cfg, model: (_ for _ in ()).throw(
             ProviderConnectionError("incompatible protocol format")
         ),

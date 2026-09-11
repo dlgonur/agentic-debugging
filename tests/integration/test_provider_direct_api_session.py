@@ -108,8 +108,10 @@ def _hermetic_provider_credentials(
     monkeypatch.setattr(
         pc, "save_secure_credential", lambda k, v: _vault.__setitem__(k, v) or True
     )
-    monkeypatch.setattr(pc, "load_secure_credential", lambda k: _vault.get(k))
-    monkeypatch.setattr(pc, "has_secure_credential", lambda k: k in _vault)
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.load_secure_credential", lambda k: _vault.get(k))
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.load_secure_credential", lambda k: _vault.get(k))
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.has_secure_credential", lambda k: k in _vault)
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.has_secure_credential", lambda k: k in _vault)
     monkeypatch.setattr(
         pc, "delete_secure_credential", lambda k: _vault.pop(k, None) is not None
     )

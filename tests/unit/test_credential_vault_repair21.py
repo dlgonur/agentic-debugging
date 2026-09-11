@@ -72,13 +72,19 @@ def _hermetic_vault(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         "AGENTIC_DEBUGGER_PROVIDER_QUARANTINE_PATH", str(tmp_path / "q.json")
     )
     monkeypatch.setenv("AGENTIC_DEBUGGER_CONFIG_DIR", str(tmp_path / "config-dir"))
-    monkeypatch.setattr(pc, "catalog_cache_path", lambda: tmp_path / "cache.json")
-    monkeypatch.setattr(pc, "opencode_auth_store_path", lambda: tmp_path / "missing-auth.json")
+    monkeypatch.setattr("agentic_debugger.application.provider_catalog.catalog_cache_path", lambda: tmp_path / "cache.json")
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.catalog_cache_path", lambda: tmp_path / "cache.json")
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.opencode_auth_store_path", lambda: tmp_path / "missing-auth.json")
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.opencode_auth_store_path", lambda: tmp_path / "missing-auth.json")
     store: dict[str, str] = {}
-    monkeypatch.setattr(pc, "save_secure_credential", lambda k, v: store.__setitem__(k, v) or True)
-    monkeypatch.setattr(pc, "load_secure_credential", lambda k: store.get(k))
-    monkeypatch.setattr(pc, "has_secure_credential", lambda k: k in store)
-    monkeypatch.setattr(pc, "delete_secure_credential", lambda k: store.pop(k, None) is not None)
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.save_secure_credential", lambda k, v: store.__setitem__(k, v) or True)
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.save_secure_credential", lambda k, v: store.__setitem__(k, v) or True)
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.load_secure_credential", lambda k: store.get(k))
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.load_secure_credential", lambda k: store.get(k))
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.has_secure_credential", lambda k: k in store)
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.has_secure_credential", lambda k: k in store)
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.delete_secure_credential", lambda k: store.pop(k, None) is not None)
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.delete_secure_credential", lambda k: store.pop(k, None) is not None)
     for var in (
         "COMMAND_CODE_API_KEY",
         "OPENCODE_API_KEY",
@@ -143,7 +149,8 @@ class TestFinding1ProductHttpThroughVault:
                 "ModelGateway product path"
             )
 
-        monkeypatch.setattr(pc, "resolve_runtime_credential", _forbidden)
+        monkeypatch.setattr("agentic_debugger.application.provider_credentials.resolve_runtime_credential", _forbidden)
+        monkeypatch.setattr("agentic_debugger.application.provider_connections.resolve_runtime_credential", _forbidden)
         return calls
 
     def test_refresh_catalog_uses_vault_lease_never_ambient(
@@ -512,7 +519,8 @@ class TestFinding5CliAuthStoreLocationPinning:
             json.dumps({"opencode-go": {"type": "api", "key": SECRET_A}}),
             encoding="utf-8",
         )
-        monkeypatch.setattr(pc, "opencode_auth_store_path", lambda: store_a / "auth.json")
+        monkeypatch.setattr("agentic_debugger.application.provider_credentials.opencode_auth_store_path", lambda: store_a / "auth.json")
+        monkeypatch.setattr("agentic_debugger.application.provider_connections.opencode_auth_store_path", lambda: store_a / "auth.json")
         vault = CredentialVault.default()
         binding = vault.safe_binding("opencode_r21")
         assert binding is not None
@@ -530,11 +538,13 @@ class TestFinding5CliAuthStoreLocationPinning:
             json.dumps({"opencode-go": {"type": "api", "key": SECRET_B}}),
             encoding="utf-8",
         )
-        monkeypatch.setattr(pc, "opencode_auth_store_path", lambda: store_b / "auth.json")
+        monkeypatch.setattr("agentic_debugger.application.provider_credentials.opencode_auth_store_path", lambda: store_b / "auth.json")
+        monkeypatch.setattr("agentic_debugger.application.provider_connections.opencode_auth_store_path", lambda: store_b / "auth.json")
         with pytest.raises(CredentialUnavailableError):
             vault.resolve_lease(binding)
         # Same location again: the named authority resolves again.
-        monkeypatch.setattr(pc, "opencode_auth_store_path", lambda: store_a / "auth.json")
+        monkeypatch.setattr("agentic_debugger.application.provider_credentials.opencode_auth_store_path", lambda: store_a / "auth.json")
+        monkeypatch.setattr("agentic_debugger.application.provider_connections.opencode_auth_store_path", lambda: store_a / "auth.json")
         assert vault.resolve_lease(binding).reveal() == SECRET_A
 
 

@@ -61,12 +61,18 @@ def _isolate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     ):
         monkeypatch.delenv(var, raising=False)
     store: dict[str, str] = {}
-    monkeypatch.setattr(pc, "save_secure_credential", lambda k, v: store.__setitem__(k, v) or True)
-    monkeypatch.setattr(pc, "load_secure_credential", lambda k: store.get(k))
-    monkeypatch.setattr(pc, "has_secure_credential", lambda k: k in store)
-    monkeypatch.setattr(pc, "delete_secure_credential", lambda k: store.pop(k, None) is not None)
-    monkeypatch.setattr(pc, "catalog_cache_path", lambda: tmp_path / "catalog-cache.json")
-    monkeypatch.setattr(pc, "provider_quarantine_path", lambda: tmp_path / "quarantine.json")
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.save_secure_credential", lambda k, v: store.__setitem__(k, v) or True)
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.save_secure_credential", lambda k, v: store.__setitem__(k, v) or True)
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.load_secure_credential", lambda k: store.get(k))
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.load_secure_credential", lambda k: store.get(k))
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.has_secure_credential", lambda k: k in store)
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.has_secure_credential", lambda k: k in store)
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.delete_secure_credential", lambda k: store.pop(k, None) is not None)
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.delete_secure_credential", lambda k: store.pop(k, None) is not None)
+    monkeypatch.setattr("agentic_debugger.application.provider_catalog.catalog_cache_path", lambda: tmp_path / "catalog-cache.json")
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.catalog_cache_path", lambda: tmp_path / "catalog-cache.json")
+    monkeypatch.setattr("agentic_debugger.application.provider_config.provider_quarantine_path", lambda: tmp_path / "quarantine.json")
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.provider_quarantine_path", lambda: tmp_path / "quarantine.json")
     pc.clear_all_session_keys()
     yield
     pc.clear_all_session_keys()
@@ -320,7 +326,8 @@ def test_endpoint_change_blocked_with_cli_auth(tmp_path: Path, monkeypatch: pyte
     )
     store = tmp_path / "auth.json"
     store.write_text(json.dumps({"opencode-go": {"key": "cli-secret-1"}}), encoding="utf-8")
-    monkeypatch.setattr(pc, "opencode_auth_store_path", lambda: store)
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.opencode_auth_store_path", lambda: store)
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.opencode_auth_store_path", lambda: store)
     with pytest.raises(ProviderConnectionError, match="re-enter"):
         pc.update_provider_config("opencode_go", base_url="https://evil.example/v1")
 

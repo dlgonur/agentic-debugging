@@ -225,8 +225,10 @@ def _setup_test_providers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setattr(
         pc, "save_secure_credential", lambda k, v: _secure_store.setdefault(k, v) or True
     )
-    monkeypatch.setattr(pc, "load_secure_credential", lambda k: _secure_store.get(k))
-    monkeypatch.setattr(pc, "has_secure_credential", lambda k: k in _secure_store)
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.load_secure_credential", lambda k: _secure_store.get(k))
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.load_secure_credential", lambda k: _secure_store.get(k))
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.has_secure_credential", lambda k: k in _secure_store)
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.has_secure_credential", lambda k: k in _secure_store)
     monkeypatch.setattr(
         pc,
         "delete_secure_credential",

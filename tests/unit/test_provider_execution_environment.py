@@ -80,10 +80,14 @@ def _isolate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     ):
         monkeypatch.delenv(var, raising=False)
     store: dict[str, str] = {}
-    monkeypatch.setattr(pc, "save_secure_credential", lambda k, v: store.__setitem__(k, v) or True)
-    monkeypatch.setattr(pc, "load_secure_credential", lambda k: store.get(k))
-    monkeypatch.setattr(pc, "has_secure_credential", lambda k: k in store)
-    monkeypatch.setattr(pc, "delete_secure_credential", lambda k: store.pop(k, None) is not None)
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.save_secure_credential", lambda k, v: store.__setitem__(k, v) or True)
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.save_secure_credential", lambda k, v: store.__setitem__(k, v) or True)
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.load_secure_credential", lambda k: store.get(k))
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.load_secure_credential", lambda k: store.get(k))
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.has_secure_credential", lambda k: k in store)
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.has_secure_credential", lambda k: k in store)
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.delete_secure_credential", lambda k: store.pop(k, None) is not None)
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.delete_secure_credential", lambda k: store.pop(k, None) is not None)
     pc.clear_all_session_keys()
     yield
     pc.clear_all_session_keys()
@@ -307,8 +311,10 @@ def test_generic_opencode_identity_receives_no_cli_semantics(
     )
     assert pc.provider_legacy_cli_auth_file("generic_oc_x") is None
     # No CLI-auth source even with the store present (generic isolation).
-    monkeypatch.setattr(pc, "load_secure_credential", lambda kind: None)
-    monkeypatch.setattr(pc, "has_secure_credential", lambda kind: False)
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.load_secure_credential", lambda kind: None)
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.load_secure_credential", lambda kind: None)
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.has_secure_credential", lambda kind: False)
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.has_secure_credential", lambda kind: False)
     assert pc.credential_source_for("generic_oc_x") is None
     assert mp.provider_transport_environment("generic_oc_x") is None
 

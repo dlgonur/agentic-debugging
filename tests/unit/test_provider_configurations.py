@@ -90,16 +90,32 @@ def _isolate_provider_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     # In-memory mock for OS secure store
     _secure_store: dict[str, str] = {}
     monkeypatch.setattr(
+        "agentic_debugger.application.provider_credentials.save_secure_credential",
+        lambda kind, val: _secure_store.__setitem__(kind, val) or True,
+    )
+    monkeypatch.setattr(
         "agentic_debugger.application.provider_connections.save_secure_credential",
         lambda kind, val: _secure_store.__setitem__(kind, val) or True,
+    )
+    monkeypatch.setattr(
+        "agentic_debugger.application.provider_credentials.load_secure_credential",
+        lambda kind: _secure_store.get(kind),
     )
     monkeypatch.setattr(
         "agentic_debugger.application.provider_connections.load_secure_credential",
         lambda kind: _secure_store.get(kind),
     )
     monkeypatch.setattr(
+        "agentic_debugger.application.provider_credentials.has_secure_credential",
+        lambda kind: kind in _secure_store,
+    )
+    monkeypatch.setattr(
         "agentic_debugger.application.provider_connections.has_secure_credential",
         lambda kind: kind in _secure_store,
+    )
+    monkeypatch.setattr(
+        "agentic_debugger.application.provider_credentials.delete_secure_credential",
+        lambda kind: _secure_store.pop(kind, None) is not None,
     )
     monkeypatch.setattr(
         "agentic_debugger.application.provider_connections.delete_secure_credential",
@@ -463,6 +479,10 @@ def test_failed_refresh_preserves_existing_catalog(monkeypatch: pytest.MonkeyPat
     def _failing_request(*args, **kwargs):
         raise ProviderHttpError(kind="network", message="Connection refused")
 
+    monkeypatch.setattr(
+        "agentic_debugger.application.provider_catalog.request_json",
+        _failing_request,
+    )
     monkeypatch.setattr(
         "agentic_debugger.application.provider_connections.request_json",
         _failing_request,
@@ -846,6 +866,10 @@ def test_delete_provider_cleans_up_catalog_cache_and_secure_store(tmp_path: Path
     """Deleting a custom provider purges config, secure credentials, and cached catalog entries."""
     cache_path = tmp_path / "provider-catalog-cache.json"
     monkeypatch.setattr(
+        "agentic_debugger.application.provider_catalog.catalog_cache_path",
+        lambda: cache_path,
+    )
+    monkeypatch.setattr(
         "agentic_debugger.application.provider_connections.catalog_cache_path",
         lambda: cache_path,
     )
@@ -919,6 +943,10 @@ def test_durable_credential_source_after_restart_and_reload():
 def test_explicit_failure_on_secure_save_failure_no_silent_session_fallback(monkeypatch: pytest.MonkeyPatch):
     """When secure store save fails, error is explicit and never silently falls back to session memory."""
     # Force secure store save to fail
+    monkeypatch.setattr(
+        "agentic_debugger.application.provider_credentials.save_secure_credential",
+        lambda kind, val: False,
+    )
     monkeypatch.setattr(
         "agentic_debugger.application.provider_connections.save_secure_credential",
         lambda kind, val: False,
@@ -1007,6 +1035,10 @@ def test_add_provider_atomic_when_secure_save_fails(monkeypatch: pytest.MonkeyPa
     )
 
     monkeypatch.setattr(
+        "agentic_debugger.application.provider_credentials.save_secure_credential",
+        lambda kind, val: False,
+    )
+    monkeypatch.setattr(
         "agentic_debugger.application.provider_connections.save_secure_credential",
         lambda kind, val: False,
     )
@@ -1063,6 +1095,10 @@ def test_update_provider_atomic_when_secure_save_fails(monkeypatch: pytest.Monke
     add_manual_model(pid, "original-model-1", "Original Model 1")
 
     monkeypatch.setattr(
+        "agentic_debugger.application.provider_credentials.save_secure_credential",
+        lambda kind, val: False,
+    )
+    monkeypatch.setattr(
         "agentic_debugger.application.provider_connections.save_secure_credential",
         lambda kind, val: False,
     )
@@ -1114,6 +1150,10 @@ def test_failed_update_never_sends_credential_to_rejected_endpoint(
         pid = seed.provider_id
 
         monkeypatch.setattr(
+            "agentic_debugger.application.provider_credentials.save_secure_credential",
+            lambda kind, val: False,
+        )
+        monkeypatch.setattr(
             "agentic_debugger.application.provider_connections.save_secure_credential",
             lambda kind, val: False,
         )
@@ -1135,7 +1175,8 @@ def test_failed_update_never_sends_credential_to_rejected_endpoint(
             recorded_urls.append(url)
             return real_request_json(method, url, **kwargs)
 
-        monkeypatch.setattr(pc, "request_json", recording_request_json)
+        monkeypatch.setattr("agentic_debugger.application.provider_catalog.request_json", recording_request_json)
+        monkeypatch.setattr("agentic_debugger.application.provider_connections.request_json", recording_request_json)
 
         snapshot = refresh_provider_catalog(pid)
 
@@ -1165,6 +1206,10 @@ def test_config_write_failure_after_credential_mutation_restores_previous_pair(
     def _failing_save(configs):
         raise ProviderConnectionError("provider configuration could not be written")
 
+    monkeypatch.setattr(
+        "agentic_debugger.application.provider_config.save_provider_configurations",
+        _failing_save,
+    )
     monkeypatch.setattr(
         "agentic_debugger.application.provider_connections.save_provider_configurations",
         _failing_save,
@@ -1202,6 +1247,10 @@ def test_config_write_failure_after_first_add_leaves_no_provider_and_no_credenti
     def _failing_save(configs):
         raise ProviderConnectionError("provider configuration could not be written")
 
+    monkeypatch.setattr(
+        "agentic_debugger.application.provider_config.save_provider_configurations",
+        _failing_save,
+    )
     monkeypatch.setattr(
         "agentic_debugger.application.provider_connections.save_provider_configurations",
         _failing_save,
@@ -1248,12 +1297,24 @@ def test_unrestorable_credential_rolls_back_to_deleted_key(monkeypatch: pytest.M
         return True
 
     monkeypatch.setattr(
+        "agentic_debugger.application.provider_credentials.save_secure_credential",
+        flaky_save,
+    )
+    monkeypatch.setattr(
         "agentic_debugger.application.provider_connections.save_secure_credential",
         flaky_save,
     )
     monkeypatch.setattr(
+        "agentic_debugger.application.provider_credentials.delete_secure_credential",
+        recording_delete,
+    )
+    monkeypatch.setattr(
         "agentic_debugger.application.provider_connections.delete_secure_credential",
         recording_delete,
+    )
+    monkeypatch.setattr(
+        "agentic_debugger.application.provider_credentials.load_secure_credential",
+        lambda kind: "fake-old-key" if kind == pid else None,
     )
     monkeypatch.setattr(
         "agentic_debugger.application.provider_connections.load_secure_credential",
@@ -1263,6 +1324,10 @@ def test_unrestorable_credential_rolls_back_to_deleted_key(monkeypatch: pytest.M
     def _failing_save(configs):
         raise ProviderConnectionError("provider configuration could not be written")
 
+    monkeypatch.setattr(
+        "agentic_debugger.application.provider_config.save_provider_configurations",
+        _failing_save,
+    )
     monkeypatch.setattr(
         "agentic_debugger.application.provider_connections.save_provider_configurations",
         _failing_save,
@@ -1296,16 +1361,32 @@ def _catastrophic_fixture(
     """
     _secure: dict[str, str] = {}
     monkeypatch.setattr(
+        "agentic_debugger.application.provider_credentials.save_secure_credential",
+        lambda kind, val: _secure.__setitem__(kind, val) or True,
+    )
+    monkeypatch.setattr(
         "agentic_debugger.application.provider_connections.save_secure_credential",
         lambda kind, val: _secure.__setitem__(kind, val) or True,
+    )
+    monkeypatch.setattr(
+        "agentic_debugger.application.provider_credentials.load_secure_credential",
+        lambda kind: _secure.get(kind),
     )
     monkeypatch.setattr(
         "agentic_debugger.application.provider_connections.load_secure_credential",
         lambda kind: _secure.get(kind),
     )
     monkeypatch.setattr(
+        "agentic_debugger.application.provider_credentials.has_secure_credential",
+        lambda kind: kind in _secure,
+    )
+    monkeypatch.setattr(
         "agentic_debugger.application.provider_connections.has_secure_credential",
         lambda kind: kind in _secure,
+    )
+    monkeypatch.setattr(
+        "agentic_debugger.application.provider_credentials.delete_secure_credential",
+        lambda kind: _secure.pop(kind, None) is not None,
     )
     monkeypatch.setattr(
         "agentic_debugger.application.provider_connections.delete_secure_credential",
@@ -1330,20 +1411,40 @@ def _catastrophic_fixture(
     def undo_failure_mocks() -> None:
         """Restore working secure-store/config mocks (used to prove recovery)."""
         monkeypatch.setattr(
+            "agentic_debugger.application.provider_credentials.save_secure_credential",
+            lambda kind, val: _secure.__setitem__(kind, val) or True,
+        )
+        monkeypatch.setattr(
             "agentic_debugger.application.provider_connections.save_secure_credential",
             lambda kind, val: _secure.__setitem__(kind, val) or True,
+        )
+        monkeypatch.setattr(
+            "agentic_debugger.application.provider_credentials.load_secure_credential",
+            lambda kind: _secure.get(kind),
         )
         monkeypatch.setattr(
             "agentic_debugger.application.provider_connections.load_secure_credential",
             lambda kind: _secure.get(kind),
         )
         monkeypatch.setattr(
+            "agentic_debugger.application.provider_credentials.has_secure_credential",
+            lambda kind: kind in _secure,
+        )
+        monkeypatch.setattr(
             "agentic_debugger.application.provider_connections.has_secure_credential",
             lambda kind: kind in _secure,
         )
         monkeypatch.setattr(
+            "agentic_debugger.application.provider_credentials.delete_secure_credential",
+            lambda kind: _secure.pop(kind, None) is not None,
+        )
+        monkeypatch.setattr(
             "agentic_debugger.application.provider_connections.delete_secure_credential",
             lambda kind: _secure.pop(kind, None) is not None,
+        )
+        monkeypatch.setattr(
+            "agentic_debugger.application.provider_config.save_provider_configurations",
+            real_save_configurations,
         )
         monkeypatch.setattr(
             "agentic_debugger.application.provider_connections.save_provider_configurations",
@@ -1351,16 +1452,34 @@ def _catastrophic_fixture(
         )
 
     monkeypatch.setattr(
+        "agentic_debugger.application.provider_credentials.save_secure_credential",
+        failing_save,
+    )
+    monkeypatch.setattr(
         "agentic_debugger.application.provider_connections.save_secure_credential",
         failing_save,
+    )
+    monkeypatch.setattr(
+        "agentic_debugger.application.provider_credentials.load_secure_credential",
+        lambda kind: "fake-old-key" if kind == provider_id else None,
     )
     monkeypatch.setattr(
         "agentic_debugger.application.provider_connections.load_secure_credential",
         lambda kind: "fake-old-key" if kind == provider_id else None,
     )
     monkeypatch.setattr(
+        "agentic_debugger.application.provider_credentials.delete_secure_credential",
+        lambda kind: False,
+    )
+    monkeypatch.setattr(
         "agentic_debugger.application.provider_connections.delete_secure_credential",
         lambda kind: False,
+    )
+    monkeypatch.setattr(
+        "agentic_debugger.application.provider_config.save_provider_configurations",
+        lambda configs: (_ for _ in ()).throw(
+            ProviderConnectionError("provider configuration could not be written")
+        ),
     )
     monkeypatch.setattr(
         "agentic_debugger.application.provider_connections.save_provider_configurations",
@@ -1508,11 +1627,14 @@ def test_migration_transaction_ordering_clean_state_first(tmp_path: Path, monkey
 
     # Mock secure store with a saved key
     store = {"commandcode_goat": "legacy-secret-key"}
-    monkeypatch.setattr(pc, "load_secure_credential", lambda pid: store.get(pid))
-    monkeypatch.setattr(pc, "has_secure_credential", lambda pid: pid in store)
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.load_secure_credential", lambda pid: store.get(pid))
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.load_secure_credential", lambda pid: store.get(pid))
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.has_secure_credential", lambda pid: pid in store)
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.has_secure_credential", lambda pid: pid in store)
 
     # 1. Fault-inject deletion failure (returns False, key still in store)
-    monkeypatch.setattr(pc, "delete_secure_credential", lambda pid: False)
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.delete_secure_credential", lambda pid: False)
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.delete_secure_credential", lambda pid: False)
 
     # Migration fails closed
     with pytest.raises(ProviderConnectionError) as exc_info:
@@ -1529,7 +1651,8 @@ def test_migration_transaction_ordering_clean_state_first(tmp_path: Path, monkey
         store.pop(pid, None)
         return True
 
-    monkeypatch.setattr(pc, "delete_secure_credential", successful_delete)
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.delete_secure_credential", successful_delete)
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.delete_secure_credential", successful_delete)
     configs = load_provider_configurations()
     assert configs == []
     raw_disk_after = json.loads(config_file.read_text(encoding="utf-8"))

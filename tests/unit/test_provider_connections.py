@@ -29,11 +29,16 @@ SECRET = "test-session-key-not-a-real-credential"
 
 @pytest.fixture(autouse=True)
 def _isolated_cache(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setattr(pc, "catalog_cache_path", lambda: tmp_path / "cache.json")
-    monkeypatch.setattr(pc, "provider_configurations_path", lambda: tmp_path / "provider-configurations.json")
-    monkeypatch.setattr(pc, "opencode_auth_store_path", lambda: tmp_path / "missing-auth.json")
-    monkeypatch.setattr(pc, "load_secure_credential", lambda kind: None)
-    monkeypatch.setattr(pc, "has_secure_credential", lambda kind: False)
+    monkeypatch.setattr("agentic_debugger.application.provider_catalog.catalog_cache_path", lambda: tmp_path / "cache.json")
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.catalog_cache_path", lambda: tmp_path / "cache.json")
+    monkeypatch.setattr("agentic_debugger.application.provider_config.provider_configurations_path", lambda: tmp_path / "provider-configurations.json")
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.provider_configurations_path", lambda: tmp_path / "provider-configurations.json")
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.opencode_auth_store_path", lambda: tmp_path / "missing-auth.json")
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.opencode_auth_store_path", lambda: tmp_path / "missing-auth.json")
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.load_secure_credential", lambda kind: None)
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.load_secure_credential", lambda kind: None)
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.has_secure_credential", lambda kind: False)
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.has_secure_credential", lambda kind: False)
     for name in (
         "OPENCODE_API_KEY",
         "COMMAND_CODE_API_KEY",
@@ -246,7 +251,8 @@ class TestCredentials:
             json.dumps({"opencode-go": {"type": "api", "key": "store-key-abc"}}),
             encoding="utf-8",
         )
-        monkeypatch.setattr(pc, "opencode_auth_store_path", lambda: store)
+        monkeypatch.setattr("agentic_debugger.application.provider_credentials.opencode_auth_store_path", lambda: store)
+        monkeypatch.setattr("agentic_debugger.application.provider_connections.opencode_auth_store_path", lambda: store)
         monkeypatch.delenv("OPENCODE_API_KEY", raising=False)
         assert pc.credential_source_for("opencode_go") == "cli_auth_store"
         assert pc.resolve_runtime_credential("opencode_go") == "store-key-abc"
@@ -260,7 +266,8 @@ class TestCredentials:
 
         store = tmp_path / "auth.json"
         store.write_text(json.dumps({"key": "some-credential"}), encoding="utf-8")
-        monkeypatch.setattr(pc, "opencode_auth_store_path", lambda: store)
+        monkeypatch.setattr("agentic_debugger.application.provider_credentials.opencode_auth_store_path", lambda: store)
+        monkeypatch.setattr("agentic_debugger.application.provider_connections.opencode_auth_store_path", lambda: store)
         monkeypatch.delenv("COMMAND_CODE_API_KEY", raising=False)
         assert pc.credential_source_for("commandcode_goat") is None
 
@@ -269,7 +276,8 @@ class TestCredentials:
     ) -> None:
         store = tmp_path / "auth.json"
         store.write_text("{not json", encoding="utf-8")
-        monkeypatch.setattr(pc, "opencode_auth_store_path", lambda: store)
+        monkeypatch.setattr("agentic_debugger.application.provider_credentials.opencode_auth_store_path", lambda: store)
+        monkeypatch.setattr("agentic_debugger.application.provider_connections.opencode_auth_store_path", lambda: store)
         monkeypatch.delenv("OPENCODE_API_KEY", raising=False)
         assert pc.credential_source_for("opencode_go") is None
 

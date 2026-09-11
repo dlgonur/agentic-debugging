@@ -87,7 +87,8 @@ def test_opencode_cli_auth_alone_does_not_instantiate_provider(tmp_path: Path, m
     # Mock OpenCode CLI auth store existing
     fake_auth = tmp_path / "opencode_auth.json"
     fake_auth.write_text(json.dumps({"token": "fake-opencode-cli-jwt"}), encoding="utf-8")
-    monkeypatch.setattr(pc, "opencode_auth_store_path", lambda: fake_auth)
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.opencode_auth_store_path", lambda: fake_auth)
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.opencode_auth_store_path", lambda: fake_auth)
 
     # Provider Manager remains 0 configured providers
     assert pc.list_configured_providers() == []
@@ -512,7 +513,8 @@ def test_orphan_credential_reuse_regression_and_retry(
 
     # 3. Fault-inject secure deletion failure
     original_delete = pc.delete_secure_credential
-    monkeypatch.setattr(pc, "delete_secure_credential", lambda pid: False)
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.delete_secure_credential", lambda pid: False)
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.delete_secure_credential", lambda pid: False)
 
     # 4. Trigger migration -> MUST fail closed with ProviderConnectionError
     with pytest.raises(pc.ProviderConnectionError) as exc_info:
@@ -527,7 +529,8 @@ def test_orphan_credential_reuse_regression_and_retry(
     assert pc.has_secure_credential("commandcode_goat") is True
 
     # 5. Restore credential deletion
-    monkeypatch.setattr(pc, "delete_secure_credential", original_delete)
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.delete_secure_credential", original_delete)
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.delete_secure_credential", original_delete)
 
     # 6. Retry migration -> completes cleanly
     configs = pc.load_provider_configurations()
@@ -755,8 +758,10 @@ def test_add_provider_dialog_discovers_catalog_after_screen_reload(
     monkeypatch.setattr(
         pc, "save_secure_credential", lambda k, v: secure_store.__setitem__(k, v) or True
     )
-    monkeypatch.setattr(pc, "load_secure_credential", lambda k: secure_store.get(k))
-    monkeypatch.setattr(pc, "has_secure_credential", lambda k: k in secure_store)
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.load_secure_credential", lambda k: secure_store.get(k))
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.load_secure_credential", lambda k: secure_store.get(k))
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.has_secure_credential", lambda k: k in secure_store)
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.has_secure_credential", lambda k: k in secure_store)
     pc.clear_all_session_keys()
 
     app = make_app(tmp_path)

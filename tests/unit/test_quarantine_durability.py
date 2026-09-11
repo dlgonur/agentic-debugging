@@ -39,10 +39,14 @@ def _isolate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     config_file = tmp_path / "provider-configurations.json"
     monkeypatch.setenv("AGENTIC_DEBUGGER_PROVIDER_CONFIG_PATH", str(config_file))
     store: dict[str, str] = {}
-    monkeypatch.setattr(pc, "save_secure_credential", lambda k, v: store.__setitem__(k, v) or True)
-    monkeypatch.setattr(pc, "load_secure_credential", lambda k: store.get(k))
-    monkeypatch.setattr(pc, "has_secure_credential", lambda k: k in store)
-    monkeypatch.setattr(pc, "delete_secure_credential", lambda k: store.pop(k, None) is not None)
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.save_secure_credential", lambda k, v: store.__setitem__(k, v) or True)
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.save_secure_credential", lambda k, v: store.__setitem__(k, v) or True)
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.load_secure_credential", lambda k: store.get(k))
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.load_secure_credential", lambda k: store.get(k))
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.has_secure_credential", lambda k: k in store)
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.has_secure_credential", lambda k: k in store)
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.delete_secure_credential", lambda k: store.pop(k, None) is not None)
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.delete_secure_credential", lambda k: store.pop(k, None) is not None)
     # ensure clean quarantine state
     pc._QUARANTINED_PROVIDERS.clear()
     try:
@@ -86,12 +90,14 @@ def test_quarantine_write_failure_before_mutation_aborts_without_credential_chan
         if val == "new-secret-999":
             new_key_calls.append(val)
         return orig_save(kind, val)
-    monkeypatch.setattr(pc, "save_secure_credential", tracking_save)
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.save_secure_credential", tracking_save)
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.save_secure_credential", tracking_save)
 
     # force durable quarantine arm to fail
     def failing_write(providers):
         raise ProviderConnectionError("injected quarantine arm failure")
-    monkeypatch.setattr(pc, "_write_quarantine_state", failing_write)
+    monkeypatch.setattr("agentic_debugger.application.provider_config._write_quarantine_state", failing_write)
+    monkeypatch.setattr("agentic_debugger.application.provider_connections._write_quarantine_state", failing_write)
 
     # also track any discovery/request
     requested: list[str] = []
@@ -99,7 +105,8 @@ def test_quarantine_write_failure_before_mutation_aborts_without_credential_chan
     def tracking_request(method, url, **kw):
         requested.append(url)
         return orig_request(method, url, **kw)
-    monkeypatch.setattr(pc, "request_json", tracking_request)
+    monkeypatch.setattr("agentic_debugger.application.provider_catalog.request_json", tracking_request)
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.request_json", tracking_request)
 
     with pytest.raises(ProviderConnectionError, match="quarantine could not be armed"):
         update_provider_config(
@@ -145,8 +152,10 @@ def test_catastrophic_rollback_restart_remains_blocked_zero_requests(monkeypatch
     def recording_save(kind, val):
         order.append(f"save:{val[:8]}")
         return orig_save(kind, val)
-    monkeypatch.setattr(pc, "_write_quarantine_state", recording_write)
-    monkeypatch.setattr(pc, "save_secure_credential", recording_save)
+    monkeypatch.setattr("agentic_debugger.application.provider_config._write_quarantine_state", recording_write)
+    monkeypatch.setattr("agentic_debugger.application.provider_connections._write_quarantine_state", recording_write)
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.save_secure_credential", recording_save)
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.save_secure_credential", recording_save)
 
     # force catastrophic: new-key write succeeds, config fails, restore/delete fail
     call = 0
@@ -158,15 +167,20 @@ def test_catastrophic_rollback_restart_remains_blocked_zero_requests(monkeypatch
             return orig_save(kind, val)
         return False
     # after first add, re-patch flaky for update
-    monkeypatch.setattr(pc, "save_secure_credential", flaky_save)
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.save_secure_credential", flaky_save)
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.save_secure_credential", flaky_save)
     # need to keep write recording: wrap flaky with order tracking
     def flaky_save_with_order(kind, val):
         order.append(f"save:{val[:8]}")
         return flaky_save(kind, val)
-    monkeypatch.setattr(pc, "save_secure_credential", flaky_save_with_order)
-    monkeypatch.setattr(pc, "_write_quarantine_state", recording_write)
-    monkeypatch.setattr(pc, "delete_secure_credential", lambda k: False)
-    monkeypatch.setattr(pc, "save_provider_configurations", lambda configs: (_ for _ in ()).throw(ProviderConnectionError("provider configuration could not be written")))
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.save_secure_credential", flaky_save_with_order)
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.save_secure_credential", flaky_save_with_order)
+    monkeypatch.setattr("agentic_debugger.application.provider_config._write_quarantine_state", recording_write)
+    monkeypatch.setattr("agentic_debugger.application.provider_connections._write_quarantine_state", recording_write)
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.delete_secure_credential", lambda k: False)
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.delete_secure_credential", lambda k: False)
+    monkeypatch.setattr("agentic_debugger.application.provider_config.save_provider_configurations", lambda configs: (_ for _ in ()).throw(ProviderConnectionError("provider configuration could not be written")))
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.save_provider_configurations", lambda configs: (_ for _ in ()).throw(ProviderConnectionError("provider configuration could not be written")))
 
     # need to restore write tracker for arm
     # arm happens inside update_provider_config -> quarantine_provider -> _write
@@ -200,8 +214,10 @@ def test_catastrophic_rollback_restart_remains_blocked_zero_requests(monkeypatch
     # We need to simulate that: set store to have new-key
     # We have lost store reference due to monkeypatch; reconstruct from isolation fixture's store is not accessible, so we directly set via mock
     # We'll just ensure has_secure_credential returns True to simulate residue
-    monkeypatch.setattr(pc, "has_secure_credential", lambda k: k == "catastrophic_prov")
-    monkeypatch.setattr(pc, "load_secure_credential", lambda k: "new-key-999" if k == "catastrophic_prov" else None)
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.has_secure_credential", lambda k: k == "catastrophic_prov")
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.has_secure_credential", lambda k: k == "catastrophic_prov")
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.load_secure_credential", lambda k: "new-key-999" if k == "catastrophic_prov" else None)
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.load_secure_credential", lambda k: "new-key-999" if k == "catastrophic_prov" else None)
     # but _read still returns quarantine
     assert pc.provider_quarantine_path().exists()
     # after restart, still blocked
@@ -230,9 +246,12 @@ def test_malformed_quarantine_file_fails_closed(monkeypatch: pytest.MonkeyPatch)
     qp.write_text("{ not json }", encoding="utf-8")
     # seed a provider config and credential (in-memory store)
     store = {}
-    monkeypatch.setattr(pc, "save_secure_credential", lambda k, v: store.__setitem__(k, v) or True)
-    monkeypatch.setattr(pc, "load_secure_credential", lambda k: store.get(k))
-    monkeypatch.setattr(pc, "has_secure_credential", lambda k: k in store)
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.save_secure_credential", lambda k, v: store.__setitem__(k, v) or True)
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.save_secure_credential", lambda k, v: store.__setitem__(k, v) or True)
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.load_secure_credential", lambda k: store.get(k))
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.load_secure_credential", lambda k: store.get(k))
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.has_secure_credential", lambda k: k in store)
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.has_secure_credential", lambda k: k in store)
     # need config for provider
     save_provider_configurations([pc.ProviderConfig(provider_id="malformed_prov", name="Malformed", base_url="https://api.test.com/v1", api_format=pc.PROTOCOL_CHAT_COMPLETIONS)])
     store["malformed_prov"] = "secret-123"
@@ -267,9 +286,12 @@ def test_oversized_and_unreadable_quarantine_state_fails_closed(monkeypatch: pyt
     oversized = "x" * (pc._MAX_QUARANTINE_FILE_BYTES + 1)
     qp.write_text(oversized, encoding="utf-8")
     store = {}
-    monkeypatch.setattr(pc, "save_secure_credential", lambda k, v: store.__setitem__(k, v) or True)
-    monkeypatch.setattr(pc, "load_secure_credential", lambda k: store.get(k))
-    monkeypatch.setattr(pc, "has_secure_credential", lambda k: k in store)
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.save_secure_credential", lambda k, v: store.__setitem__(k, v) or True)
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.save_secure_credential", lambda k, v: store.__setitem__(k, v) or True)
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.load_secure_credential", lambda k: store.get(k))
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.load_secure_credential", lambda k: store.get(k))
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.has_secure_credential", lambda k: k in store)
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.has_secure_credential", lambda k: k in store)
     save_provider_configurations([pc.ProviderConfig(provider_id="oversized_prov", name="Oversized", base_url="https://api.test.com/v1", api_format=pc.PROTOCOL_CHAT_COMPLETIONS)])
     store["oversized_prov"] = "secret-456"
     pc._QUARANTINED_PROVIDERS.clear()
@@ -292,7 +314,8 @@ def test_oversized_and_unreadable_quarantine_state_fails_closed(monkeypatch: pyt
     qp.write_text(json.dumps({"schema_version": pc._QUARANTINE_SCHEMA_VERSION, "providers": []}), encoding="utf-8")
     def failing_read():
         raise ProviderConnectionError("provider credential quarantine state could not be read")
-    monkeypatch.setattr(pc, "_read_quarantine_file", failing_read)
+    monkeypatch.setattr("agentic_debugger.application.provider_config._read_quarantine_file", failing_read)
+    monkeypatch.setattr("agentic_debugger.application.provider_connections._read_quarantine_file", failing_read)
     with pytest.raises(ProviderConnectionError, match="could not be read"):
         credential_source_for("oversized_prov")
     with pytest.raises(ProviderConnectionError, match="could not be read"):
@@ -312,10 +335,14 @@ def test_successful_save_clears_quarantine_and_permits_request(monkeypatch: pyte
     quarantine, credential_source_for == saved, permits normal fake-provider request.
     """
     store = {}
-    monkeypatch.setattr(pc, "save_secure_credential", lambda k, v: store.__setitem__(k, v) or True)
-    monkeypatch.setattr(pc, "load_secure_credential", lambda k: store.get(k))
-    monkeypatch.setattr(pc, "has_secure_credential", lambda k: k in store)
-    monkeypatch.setattr(pc, "delete_secure_credential", lambda k: store.pop(k, None) is not None)
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.save_secure_credential", lambda k, v: store.__setitem__(k, v) or True)
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.save_secure_credential", lambda k, v: store.__setitem__(k, v) or True)
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.load_secure_credential", lambda k: store.get(k))
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.load_secure_credential", lambda k: store.get(k))
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.has_secure_credential", lambda k: k in store)
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.has_secure_credential", lambda k: k in store)
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.delete_secure_credential", lambda k: store.pop(k, None) is not None)
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.delete_secure_credential", lambda k: store.pop(k, None) is not None)
 
     def responder(req):
         if req["path"] == "/v1/models":
@@ -394,7 +421,8 @@ def test_corrupt_state_blocks_provider_edit_before_credential_mutation(monkeypat
             new_key_calls.append((kind, val))
         return orig_save(kind, val)
 
-    monkeypatch.setattr(pc, "save_secure_credential", tracking_save)
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.save_secure_credential", tracking_save)
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.save_secure_credential", tracking_save)
 
     requested: list[str] = []
     orig_request = pc.request_json
@@ -403,7 +431,8 @@ def test_corrupt_state_blocks_provider_edit_before_credential_mutation(monkeypat
         requested.append(url)
         return orig_request(method, url, **kw)
 
-    monkeypatch.setattr(pc, "request_json", tracking_request)
+    monkeypatch.setattr("agentic_debugger.application.provider_catalog.request_json", tracking_request)
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.request_json", tracking_request)
 
     with pytest.raises(ProviderConnectionError):
         update_provider_config(
@@ -477,7 +506,8 @@ def test_one_provider_save_must_not_clear_unknown_global_quarantine(monkeypatch:
             b_new_calls.append(val)
         return orig_save(kind, val)
 
-    monkeypatch.setattr(pc, "save_secure_credential", tracking_save)
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.save_secure_credential", tracking_save)
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.save_secure_credential", tracking_save)
 
     with pytest.raises(ProviderConnectionError):
         update_provider_config(

@@ -61,12 +61,18 @@ def _isolate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     ):
         monkeypatch.delenv(var, raising=False)
     store: dict[str, str] = {}
-    monkeypatch.setattr(pc, "save_secure_credential", lambda k, v: store.__setitem__(k, v) or True)
-    monkeypatch.setattr(pc, "load_secure_credential", lambda k: store.get(k))
-    monkeypatch.setattr(pc, "has_secure_credential", lambda k: k in store)
-    monkeypatch.setattr(pc, "delete_secure_credential", lambda k: store.pop(k, None) is not None)
-    monkeypatch.setattr(pc, "catalog_cache_path", lambda: tmp_path / "cache.json")
-    monkeypatch.setattr(pc, "provider_quarantine_path", lambda: tmp_path / "q.json")
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.save_secure_credential", lambda k, v: store.__setitem__(k, v) or True)
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.save_secure_credential", lambda k, v: store.__setitem__(k, v) or True)
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.load_secure_credential", lambda k: store.get(k))
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.load_secure_credential", lambda k: store.get(k))
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.has_secure_credential", lambda k: k in store)
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.has_secure_credential", lambda k: k in store)
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.delete_secure_credential", lambda k: store.pop(k, None) is not None)
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.delete_secure_credential", lambda k: store.pop(k, None) is not None)
+    monkeypatch.setattr("agentic_debugger.application.provider_catalog.catalog_cache_path", lambda: tmp_path / "cache.json")
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.catalog_cache_path", lambda: tmp_path / "cache.json")
+    monkeypatch.setattr("agentic_debugger.application.provider_config.provider_quarantine_path", lambda: tmp_path / "q.json")
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.provider_quarantine_path", lambda: tmp_path / "q.json")
     pc.clear_all_session_keys()
     yield
     pc.clear_all_session_keys()
@@ -212,13 +218,16 @@ def test_generic_opencode_identity_has_no_history_or_cli(monkeypatch: pytest.Mon
     # CLI present + auth store present must not open a legacy route.
     store = tmp_path / "auth.json"
     store.write_text(json.dumps({"opencode-go": {"key": "cli-key"}}), encoding="utf-8")
-    monkeypatch.setattr(pc, "opencode_auth_store_path", lambda: store)
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.opencode_auth_store_path", lambda: store)
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.opencode_auth_store_path", lambda: store)
     monkeypatch.setattr(mp.shutil, "which", lambda name: "/usr/bin/opencode" if name == "opencode" else None)
     assert pc.credential_source_for("opencode_go") is not None  # saved key
     pc.clear_all_session_keys()
     # Drop the saved key to force direct-unavailable; legacy must NOT rescue.
-    monkeypatch.setattr(pc, "load_secure_credential", lambda kind: None)
-    monkeypatch.setattr(pc, "has_secure_credential", lambda kind: False)
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.load_secure_credential", lambda kind: None)
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.load_secure_credential", lambda kind: None)
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.has_secure_credential", lambda kind: False)
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.has_secure_credential", lambda kind: False)
     with pytest.raises(mp.ProviderRegistryError):
         mp.resolve_provider_live_config("opencode_go", "claude-like-model")
 
@@ -236,8 +245,10 @@ def test_generic_commandcode_identity_has_no_resolver_or_cli(monkeypatch: pytest
     monkeypatch.setattr(mp, "_first_on_path", lambda candidates: "/usr/bin/cmdc")
     (tmp_path / "cc.json").write_text("{}", encoding="utf-8")
     monkeypatch.setattr(mp, "_commandcode_auth_store_path", lambda: tmp_path / "cc.json")
-    monkeypatch.setattr(pc, "load_secure_credential", lambda kind: None)
-    monkeypatch.setattr(pc, "has_secure_credential", lambda kind: False)
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.load_secure_credential", lambda kind: None)
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.load_secure_credential", lambda kind: None)
+    monkeypatch.setattr("agentic_debugger.application.provider_credentials.has_secure_credential", lambda kind: False)
+    monkeypatch.setattr("agentic_debugger.application.provider_connections.has_secure_credential", lambda kind: False)
     with pytest.raises(mp.ProviderRegistryError):
         mp.resolve_provider_live_config("commandcode_goat", "anthropic/claude-fake")
 

@@ -211,8 +211,11 @@ def test_non_loopback_auth_none_is_configured_no_auth(
         auth_mode=AUTH_NONE,
         transport_profile=TRANSPORT_GENERIC,
     )
+    # Decomposition v1: the vault readiness path resolves configuration
+    # through the canonical provider_config authority (gateway keeps its own
+    # binding, patched below).
     monkeypatch.setattr(
-        "agentic_debugger.application.provider_connections.get_provider_config",
+        "agentic_debugger.application.provider_config.get_provider_config",
         lambda pid: cfg if pid == "remote_none_p" else None,
     )
     monkeypatch.setattr(
