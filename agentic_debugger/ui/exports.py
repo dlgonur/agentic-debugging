@@ -20,7 +20,7 @@ from agentic_debugger.ui.render_helpers import (
     _kind_style,
 )
 from agentic_debugger.ui.timing import compute_session_timing, render_timeline_report
-from agentic_debugger.application.workstream import WorkstreamStatus
+from agentic_debugger.application.workstream import DiffLineKind, WorkstreamStatus
 
 def live_export_text(
     view: SessionViewState,
