@@ -865,46 +865,6 @@ class PdbWorker(PdbLifecycleMixin):
                 request.request_id, "Safe evaluation failed closed"
             )
 
-    def _handle_terminate_paused_target(self, request: PdbRequest) -> None:
-        payload = request.payload
-        if not isinstance(payload, dict):
-            self._send_error(request.request_id, "payload must be a mapping")
-            return
-        for field in payload:
-            self._send_error(
-                request.request_id,
-                f"Unknown payload field: {field}"
-            )
-            return
-
-        with self._condition:
-            state = self._lifecycle['state']
-
-        if state != 'paused':
-            self._send_error(
-                request.request_id,
-                f"Cannot terminate target in state: {state}"
-            )
-            return
-
-        term_result = self._request_target_termination()
-        if term_result.get('error'):
-            self._send_error(request.request_id, term_result['error'])
-            return
-
-        result = {
-            'state': 'terminated',
-            'script': self._lifecycle['script'],
-        }
-        response = PdbResponse(
-            protocol_version=PROTOCOL_VERSION,
-            request_id=request.request_id,
-            success=True,
-            result=result,
-            error="",
-        )
-        self._send_response(response)
-
     def _send_response(self, response: PdbResponse) -> None:
         data = serialize_response(response)
         try:
