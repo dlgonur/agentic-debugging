@@ -42,204 +42,33 @@ from agentic_debugger.application.session import (
 from agentic_debugger.application.worker_protocol import WorkerLiveness
 from agentic_debugger.application.sources import ExecutionSourceSpec
 
-LEVEL32_TASK_ID = "audreyr__cookiecutter-967"
-LEVEL32_OPERATOR_SCRIPT = "scripts/run_cookiecutter_967_pdb_proof.py"
-
-@dataclass(frozen=True)
-class LadderTaskMetadata:
-    """One canonical product label set for an accepted ladder rung."""
-
-    title: str
-    task_id: str
-    debugger: str
-    treatment: str
-    evaluation: str
-
-
-LADDER_TASKS: tuple[LadderTaskMetadata, ...] = (
-    LadderTaskMetadata(
-        "Level 6/100", "pdb-required-boundary-006", "Exact PDB required",
-        "Accepted Level-6 contract", "Independent verifier",
-    ),
-    LadderTaskMetadata(
-        "Level 12/100", "pdb-required-caller-callee-007", "Exact PDB required",
-        "Accepted Level-12 contract", "Independent verifier",
-    ),
-    LadderTaskMetadata(
-        "Level 18/100", "pdb-required-multistage-units-008", "Exact PDB required",
-        "Accepted Level-18 contract", "Independent verifier",
-    ),
-    LadderTaskMetadata(
-        "Level 32/100 — Cookiecutter #967", LEVEL32_TASK_ID, "Exact PDB required",
-        "Frozen Level-32", "Official SWE-rebench",
-    ),
+from agentic_debugger.application.level32_progress import (
+    consume_operation_record,
+    consume_progress_v2,
 )
-LADDER_TASK_IDS = frozenset(item.task_id for item in LADDER_TASKS)
+from agentic_debugger.application.level32_profile import (
+    LADDER_TASK_IDS,
+    LADDER_TASKS,
+    LEVEL32_OPERATOR_SCRIPT,
+    LEVEL32_TASK_ID,
+    LadderTaskMetadata,
+    Level32ModelProfile,
+    _OperatorProcess,
+    _default_process_factory,
+    ProcessFactory,
+    _official_verifier_counts,
+    _safe_text,
+    _sha256,
+    _write_json,
+    _write_text,
+    build_level32_spec,
+    is_ladder_task,
+    ladder_task_metadata,
+    ladder_task_options,
+    level32_model_profiles,
+    next_level32_treatment,
+)
 
-
-def ladder_task_options() -> tuple[tuple[str, str], ...]:
-    """The four accepted product rungs, retaining their canonical IDs."""
-
-    return tuple((f"{item.title} · {item.task_id}", item.task_id) for item in LADDER_TASKS)
-
-
-def ladder_task_metadata(task_id: str) -> LadderTaskMetadata:
-    """Return the immutable metadata for one accepted rung."""
-
-    for item in LADDER_TASKS:
-        if item.task_id == task_id:
-            return item
-    raise KeyError(task_id)
-
-
-def is_ladder_task(task_id: Optional[str]) -> bool:
-    return task_id in LADDER_TASK_IDS
-
-
-@dataclass(frozen=True)
-class Level32ModelProfile:
-    """Safe UI projection of one canonical Ollama Cloud profile."""
-
-    alias: str
-    display_name: str
-    readiness: str
-    transport_config_fingerprint: str
-
-    @property
-    def profile_id(self) -> str:
-        return self.alias
-
-
-def level32_model_profiles() -> Tuple[Level32ModelProfile, ...]:
-    """Return only canonical, live-verified Level-32-eligible profiles.
-
-    Importing this registry is local and read-only.  In particular, this
-    function never calls Ollama or sends an inference request; the operator's
-    own preflight remains the final availability gate at Start time.
-    """
-
-    try:
-        from scripts.ollama_cloud_command_adapter import (
-            CLOUD_MODELS,
-            is_treatment_eligible,
-            transport_config_fingerprint,
-        )
-    except ModuleNotFoundError as exc:
-        # The research operator lives in the source checkout, outside the
-        # installable package.  A wheel-installed application must still open
-        # cleanly; it simply omits operator-only cloud profiles.  Missing
-        # dependencies *inside* an available adapter remain real errors.
-        if exc.name not in {
-            "scripts",
-            "scripts.ollama_cloud_command_adapter",
-        }:
-            raise
-        return ()
-
-    return tuple(
-        Level32ModelProfile(
-            alias=spec.local_alias,
-            display_name=spec.upstream_model,
-            readiness=spec.readiness,
-            transport_config_fingerprint=transport_config_fingerprint(spec),
-        )
-        for spec in sorted(CLOUD_MODELS.values(), key=lambda item: item.local_alias)
-        if is_treatment_eligible(spec)
-    )
-
-
-ollama_cloud_model_profiles = level32_model_profiles
-
-
-def next_level32_treatment(repository_root: str | Path, model: str) -> tuple[int, str, Path]:
-    """Allocate the next unused revision using the operator's identity rules."""
-
-    import scripts.run_cookiecutter_967_pdb_proof as operator
-
-    revision = operator.next_unused_treatment_revision(repository_root, model)
-    treatment_id = operator._treatment_id_for_model(model, revision)
-    output_dir = (
-        Path(repository_root).resolve()
-        / operator._default_output_dir_for_model(model, revision)
-    ).resolve()
-    if output_dir.exists():
-        raise RuntimeError(f"Level-32 treatment output already exists: {output_dir}")
-    return revision, treatment_id, output_dir
-
-
-class _OperatorProcess(Protocol):
-    pid: int
-    returncode: Optional[int]
-
-    def communicate(self) -> tuple[str, str]: ...
-    def poll(self) -> Optional[int]: ...
-    def terminate(self) -> None: ...
-    def kill(self) -> None: ...
-
-
-ProcessFactory = Callable[..., _OperatorProcess]
-
-
-def _default_process_factory(*args: Any, **kwargs: Any) -> _OperatorProcess:
-    return subprocess.Popen(*args, **kwargs)  # type: ignore[return-value]
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def _safe_text(value: Any, maximum: int = 4000) -> str:
-    text = str(value or "").replace("\x00", " ").replace("\r", " ").replace("\n", " ")
-    if len(text) > maximum:
-        text = text[: maximum - 3] + "..."
-    return "[redacted sensitive subprocess output]" if contains_credential_shape(text) else text
-
-
-def _write_text(path: Path, value: Any, *, maximum: int = 8192) -> None:
-    path.write_text(_safe_text(value, maximum), encoding="utf-8", newline="\n")
-
-
-def _write_json(path: Path, value: Mapping[str, Any]) -> None:
-    path.write_text(
-        json.dumps(value, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
-        encoding="utf-8",
-        newline="\n",
-    )
-
-
-def _official_verifier_counts(
-    official: Mapping[str, Any],
-) -> tuple[Optional[int], Optional[int], Optional[int], Optional[int]]:
-    """Project only validated, redacted aggregate counts from official output."""
-
-    if official.get("official_test_execution_proven") is not True:
-        return None, None, None, None
-
-    values: dict[str, int] = {}
-    for name in (
-        "fail_to_pass_total",
-        "fail_to_pass_passed",
-        "pass_to_pass_total",
-        "pass_to_pass_failed",
-    ):
-        value = official.get(name)
-        if type(value) is not int or isinstance(value, bool) or value < 0:
-            return None, None, None, None
-        values[name] = value
-    if values["fail_to_pass_passed"] > values["fail_to_pass_total"]:
-        return None, None, None, None
-    if values["pass_to_pass_failed"] > values["pass_to_pass_total"]:
-        return None, None, None, None
-    return (
-        values["fail_to_pass_passed"],
-        values["fail_to_pass_total"],
-        values["pass_to_pass_total"] - values["pass_to_pass_failed"],
-        values["pass_to_pass_total"],
-    )
 
 
 class Level32OperatorWorker:
@@ -392,263 +221,10 @@ class Level32OperatorWorker:
         return value
 
     def _consume_operation_record(self, record: Mapping[str, Any]) -> None:
-        """Map one strictly validated structured operation to typed events.
-
-        Malformed records drop silently: the authoritative operator result
-        remains the source of truth and no fact is ever reconstructed from
-        an invalid observation channel record.
-        """
-        operation = record.get("operation")
-        if operation == "candidate_patch_available":
-            self._consume_candidate_patch_milestone(record)
-            return
-        if operation == "tool":
-            phase = record.get("phase")
-            tool = self._bounded_operation_text(record.get("tool"), 64)
-            if tool is None or phase not in ("started", "completed"):
-                return
-            if phase == "started":
-                if set(record) != {"schema_version", "kind", "operation", "phase", "tool"}:
-                    return
-                self._emit(SessionEventKind.TOOL_STARTED, {"tool_name": tool})
-                return
-            if set(record) != {
-                "schema_version", "kind", "operation", "phase", "tool", "status",
-            }:
-                return
-            status = record.get("status")
-            if status not in self._TOOL_STATUSES:
-                return
-            self._emit(SessionEventKind.TOOL_COMPLETED, {"tool_name": tool, "status": status})
-            return
-        if operation == "source_inspection":
-            if set(record) != {
-                "schema_version", "kind", "operation", "tool", "file",
-                "start_line", "end_line",
-            }:
-                return
-            tool = self._bounded_operation_text(record.get("tool"), 64)
-            file_name = self._relative_operation_path(record.get("file"))
-            start = self._operation_line(record.get("start_line"))
-            end = self._operation_line(record.get("end_line"))
-            if tool is None or file_name is None or start is None or end is None:
-                return
-            if start > end:
-                return
-            target = f"{file_name}:{start}-{end}"
-            self._emit(
-                SessionEventKind.TOOL_COMPLETED,
-                {"tool_name": tool, "status": "ok", "target": target},
-            )
-            return
-        if operation == "debugger_active":
-            if set(record) != {"schema_version", "kind", "operation", "script", "breakpoint_line"}:
-                return
-            script = self._relative_operation_path(record.get("script"))
-            line = self._operation_line(record.get("breakpoint_line"))
-            if script is None or line is None:
-                return
-            if not self._streamed_debugger_started:
-                self._streamed_debugger_started = True
-                self._emit(
-                    SessionEventKind.DEBUGGER_STARTED,
-                    {"script": script, "breakpoints": (f"{script}:{line}",)},
-                )
-            if self._pause_generation == 0:
-                self._pause_generation = 1
-                self._emit(
-                    SessionEventKind.DEBUGGER_LOCATION_CHANGED,
-                    {"script": script, "line": line, "function": None, "pause_generation": 1},
-                )
-            return
-        if operation == "pdb_observation":
-            allowed = {"schema_version", "kind", "operation"}
-            if not allowed.issubset(set(record)) or set(record) - allowed - {"script", "line"}:
-                return
-            script = self._relative_operation_path(record.get("script"))
-            line = self._operation_line(record.get("line"))
-            if ("script" in record or "line" in record) and (script is None or line is None):
-                return
-            self._pause_generation += 1
-            if script is not None and line is not None:
-                if self._streamed_pdb_observation is None:
-                    self._streamed_pdb_observation = (script, line)
-                self._emit(
-                    SessionEventKind.DEBUGGER_LOCATION_CHANGED,
-                    {"script": script, "line": line, "function": None, "pause_generation": self._pause_generation},
-                )
-            self._emit(
-                SessionEventKind.DEBUGGER_STACK_OBSERVED,
-                {"pause_generation": self._pause_generation, "frames": ()},
-            )
-            return
-        if operation == "candidate":
-            phase = record.get("phase")
-            if phase not in self._CANDIDATE_PHASES:
-                return
-            attempt = record.get("attempt")
-            if type(attempt) is not int or isinstance(attempt, bool) or attempt < 1:
-                return
-            reason = self._bounded_operation_text(record.get("reason"))
-            index = attempt - 1
-            if phase == "applied":
-                changed = record.get("changed_files")
-                if type(changed) is not list or len(changed) > 16:
-                    return
-                files: list[str] = []
-                for item in changed:
-                    path = self._relative_operation_path(item)
-                    if path is None:
-                        return
-                    files.append(path)
-                base = {"attempt_index": index, "changed_files": tuple(files), "syntax_passed": None}
-                self._last_applied_attempt_index = index
-                self._emit(SessionEventKind.PATCH_APPLIED, base)
-            elif phase == "rejected":
-                self._emit(
-                    SessionEventKind.PATCH_REJECTED,
-                    {"attempt_index": index, "rejection_reason": reason or "candidate rejected by patch validation"},
-                )
-            elif phase == "failed":
-                self._emit(
-                    SessionEventKind.PATCH_APPLY_FAILED,
-                    {"attempt_index": index, "apply_failure_reason": reason or "candidate patch apply failed"},
-                )
-            else:
-                self._emit(SessionEventKind.PATCH_REVERTED, {"attempt_index": index})
-            return
-        if operation == "controller_step":
-            if set(record) != {"schema_version", "kind", "operation", "step_index", "directive_kind"}:
-                return
-            step_index = record.get("step_index")
-            if type(step_index) is not int or isinstance(step_index, bool) or step_index < 0:
-                return
-            directive_kind = self._bounded_operation_text(record.get("directive_kind"), 64)
-            self._emit(
-                SessionEventKind.CONTROLLER_STEP,
-                {"step_index": step_index, "directive_kind": directive_kind, "stop_reason": None},
-            )
-            return
-        # Unknown operation kinds are ignored (fail closed).
+        consume_operation_record(self, record)
 
     def _consume_progress_v2(self, record: Mapping[str, Any]) -> None:
-        """Accept additive safe v2 observer records; malformed records drop."""
-        if record.get("kind") == "pre_resource_abort":
-            # Explicit positive proof that operator aborted before any
-            # disposable resource could be created. Fail-open: absence proves
-            # nothing; malformed records drop.
-            allowed = {"schema_version", "kind", "reason"}
-            if set(record) != allowed:
-                return
-            reason = record.get("reason")
-            if reason not in ("image_gate", "ollama_preflight", "launch_failed", "unknown"):
-                return
-            self._pre_resource_abort_observed = True
-            return
-        if record.get("kind") == "resource_creation_started":
-            # Emitted immediately BEFORE first disposable resource may be created.
-            # Presence means resources MAY exist; absence proves nothing.
-            if set(record) != {"schema_version", "kind"}:
-                return
-            self._resource_creation_started_observed = True
-            # Also treat as PREPARING_WORKSPACE for backward compatibility
-            self._emit_progress(OperatorStage.PREPARING_WORKSPACE)
-            return
-        kind = record.get("kind")
-        if kind == "operation":
-            self._consume_operation_record(record)
-            return
-        if kind == "liveness":
-            allowed = {
-                "schema_version", "kind", "request_index", "request_elapsed_seconds",
-                "last_activity_age_seconds", "transport_alive", "watchdog_idle_seconds",
-            }
-            if set(record) != allowed:
-                return
-            request_index = record.get("request_index")
-            if request_index is not None and (type(request_index) is not int or request_index < 0):
-                return
-            values = [record.get("request_elapsed_seconds"), record.get("last_activity_age_seconds"), record.get("watchdog_idle_seconds")]
-            if any(type(value) not in (int, float) or isinstance(value, bool) or value < 0 for value in values):
-                return
-            if type(record.get("transport_alive")) is not bool:
-                return
-            with self._lock:
-                self._liveness = WorkerLiveness(
-                    request_index=request_index,
-                    request_elapsed_seconds=float(values[0]),
-                    last_activity_age_seconds=float(values[1]),
-                    transport_alive=record["transport_alive"],
-                    watchdog_idle_seconds=float(values[2]),
-                )
-            return
-        if kind == "model_request":
-            detail = record.get("detail")
-            if type(detail) is not str or not detail.startswith("request "):
-                return
-            number = detail.split(" ", 2)[1]
-            if not number.isdigit() or int(number) < 1:
-                return
-            index = int(number) - 1
-            if index not in self._streamed_request_indexes:
-                self._streamed_request_indexes.add(index)
-                self._emit(SessionEventKind.MODEL_REQUEST_STARTED, {"request_index": index})
-            self._emit_progress(OperatorStage.MODEL_RUNNING, detail)
-            return
-        if kind == "model_request_completed":
-            detail = record.get("detail")
-            if type(detail) is not str or not detail.startswith("request "):
-                return
-            number = detail.split(" ", 2)[1]
-            if not number.isdigit() or int(number) < 1:
-                return
-            index = int(number) - 1
-            if index in self._streamed_request_indexes:
-                self._emit(SessionEventKind.MODEL_REQUEST_COMPLETED, {"request_index": index, "status": "ok"})
-                self._streamed_request_indexes.remove(index)
-            return
-        if kind == "official_execution_proven":
-            # The typed milestone is durable operator evidence: real official
-            # test execution was observed.  Stage/detail remain unchanged for
-            # v1 history readability.
-            allowed = {
-                "schema_version", "kind", "stage", "detail",
-                "official_execution_proven",
-            }
-            if set(record) != allowed or record.get("official_execution_proven") is not True:
-                return
-            try:
-                stage = OperatorStage(record["stage"])
-            except (KeyError, ValueError):
-                return
-            detail = record.get("detail")
-            if type(detail) is not str or not detail or contains_credential_shape(detail):
-                return
-            current = (stage, detail)
-            if current == self._last_progress:
-                # Same fact already emitted: enrich nothing, re-mark typed.
-                return
-            self._last_progress = current
-            self._emit(
-                SessionEventKind.OPERATOR_PROGRESS,
-                {"stage": stage.value, "detail": detail, "official_execution_proven": True},
-            )
-            return
-        # Durable v2 operational records have a safe stage and optional
-        # bounded label only. They intentionally remain one SessionEvent-v1
-        # ``operator.progress`` fact, so v1 history stays readable and final
-        # result projection never re-emits a duplicate tool/PDB/verifier fact.
-        allowed = {"schema_version", "kind", "stage", "detail"}
-        if set(record) != allowed or type(kind) is not str or type(record.get("detail")) not in (str, type(None)):
-            return
-        try:
-            stage = OperatorStage(record["stage"])
-        except (KeyError, ValueError):
-            return
-        detail = record.get("detail")
-        if detail is not None and (not detail or len(detail.encode("utf-8")) > 512 or contains_credential_shape(detail)):
-            return
-        self._emit_progress(stage, detail)
+        consume_progress_v2(self, record)
 
     @property
     def pid(self) -> Optional[int]:
@@ -1233,19 +809,6 @@ class Level32OperatorWorker:
         self._close_capture_streams()
         if self._journal is not None and self._result is None:
             self._journal.close()
-
-
-def build_level32_spec(model_alias: str) -> SessionSpec:
-    return SessionSpec(
-        task_id=LEVEL32_TASK_ID,
-        source=ExecutionSourceSpec(
-            kind=SourceKind.LEVEL32_OPERATOR,
-            task_id=LEVEL32_TASK_ID,
-            policy="exact-pdb-level32-frozen",
-            model_config_ref=model_alias,
-        ),
-        budgets=SessionBudgets(),
-    )
 
 
 __all__ = [
