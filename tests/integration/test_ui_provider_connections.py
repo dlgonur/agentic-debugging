@@ -236,7 +236,7 @@ def test_model_picker_shows_discovered_notes_and_management_entry(
         provider_id="commandcode_goat",
     )
     monkeypatch.setattr(
-        "agentic_debugger.ui.screens.list_provider_models",
+        "agentic_debugger.ui.screens_setup.list_provider_models",
         lambda **kwargs: models,
     )
     monkeypatch.setattr(
@@ -280,7 +280,7 @@ def test_model_picker_management_entry_opens_provider_screen(
 ) -> None:
     app = make_app(tmp_path)
     monkeypatch.setattr(
-        "agentic_debugger.ui.screens.list_provider_models",
+        "agentic_debugger.ui.screens_setup.list_provider_models",
         lambda **kwargs: (),
     )
     monkeypatch.setattr(app, "ollama_cloud_model_profiles", lambda: ())

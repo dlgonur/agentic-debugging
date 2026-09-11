@@ -179,7 +179,7 @@ def test_general_ollama_ui_start_uses_registry_without_level32_or_profile_store(
         from agentic_debugger.application.model_providers import ProviderModel
         from agentic_debugger.evaluation.live import LiveModelConfig
         from agentic_debugger.ui import app as app_module
-        from agentic_debugger.ui import screens as screens_module
+        from agentic_debugger.ui import screens_setup as screens_module  # Task 46: canonical list_provider_models home
         from agentic_debugger.ui.app import LocalApplicationV1
         from agentic_debugger.ui.screens import ChoicePickerScreen
 

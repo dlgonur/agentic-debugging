@@ -648,17 +648,21 @@ def test_G_start_uses_exact_saved_values(tmp_path):
 def test_H_legacy_no_tiny_editor(tmp_path):
     # Inspect source: the unified session-setup surface must use the shared
     # editor family, not any tiny single-purpose editor screen.
-    src = Path("agentic_debugger/ui/screens.py").read_text(encoding="utf-8")
+    # (Task 46: the editor family lives in screens_editors.py; the setup
+    # surface lives in screens_setup.py; screens.py is a facade.)
+    editors_src = Path("agentic_debugger/ui/screens_editors.py").read_text(encoding="utf-8")
+    setup_src = Path("agentic_debugger/ui/screens_setup.py").read_text(encoding="utf-8")
     # _SingleLineEditorScreen must remain the alias to SingleLineFieldEditorScreen, not a tiny Screen
-    assert "_SingleLineEditorScreen = SingleLineFieldEditorScreen" in src
+    assert "_SingleLineEditorScreen = SingleLineFieldEditorScreen" in editors_src
     # The unified start screen's _open_text_editor must use SingleLineFieldEditorScreen
-    assert "SingleLineFieldEditorScreen" in src
+    assert "SingleLineFieldEditorScreen" in editors_src
+    assert "SingleLineFieldEditorScreen" in setup_src
     # The unified start screen is the single session-setup surface (the old
     # LocalProjectStartScreen literal pin is removed by design — the class
     # no longer exists).
-    assert "class StartSessionScreen" in src
-    assert "SessionConfig" in src
-    assert "render_state" in src
+    assert "class StartSessionScreen" in setup_src
+    assert "SessionConfig" in setup_src
+    assert "render_state" in setup_src
     # Verify CSS has centered SingleLine dialog, not tiny upper-left
     css = Path("agentic_debugger/ui/app.tcss").read_text(encoding="utf-8")
     assert "SingleLineFieldEditorScreen" in css

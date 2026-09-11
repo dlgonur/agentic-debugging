@@ -614,7 +614,7 @@ def test_footer_matches_contract(tmp_path):
             # Also verify hint text via file content (deterministic) — actual widget text is set in compose
             # but we enforce that compose uses the correct string by checking source
             import pathlib
-            src = pathlib.Path("agentic_debugger/ui/screens.py").read_text(encoding="utf-8")
+            src = pathlib.Path("agentic_debugger/ui/screens_editors.py").read_text(encoding="utf-8")
             assert "Ctrl+Enter save    Esc cancel" in src
             assert "enter save" not in src.split("class BugDescriptionEditorScreen")[1].split("class _SingleLineEditorScreen")[0].lower().replace("ctrl+enter", "") or True
             await pilot.press("escape")

@@ -114,7 +114,7 @@ def test_scenario_a_level32_with_configured_provider_executable(
         ProviderModel("ollama_cloud", qualified.alias, qualified.display_name, "Ollama Cloud", True),
         ProviderModel("commandcode_goat", "zai-org/glm-5.2", "GLM 5.2", "CommandCode GOAT", True),
     )
-    monkeypatch.setattr("agentic_debugger.ui.screens.list_provider_models", lambda **_kwargs: models)
+    monkeypatch.setattr("agentic_debugger.ui.screens_setup.list_provider_models", lambda **_kwargs: models)
     monkeypatch.setattr(app, "ollama_cloud_model_profiles", lambda: (qualified,))
 
     start_calls: list[dict[str, Any]] = []
@@ -188,7 +188,7 @@ def test_scenario_b_level32_with_qualified_ollama(
     models = (
         ProviderModel("ollama_cloud", qualified.alias, qualified.display_name, "Ollama Cloud", True),
     )
-    monkeypatch.setattr("agentic_debugger.ui.screens.list_provider_models", lambda **_kwargs: models)
+    monkeypatch.setattr("agentic_debugger.ui.screens_setup.list_provider_models", lambda **_kwargs: models)
     monkeypatch.setattr(app, "ollama_cloud_model_profiles", lambda: (qualified,))
 
     start_calls: list[dict[str, Any]] = []
@@ -232,7 +232,7 @@ def test_scenario_c_same_model_id_different_provider_remains_distinct(
         ProviderModel("ollama_cloud", collision_id, qualified.display_name, "Ollama Cloud", True),
         ProviderModel("commandcode_goat", collision_id, "CommandCode Collision", "CommandCode GOAT", True),
     )
-    monkeypatch.setattr("agentic_debugger.ui.screens.list_provider_models", lambda **_kwargs: models)
+    monkeypatch.setattr("agentic_debugger.ui.screens_setup.list_provider_models", lambda **_kwargs: models)
     monkeypatch.setattr(app, "ollama_cloud_model_profiles", lambda: (qualified,))
 
     start_calls: list[dict[str, Any]] = []
@@ -286,7 +286,7 @@ def test_mandatory_regression_c_empty_official_roster_does_not_gate_configured_e
     models = (
         ProviderModel("commandcode_goat", "zai-org/glm-5.2", "GLM 5.2", "CommandCode GOAT", True),
     )
-    monkeypatch.setattr("agentic_debugger.ui.screens.list_provider_models", lambda **_kwargs: models)
+    monkeypatch.setattr("agentic_debugger.ui.screens_setup.list_provider_models", lambda **_kwargs: models)
 
     start_calls: list[dict[str, Any]] = []
     monkeypatch.setattr(app, "start_live_session", lambda **kw: start_calls.append(kw))
@@ -352,7 +352,7 @@ def test_scenario_d_genuine_unavailable_model_blocks_execution(
             unavailable_reason="no direct API credential configured for route",
         ),
     )
-    monkeypatch.setattr("agentic_debugger.ui.screens.list_provider_models", lambda **_kwargs: models)
+    monkeypatch.setattr("agentic_debugger.ui.screens_setup.list_provider_models", lambda **_kwargs: models)
     monkeypatch.setattr(app, "ollama_cloud_model_profiles", lambda: (qualified,))
 
     async def scenario(pilot):
@@ -401,7 +401,7 @@ def test_scenario_e_lower_ladder_rungs_remain_regression_free(
         ProviderModel("ollama_cloud", qualified.alias, qualified.display_name, "Ollama Cloud", True),
         ProviderModel("commandcode_goat", "zai-org/glm-5.2", "GLM 5.2", "CommandCode GOAT", True),
     )
-    monkeypatch.setattr("agentic_debugger.ui.screens.list_provider_models", lambda **_kwargs: models)
+    monkeypatch.setattr("agentic_debugger.ui.screens_setup.list_provider_models", lambda **_kwargs: models)
     monkeypatch.setattr(app, "ollama_cloud_model_profiles", lambda: (qualified,))
 
     start_calls: list[dict[str, Any]] = []
@@ -445,7 +445,7 @@ def test_scenario_f_local_project_target_regression_free(
     models = (
         ProviderModel("commandcode_goat", "zai-org/glm-5.2", "GLM 5.2", "CommandCode GOAT", True),
     )
-    monkeypatch.setattr("agentic_debugger.ui.screens.list_provider_models", lambda **_kwargs: models)
+    monkeypatch.setattr("agentic_debugger.ui.screens_setup.list_provider_models", lambda **_kwargs: models)
 
     async def scenario(pilot):
         await pilot.press("s")

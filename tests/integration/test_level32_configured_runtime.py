@@ -263,7 +263,7 @@ def test_level32_ui_start_session_selects_and_launches_configured_model(
         ),
     )
     monkeypatch.setattr(
-        "agentic_debugger.ui.screens.list_provider_models", lambda **_kwargs: models
+        "agentic_debugger.ui.screens_setup.list_provider_models", lambda **_kwargs: models
     )
     start_calls: list[dict[str, Any]] = []
     monkeypatch.setattr(app, "start_live_session", lambda **kw: start_calls.append(kw))

@@ -1355,7 +1355,7 @@ def test_ollama_model_picker_shows_qualified():
     assert len(profiles) > 0
     # The unified model picker loads the qualified Ollama roster as one
     # group of the single provider platform surface.
-    text = Path("agentic_debugger/ui/screens.py").read_text(encoding="utf-8")
+    text = Path("agentic_debugger/ui/screens_setup.py").read_text(encoding="utf-8")
     assert "ollama_cloud_model_profiles" in text
     assert "OLLAMA CLOUD" in text
     assert "list_provider_models" in text

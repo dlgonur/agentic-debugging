@@ -497,7 +497,7 @@ def test_real_model_picker_keeps_provider_groups_visible_across_target_switch(
         ),
     )
     monkeypatch.setattr(
-        "agentic_debugger.ui.screens.list_provider_models",
+        "agentic_debugger.ui.screens_setup.list_provider_models",
         lambda **_kwargs: models,
     )
     monkeypatch.setattr(app, "ollama_cloud_model_profiles", lambda: (qualified,))
