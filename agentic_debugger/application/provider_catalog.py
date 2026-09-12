@@ -114,18 +114,29 @@ class ProviderCatalogSnapshot:
                 return None
             if protocol is not None and protocol not in _PROTOCOL_FAMILIES:
                 return None
-            expected = _protocols.resolve_model_protocol(kind, model_id)
-            if protocol != expected:
-                return None
+            # Self-healing: derived route truth is recomputed from CURRENT
+            # provider-runtime authority.  A stale cached derived protocol
+            # (e.g. None persisted before the route table knew this id)
+            # must neither permanently override current truth nor discard
+            # the entire snapshot.  The stored value is validated as
+            # known-or-None above (fail closed for unknown strings) but the
+            # EFFECTIVE protocol below is always the current resolution
+            # (explicit override -> profile table -> default -> unresolved).
+            try:
+                current = _protocols.resolve_model_protocol(kind, model_id)
+            except Exception:
+                # Provider missing/disabled/unreadable: preserve stored
+                # verbatim (fail safe, neither heal nor discard).
+                current = protocol
             display = _display_name(kind, model_id)
             decoded.append(
                 DiscoveredProviderModel(
                     kind=kind,
                     model_id=model_id,
                     display_name=display,
-                    protocol=protocol,
-                    runnable=protocol is not None,
-                    unavailable_reason=None if protocol is not None else "Protocol not yet resolved for direct API",
+                    protocol=current,
+                    runnable=current is not None,
+                    unavailable_reason=None if current is not None else "Protocol not yet resolved for direct API",
                 )
             )
         ids = [item.model_id for item in decoded]
@@ -512,14 +523,26 @@ def provider_connection_status(kind: str) -> ProviderConnectionStatus:
     # model's EFFECTIVE protocol must satisfy the provider authentication
     # matrix and the explicit transport-profile capability.  A model with
     # an unsupported effective pair never counts as runnable here.
+    # Self-healing: the effective protocol is recomputed from CURRENT
+    # runtime truth (snapshot-pure, explicit -> table -> default ->
+    # unresolved); a stale persisted derived protocol never overrides it.
+    def _healed_status_protocol(model_id: str, stored: Optional[str]) -> Optional[str]:
+        try:
+            return _protocols.resolve_model_protocol_for_config(cfg, model_id)
+        except Exception:
+            return stored
+
+    _healed_pairs = [
+        (m, _healed_status_protocol(m.model_id, m.protocol)) for m in cached
+    ]
     runnable_models = [
         m
-        for m in cached
-        if m.protocol is not None
-        and _protocols.is_protocol_executable(kind, m.protocol)
+        for m, cur in _healed_pairs
+        if cur is not None
+        and _protocols.is_protocol_executable_for_config(cfg, cur)
     ]
     incompatible_models = [
-        m for m in cached if m.protocol is not None and m not in runnable_models
+        m for m, cur in _healed_pairs if cur is not None and m not in runnable_models
     ]
     quarantined = _config.is_provider_quarantined(kind)
 

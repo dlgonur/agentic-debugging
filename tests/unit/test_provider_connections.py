@@ -603,8 +603,17 @@ class TestCatalogCache:
     def test_missing_cache_is_absent_not_error(self) -> None:
         assert pc.load_cached_catalog("opencode_go") is None
 
-    def test_stale_protocol_cache_entry_discarded(self) -> None:
-        """A cached protocol must agree with the current resolver."""
+    def test_stale_protocol_cache_entry_healed(self) -> None:
+        """A stale cached derived protocol heals to current runtime truth.
+
+        Repair (stale-catalog healing): a cached protocol that disagrees
+        with the current resolver (e.g. None persisted before the route
+        table knew the id, or a superseded derived value) must neither
+        permanently override current truth nor discard the snapshot.
+        The entry heals in-memory to the current resolution; truly
+        malformed entries (unknown protocol strings, bad ids) still fail
+        closed (see test_invalid_cache_model_id_discarded).
+        """
 
         snapshot = pc.ProviderCatalogSnapshot(
             kind="commandcode_goat",
@@ -621,7 +630,13 @@ class TestCatalogCache:
             ),
         )
         pc.save_cached_catalog(snapshot)
-        assert pc.load_cached_catalog("commandcode_goat") is None
+        loaded = pc.load_cached_catalog("commandcode_goat")
+        assert loaded is not None
+        assert [m.model_id for m in loaded.models] == [
+            "deepseek/deepseek-v4-flash"
+        ]
+        # Current CommandCode routing resolves this id to chat_completions.
+        assert loaded.models[0].protocol == pc.PROTOCOL_CHAT_COMPLETIONS
 
     def test_invalid_cache_model_id_discarded(self) -> None:
         snapshot = pc.ProviderCatalogSnapshot(

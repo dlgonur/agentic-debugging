@@ -170,6 +170,10 @@ def _has_executable_model(kind: str, cfg: Any) -> bool:
     source), then the configured models.  Empty catalogs yield True:
     provider-level readiness is credential-scoped, and model runnability
     is reported per model.  Never raises.
+
+    Self-healing: each candidate protocol is recomputed from CURRENT
+    runtime truth (snapshot-pure); a stale persisted derived protocol
+    never decides executability.
     """
     try:
         from agentic_debugger.application.provider_connections import (
@@ -181,12 +185,37 @@ def _has_executable_model(kind: str, cfg: Any) -> bool:
             snapshot = load_cached_catalog(kind)
         except Exception:
             snapshot = None
+        candidates: List[Tuple[str, Optional[str]]] = []
         if snapshot is not None and snapshot.models:
-            protocols = [m.protocol for m in snapshot.models]
+            candidates = [(m.model_id, m.protocol) for m in snapshot.models]
         else:
-            protocols = [m.protocol for m in (cfg.models if cfg is not None else ())]
-        if not protocols:
+            candidates = [
+                (m.model_id, m.protocol)
+                for m in (cfg.models if cfg is not None else ())
+            ]
+        if not candidates:
             return True
+        try:
+            from agentic_debugger.application.provider_protocols import (
+                is_protocol_executable_for_config as _exec_for_cfg,
+                resolve_model_protocol_for_config as _resolve_for_cfg,
+            )
+        except Exception:
+            _exec_for_cfg = None  # type: ignore[assignment]
+            _resolve_for_cfg = None  # type: ignore[assignment]
+        protocols: List[Optional[str]] = []
+        for model_id, stored in candidates:
+            current: Optional[str] = stored
+            if cfg is not None and _resolve_for_cfg is not None:
+                try:
+                    current = _resolve_for_cfg(cfg, model_id)
+                except Exception:
+                    current = stored
+            protocols.append(current)
+        if cfg is not None and _exec_for_cfg is not None:
+            return any(
+                p is not None and _exec_for_cfg(cfg, p) for p in protocols
+            )
         return any(is_protocol_executable(kind, p) for p in protocols)
     except Exception:
         return True
@@ -312,9 +341,27 @@ def list_provider_models(
                 models.extend(discovered)
         elif cfg.models:
             direct_ok = _direct_runnable(cfg.provider_id)
+            try:
+                from agentic_debugger.application.provider_protocols import (
+                    resolve_model_protocol_for_config as _resolve_cfg_models,
+                )
+            except Exception:
+                _resolve_cfg_models = None  # type: ignore[assignment]
             for m in cfg.models:
-                proto_note = f"direct API · {m.protocol}" if m.protocol else None
-                executable, blocker = _executability(cfg, m.protocol)
+                # Self-healing: recompute CURRENT runtime truth instead of
+                # trusting a stale persisted derived protocol.  Explicit
+                # override -> profile table -> default -> unresolved; a
+                # stale None never masks current table truth.  The durable
+                # record is left untouched (no destructive rewrite).
+                if _resolve_cfg_models is not None:
+                    try:
+                        current_proto = _resolve_cfg_models(cfg, m.model_id)
+                    except Exception:
+                        current_proto = m.protocol
+                else:
+                    current_proto = m.protocol
+                proto_note = f"direct API · {current_proto}" if current_proto else None
+                executable, blocker = _executability(cfg, current_proto)
                 ok = direct_ok and executable
                 if ok:
                     reason = None
@@ -331,7 +378,7 @@ def list_provider_models(
                         available=ok,
                         unavailable_reason=reason,
                         note=proto_note,
-                        protocol=m.protocol,
+                        protocol=current_proto,
                     )
                 )
         elif cfg.transport_profile in (TRANSPORT_OPENCODE_GO, TRANSPORT_COMMANDCODE_GOAT, TRANSPORT_OLLAMA_CLOUD):
@@ -427,9 +474,22 @@ def _subscription_models(kind: str) -> List[ProviderModel]:
     else:
         direct_ok = _direct_runnable(kind)
         if cfg and cfg.models:
+            try:
+                from agentic_debugger.application.provider_protocols import (
+                    resolve_model_protocol_for_config as _resolve_sub,
+                )
+            except Exception:
+                _resolve_sub = None  # type: ignore[assignment]
             entries = []
             for m in cfg.models:
-                executable, blocker = _executability(cfg, m.protocol)
+                if _resolve_sub is not None:
+                    try:
+                        cur = _resolve_sub(cfg, m.model_id)
+                    except Exception:
+                        cur = m.protocol
+                else:
+                    cur = m.protocol
+                executable, blocker = _executability(cfg, cur)
                 ok = direct_ok and executable
                 entries.append(
                     ProviderModel(
@@ -445,8 +505,8 @@ def _subscription_models(kind: str) -> List[ProviderModel]:
                             if not executable
                             else "no direct API credential — connect in Model Providers (press m)"
                         ),
-                        note=f"direct API · {m.protocol}" if m.protocol else None,
-                        protocol=m.protocol,
+                        note=f"direct API · {cur}" if cur else None,
+                        protocol=cur,
                     )
                 )
             return entries
@@ -497,7 +557,15 @@ def _subscription_models(kind: str) -> List[ProviderModel]:
 
 
 def _discovered_provider_models(kind: str) -> Optional[List[ProviderModel]]:
-    """Picker entries from the cached discovered catalog (or ``None``)."""
+    """Picker entries from the cached discovered catalog (or ``None``).
+
+    Self-healing projection: the effective protocol for each entry is
+    recomputed from CURRENT provider-runtime truth (snapshot-pure:
+    explicit override -> profile table -> default -> unresolved).  A
+    stale cached derived protocol (e.g. None persisted before the route
+    table knew the id) never overrides current truth and never forces
+    the entry Unresolved.  The durable cache record is left untouched.
+    """
     try:
         snapshot = load_cached_catalog(kind)
     except ProviderConnectionError:
@@ -511,12 +579,37 @@ def _discovered_provider_models(kind: str) -> Optional[List[ProviderModel]]:
 
     label = cfg.name if cfg else _PROVIDER_LABELS.get(kind, kind)
 
+    try:
+        from agentic_debugger.application.provider_protocols import (
+            resolve_model_protocol_for_config as _resolve_disc,
+        )
+    except Exception:
+        _resolve_disc = None  # type: ignore[assignment]
+
+    def _current_disc_protocol(model_id: str, stored: Optional[str]) -> Optional[str]:
+        if cfg is not None and _resolve_disc is not None:
+            try:
+                return _resolve_disc(cfg, model_id)
+            except Exception:
+                return stored
+        if cfg is None:
+            return stored
+        try:
+            from agentic_debugger.application.provider_connections import (
+                resolve_model_protocol as _resolve_global_disc,
+            )
+
+            return _resolve_global_disc(kind, model_id)
+        except Exception:
+            return stored
+
     models: List[ProviderModel] = []
     for item in snapshot.models:
+        current = _current_disc_protocol(item.model_id, item.protocol)
         note: Optional[str] = None
-        if item.protocol is not None:
+        if current is not None:
             executable, blocker = (
-                _executability(cfg, item.protocol) if cfg is not None else (False, "provider is not configured")
+                _executability(cfg, current) if cfg is not None else (False, "provider is not configured")
             )
             available = executable and (direct_ok or legacy_ok)
             unavailable_reason: Optional[str] = None
@@ -530,7 +623,7 @@ def _discovered_provider_models(kind: str) -> Optional[List[ProviderModel]]:
                     )
                 else:
                     unavailable_reason = "no direct API credential — connect in Model Providers (press m)"
-            note = f"direct API · {item.protocol}"
+            note = f"direct API · {current}"
         else:
             available = legacy_ok
             if available:
@@ -550,7 +643,7 @@ def _discovered_provider_models(kind: str) -> Optional[List[ProviderModel]]:
                 available=available,
                 unavailable_reason=unavailable_reason,
                 note=note,
-                protocol=item.protocol,
+                protocol=current,
             )
         )
     return models

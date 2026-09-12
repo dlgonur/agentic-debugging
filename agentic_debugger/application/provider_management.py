@@ -672,19 +672,41 @@ def add_manual_model(
             raise ProviderConnectionError(f"unknown API protocol format: {protocol!r}")
         proto: Optional[str] = protocol
     else:
-        proto = cfg.api_format
+        # Provider default: for historical profiles the default is the
+        # authoritative profile routing (table / routing rule), NOT the
+        # uniform api_format — otherwise a manual "Provider default" would
+        # mask profile routing (e.g. storing chat_completions for an
+        # OpenCode Responses model).  Unknown historical ids stay None
+        # (unresolved, fail closed) so the browser shows Unresolved with
+        # an explicit-override tip instead of a misrouted Ready.
+        _profile_default = getattr(cfg, "transport_profile", TRANSPORT_GENERIC)
+        if _profile_default == _identity.TRANSPORT_OPENCODE_GO:
+            try:
+                proto = _protocols.resolve_opencode_go_protocol(mid)
+            except Exception:
+                proto = None
+        elif _profile_default == _identity.TRANSPORT_COMMANDCODE_GOAT:
+            try:
+                proto = _protocols.resolve_commandcode_protocol(mid)
+            except Exception:
+                proto = None
+        else:
+            proto = cfg.api_format
     # The effective model protocol must satisfy the provider
     # authentication matrix and the explicit transport-profile
     # capability: unsupported effective combinations are rejected here,
     # before persistence, rather than surfacing as harness failures later.
-    try:
-        _identity.validate_auth_protocol_combination(cfg.auth_mode, proto)
-    except ProviderConnectionError as exc:
-        raise ProviderConnectionError(f"model {mid!r}: {exc}") from None
-    try:
-        _protocols._inference_path_for_profile(cfg.transport_profile, proto)
-    except ProviderConnectionError as exc:
-        raise ProviderConnectionError(f"model {mid!r}: {exc}") from None
+    # A None derived default for an unknown historical model is allowed to
+    # persist as Unresolved (fail closed at read/use time).
+    if proto is not None:
+        try:
+            _identity.validate_auth_protocol_combination(cfg.auth_mode, proto)
+        except ProviderConnectionError as exc:
+            raise ProviderConnectionError(f"model {mid!r}: {exc}") from None
+        try:
+            _protocols._inference_path_for_profile(cfg.transport_profile, proto)
+        except ProviderConnectionError as exc:
+            raise ProviderConnectionError(f"model {mid!r}: {exc}") from None
     if len(cfg.models) >= _MAX_MODELS_PER_PROVIDER and all(
         m.model_id != mid for m in cfg.models
     ):
