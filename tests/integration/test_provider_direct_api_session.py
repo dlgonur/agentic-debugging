@@ -417,7 +417,13 @@ def test_commandcode_local_project_session_executes_through_direct_api(
 
         # The direct-API route served the session: every inference was one
         # POST to the fake provider's chat/completions endpoint.
-        assert server.request_count >= 6
+        # Semantic endpoint-use assertion only: the optimized controller
+        # completes FIXED with materially fewer model turns (deterministic
+        # post-patch continuation eliminates the historical mechanical
+        # tail), so no historical >=6 minimum is required here.
+        # Authoritative efficiency counts live in
+        # tests/unit/test_deterministic_post_patch.py (14 -> 8).
+        assert server.request_count > 0
         for record in server.calls:
             assert record["path"] == "/chat/completions"
             assert record["authorization"] == f"Bearer {SECRET}"
@@ -532,7 +538,13 @@ def test_arbitrary_custom_provider_local_project_session_direct_api(
 
         # The generic direct-API route served the session: every inference
         # was one POST to the fake endpoint with the custom credential.
-        assert server.request_count >= 6
+        # Semantic endpoint-use assertion only: the optimized controller
+        # completes FIXED with materially fewer model turns (deterministic
+        # post-patch continuation eliminates the historical mechanical
+        # tail), so no historical >=6 minimum is required here.
+        # Authoritative efficiency counts live in
+        # tests/unit/test_deterministic_post_patch.py (14 -> 8).
+        assert server.request_count > 0
         for record in server.calls:
             assert record["path"] == "/chat/completions"
             assert record["authorization"] == f"Bearer {custom_secret}"
