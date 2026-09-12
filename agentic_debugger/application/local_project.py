@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Mapping, Optional
 
 from agentic_debugger.application import ApplicationInputError
+from agentic_debugger.application.session import SessionBudgets
 from agentic_debugger.application.local_project_contracts import (
     LOCAL_PROJECT_VERIFICATION_AUTHORITY,
     LOCAL_PROJECT_VERIFICATION_FILE_NAME,
