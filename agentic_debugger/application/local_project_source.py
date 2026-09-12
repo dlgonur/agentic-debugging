@@ -44,6 +44,7 @@ from agentic_debugger.application.local_project_helpers import (
     _build_local_task,
     _inventory_tracked_python_files,
     _resolve_pdb_probe,
+    _run_command_bounded,
     _split_command,
     _validate_params,
 )
