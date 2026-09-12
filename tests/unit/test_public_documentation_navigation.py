@@ -234,6 +234,12 @@ def test_empty_prompts_placeholder_removed() -> None:
     # Unrelated English uses of the word "prompts" may remain in other docs.
 
 
+def test_readme_license_points_to_mit_license() -> None:
+    assert (REPO_ROOT / "LICENSE").is_file()
+    assert "[MIT License](LICENSE)" in README
+    assert "No open-source license is currently granted" not in README
+
+
 def _markdown_link_targets(text: str) -> list[str]:
     targets: list[str] = []
     remainder = text

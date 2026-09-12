@@ -67,5 +67,4 @@ Launch with `agenticdebugger` from anywhere.
 
 ## License
 
-No open-source license is currently granted. The repository may be inspected,
-but reuse and redistribution require permission from the copyright holder.
+Licensed under the [MIT License](LICENSE).

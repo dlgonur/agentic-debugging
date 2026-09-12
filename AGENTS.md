@@ -83,9 +83,9 @@ under `docs/`; load only the documents relevant to the work.
   may read their own operator auth stores through the established adapters;
   availability probes must remain offline and presence-only. Redact secrets and
   sensitive machine paths from diagnostics.
-- The repository currently grants no open-source license. Do not publish or
-  redistribute repository content, external datasets, or frozen artifacts
-  without applicable owner and license authority.
+- The repository is licensed under MIT (see `LICENSE`). Do not publish or
+  redistribute external datasets or frozen artifacts beyond their applicable
+  owner and license authority.
 
 ## Validation
 
