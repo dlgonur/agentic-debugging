@@ -1515,42 +1515,45 @@ AddProviderDialogScreen, EditProviderDialogScreen, AddManualModelDialogScreen, C
 
 #model-browser-filters {
     width: 100%;
-    height: auto;
-    min-height: 3;
+    height: 3;
     margin: 0 0 1 0;
     layout: horizontal;
 }
 
-#model-browser-dialog.narrow #model-browser-filters {
-    layout: vertical;
-}
-
-#model-browser-provider-label {
+#model-browser-provider-button {
     width: auto;
-    height: 3;
-    color: $foreground-muted;
-    margin: 0 1 0 0;
-    padding: 1 0 0 0;
-}
-
-#model-browser-provider {
-    width: 1fr;
     min-width: 0;
     height: 3;
     margin: 0 1 0 0;
+    padding: 0 1;
+    background: $surface;
+    border: round $line;
+    color: $foreground;
+}
+
+#model-browser-provider-button:hover {
+    background: $surface-raised;
+    border: round $line-strong;
+}
+
+#model-browser-provider-button:focus {
+    background: $surface-raised;
+    border: round $line-strong;
+    text-style: bold underline;
 }
 
 #model-browser-count {
-    width: auto;
+    width: 1fr;
     height: 3;
     color: $foreground-muted;
     padding: 1 0 0 0;
+    text-align: right;
 }
 
 #model-browser-list {
     width: 100%;
-    height: auto;
-    min-height: 6;
+    height: 1fr;
+    min-height: 4;
     max-height: 14;
     background: $background;
     border: round $line;
@@ -1572,13 +1575,37 @@ AddProviderDialogScreen, EditProviderDialogScreen, AddManualModelDialogScreen, C
     color: $foreground-muted;
     background: $background;
     border: round $line;
-    padding: 1 1;
+    padding: 0 1;
     margin: 0 0 1 0;
 }
 
 #model-browser-hint {
     height: 1;
     color: $foreground-muted;
+}
+
+/* Narrow viewports: the dialog has ~18 inner rows at 80x24, so every
+   inter-row margin is dropped and the details pane goes borderless.
+   Fixed chrome is then title(1) + current(1) + search(3) + filters(3)
+   + hint(1) = 9 rows, leaving room for list(min 3) + details(<=5). */
+#model-browser-dialog.narrow #model-browser-title,
+#model-browser-dialog.narrow #model-browser-current,
+#model-browser-dialog.narrow #model-browser-search,
+#model-browser-dialog.narrow #model-browser-filters,
+#model-browser-dialog.narrow #model-browser-list,
+#model-browser-dialog.narrow #model-browser-details {
+    margin: 0;
+}
+
+#model-browser-dialog.narrow #model-browser-list {
+    min-height: 3;
+}
+
+#model-browser-dialog.narrow #model-browser-details {
+    border: none;
+    padding: 0;
+    min-height: 0;
+    max-height: 5;
 }
 
 #manual-protocol-row {

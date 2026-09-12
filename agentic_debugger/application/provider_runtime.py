@@ -131,6 +131,7 @@ OPENCODE_GO_MODEL_PROTOCOLS: Mapping[str, str] = {
     "kimi-k2.7-code": PROTOCOL_CHAT_COMPLETIONS,
     "kimi-k2.6": PROTOCOL_CHAT_COMPLETIONS,
     "longcat-2.0": PROTOCOL_CHAT_COMPLETIONS,
+    "deepseek-v4.1-flash": PROTOCOL_CHAT_COMPLETIONS,
     "deepseek-v4-pro": PROTOCOL_CHAT_COMPLETIONS,
     "deepseek-v4-flash": PROTOCOL_CHAT_COMPLETIONS,
     "deepseek-v4-flash-vision-exp": PROTOCOL_CHAT_COMPLETIONS,

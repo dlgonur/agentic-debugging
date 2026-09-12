@@ -228,7 +228,7 @@ try:
     from textual.binding import Binding
     from textual.containers import Horizontal, Vertical
     from textual.screen import Screen
-    from textual.widgets import Input, OptionList, Select, Static
+    from textual.widgets import Button, Input, OptionList, Static
 
     _TEXTUAL_AVAILABLE = True
 except Exception:  # pragma: no cover - helpers remain testable
@@ -243,6 +243,8 @@ if _TEXTUAL_AVAILABLE:
         BINDINGS = [
             Binding("escape", "cancel", "Cancel"),
             Binding("/", "focus_search", "Search"),
+            Binding("[", "prev_provider", "Previous provider", show=False),
+            Binding("]", "next_provider", "Next provider", show=False),
         ]
 
         def __init__(
@@ -272,19 +274,56 @@ if _TEXTUAL_AVAILABLE:
                     id="model-browser-search",
                 )
                 with Horizontal(id="model-browser-filters"):
-                    yield Static("Provider:", id="model-browser-provider-label")
-                    provider_options = [("All providers", "all")] + [
-                        (f"{p.label} ({p.ready}/{p.total} ready)", p.provider_id)
-                        for p in self._providers
-                    ]
-                    yield Select(provider_options, value="all", id="model-browser-provider")
+                    yield Button(
+                        self._filter_button_label(),
+                        id="model-browser-provider-button",
+                        classes="provider-pill",
+                    )
                     yield Static("", id="model-browser-count")
                 yield OptionList(id="model-browser-list")
                 yield Static("", id="model-browser-details")
                 yield Static(
-                    "up/down navigate · enter select · / search · esc cancel",
+                    "up/down navigate · enter select · [ ] provider · / search · esc cancel",
                     id="model-browser-hint",
                 )
+
+        def _provider_cycle(self) -> List[str]:
+            """Provider filter order: all, then providers alphabetically."""
+            return ["all"] + [p.provider_id for p in self._providers]
+
+        def _filter_button_label(self) -> str:
+            """Visible provider-filter value with ready counts (always fits)."""
+            if self._provider_filter == "all":
+                total = len(self._all_options)
+                ready = sum(1 for o in self._all_options if bool(getattr(o, "available", False)))
+                return f"Provider: All ({ready}/{total})"
+            for provider in self._providers:
+                if provider.provider_id == self._provider_filter:
+                    return f"Provider: {provider.label} ({provider.ready}/{provider.total})"
+            return f"Provider: {self._provider_filter}"
+
+        def _refresh_filter_button(self) -> None:
+            try:
+                button = self.query_one("#model-browser-provider-button", Button)
+            except Exception:
+                return
+            try:
+                button.label = self._filter_button_label()
+            except Exception:
+                pass
+
+        def _set_provider_filter(self, provider_id: str) -> None:
+            self._provider_filter = provider_id or "all"
+            self._refresh_filter_button()
+            self._populate_list()
+
+        def _cycle_provider(self, direction: int) -> None:
+            cycle = self._provider_cycle()
+            try:
+                index = cycle.index(self._provider_filter)
+            except ValueError:
+                index = 0
+            self._set_provider_filter(cycle[(index + direction) % len(cycle)])
 
         def on_mount(self) -> None:
             self._refresh_header()
@@ -405,16 +444,25 @@ if _TEXTUAL_AVAILABLE:
             key = model_choice_key(getattr(option, "provider", ""), getattr(option, "model_id", ""))
             details.update(details_for_option(option, is_current=(key == self._current_key)))
 
+        def on_button_pressed(self, event: Any) -> None:
+            btn_id = getattr(event.button, "id", "") or ""
+            if btn_id == "model-browser-provider-button":
+                self._cycle_provider(+1)
+                try:
+                    self.query_one("#model-browser-list", OptionList).focus()
+                except Exception:
+                    pass
+                event.stop()
+
+        def action_prev_provider(self) -> None:
+            self._cycle_provider(-1)
+
+        def action_next_provider(self) -> None:
+            self._cycle_provider(+1)
+
         def on_input_changed(self, event: Input.Changed) -> None:
             if getattr(event.input, "id", "") == "model-browser-search":
                 self._search_text = event.value or ""
-                self._populate_list()
-                event.stop()
-
-        def on_select_changed(self, event: Select.Changed) -> None:
-            if getattr(event.select, "id", "") == "model-browser-provider":
-                value = event.value
-                self._provider_filter = str(value) if value is not None else "all"
                 self._populate_list()
                 event.stop()
 

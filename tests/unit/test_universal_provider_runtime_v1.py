@@ -150,13 +150,69 @@ class TestModelAwareRouting:
             assert pc.resolve_model_protocol("oc_rt", "muse-spark-1.3-contributor") == pc.PROTOCOL_RESPONSES
             assert pc.resolve_model_protocol("oc_rt", "opencode-go/muse-spark-1.3-contributor") == pc.PROTOCOL_RESPONSES
             assert pc.resolve_model_protocol("oc_rt", "gpt-5.6-luna") == pc.PROTOCOL_RESPONSES
-            for mid in ("deepseek-v4-flash", "glm-5.3", "glm-5.1", "kimi-k3", "kimi-k2.7-code", "kimi-k2.6"):
+            for mid in ("deepseek-v4-flash", "deepseek-v4.1-flash", "glm-5.3", "glm-5.1", "kimi-k3", "kimi-k2.7-code", "kimi-k2.6"):
                 assert pc.resolve_model_protocol("oc_rt", mid) == pc.PROTOCOL_CHAT_COMPLETIONS, mid
             assert pc.resolve_model_protocol("oc_rt", "qwen3.8-max") == pc.PROTOCOL_MESSAGES
             assert pc.effective_model_protocol("oc_rt", "muse-spark-1.3-contributor") == pc.PROTOCOL_RESPONSES
             assert pc.effective_model_protocol("oc_rt", "gpt-5.6-luna") == pc.PROTOCOL_RESPONSES
             assert pc.effective_model_protocol("oc_rt", "deepseek-v4-flash") == pc.PROTOCOL_CHAT_COMPLETIONS
+            assert pc.effective_model_protocol("oc_rt", "deepseek-v4.1-flash") == pc.PROTOCOL_CHAT_COMPLETIONS
             assert pc.effective_model_protocol("oc_rt", "qwen3.8-max") == pc.PROTOCOL_MESSAGES
+
+    def test_deepseek_v4_1_flash_routes_chat_completions(self, monkeypatch: pytest.MonkeyPatch):
+        """Repair regression: deepseek-v4.1-flash is documented Go chat."""
+        with FakeProviderServer(lambda req: (200, {"data": []})) as server:
+            _make_opencode_provider(monkeypatch, server.base_url)
+            assert rt.resolve_opencode_go_protocol("deepseek-v4.1-flash") == pc.PROTOCOL_CHAT_COMPLETIONS
+            assert rt.resolve_opencode_go_protocol("opencode-go/deepseek-v4.1-flash") == pc.PROTOCOL_CHAT_COMPLETIONS
+            assert pc.resolve_model_protocol("oc_rt", "deepseek-v4.1-flash") == pc.PROTOCOL_CHAT_COMPLETIONS
+            assert pc.effective_model_protocol("oc_rt", "deepseek-v4.1-flash") == pc.PROTOCOL_CHAT_COMPLETIONS
+
+    def test_documented_table_completeness(self):
+        """Bounded completeness: every currently documented Go model id maps
+        to its authoritative endpoint family (no silent representatives-only
+        coverage)."""
+        documented = {
+            # Responses (/responses)
+            "grok-4.6": pc.PROTOCOL_RESPONSES,
+            "gpt-5.6-luna": pc.PROTOCOL_RESPONSES,
+            "muse-spark-1.3-contributor": pc.PROTOCOL_RESPONSES,
+            "muse-spark-1.2-contributor": pc.PROTOCOL_RESPONSES,
+            # Chat Completions (/chat/completions)
+            "glm-5.3-flash": pc.PROTOCOL_CHAT_COMPLETIONS,
+            "glm-5.3": pc.PROTOCOL_CHAT_COMPLETIONS,
+            "glm-5.2": pc.PROTOCOL_CHAT_COMPLETIONS,
+            "glm-5.1": pc.PROTOCOL_CHAT_COMPLETIONS,
+            "kimi-k3": pc.PROTOCOL_CHAT_COMPLETIONS,
+            "kimi-k2.7-code": pc.PROTOCOL_CHAT_COMPLETIONS,
+            "kimi-k2.6": pc.PROTOCOL_CHAT_COMPLETIONS,
+            "longcat-2.0": pc.PROTOCOL_CHAT_COMPLETIONS,
+            "deepseek-v4.1-flash": pc.PROTOCOL_CHAT_COMPLETIONS,
+            "deepseek-v4-pro": pc.PROTOCOL_CHAT_COMPLETIONS,
+            "deepseek-v4-flash": pc.PROTOCOL_CHAT_COMPLETIONS,
+            "deepseek-v4-flash-vision-exp": pc.PROTOCOL_CHAT_COMPLETIONS,
+            "mimo-v2.5": pc.PROTOCOL_CHAT_COMPLETIONS,
+            "mimo-v2.5-pro": pc.PROTOCOL_CHAT_COMPLETIONS,
+            "hy4-preview": pc.PROTOCOL_CHAT_COMPLETIONS,
+            "hy3": pc.PROTOCOL_CHAT_COMPLETIONS,
+            # Messages (/messages)
+            "minimax-m3": pc.PROTOCOL_MESSAGES,
+            "minimax-m2.7": pc.PROTOCOL_MESSAGES,
+            "minimax-m2.5": pc.PROTOCOL_MESSAGES,
+            "qwen3.8-max": pc.PROTOCOL_MESSAGES,
+            "qwen3.8-flash": pc.PROTOCOL_MESSAGES,
+            "qwen3.7-max": pc.PROTOCOL_MESSAGES,
+            "qwen3.7-plus": pc.PROTOCOL_MESSAGES,
+            "qwen3.6-plus": pc.PROTOCOL_MESSAGES,
+        }
+        assert set(rt.OPENCODE_GO_MODEL_PROTOCOLS) == set(documented), (
+            "authoritative table drifted from the documented lineup: "
+            f"missing={sorted(set(documented) - set(rt.OPENCODE_GO_MODEL_PROTOCOLS))} "
+            f"extra={sorted(set(rt.OPENCODE_GO_MODEL_PROTOCOLS) - set(documented))}"
+        )
+        for model_id, expected in documented.items():
+            assert rt.resolve_opencode_go_protocol(model_id) == expected, model_id
+            assert rt.resolve_opencode_go_protocol(f"opencode-go/{model_id}") == expected, model_id
 
     def test_unknown_model_fails_closed(self, monkeypatch: pytest.MonkeyPatch):
         with FakeProviderServer(lambda req: (200, {"data": []})) as server:
