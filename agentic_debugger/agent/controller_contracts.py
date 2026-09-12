@@ -5,8 +5,12 @@ controller: the error vocabulary, :class:`ControllerStopReason`, the
 fail-closed primitive validators, the deep canonical-copy authority
 (budgets, hypothesis ledger, observations, initial snapshots, tool
 registries), the trusted model/observer method-resolution seams,
-:class:`ControllerRunConfig`, and the record-shape validators (action,
-detached JSON, budget records, hypothesis ledger, transition reason).
+:class:`ControllerRunConfig`, the record-shape validators (action,
+detached JSON, budget records, hypothesis ledger, transition reason),
+and the shared runtime step helpers (budget accounting, failure-state
+classification, directive canonicalization, dispatch identity checks,
+canonical observation construction) used as single definitions by both
+the model loop and the deterministic post-patch helper.
 """
 
 from __future__ import annotations
@@ -37,7 +41,7 @@ from agentic_debugger.agent.model_adapter import (
     directive_kind,
 )
 from agentic_debugger.agent.state_machine import ControllerState, is_transition_allowed
-from agentic_debugger.agent.tool_registry import ToolRegistry, ToolSpec
+from agentic_debugger.agent.tool_registry import ToolDispatchReason, ToolRegistry, ToolSpec
 from agentic_debugger.events.schema import Action, Observation, ObservationStatus
 
 DEFAULT_MAX_MODEL_CALLS = 64
@@ -356,6 +360,160 @@ def _resolve_observer_notify(observer: object) -> Callable[..., None]:
     if not inspect.isfunction(method) or not callable(method):
         _input("observer")
     return method
+
+
+# Runtime step helpers: budget accounting, failure-state classification,
+# directive canonicalization, dispatch identity checks, and canonical
+# observation construction.  Single-definition authority shared by the
+# model loop (controller.py) and the deterministic post-patch helper
+# (controller_post_patch.py); behavior is identical for both callers.
+_BUDGET_FIELDS = {
+    BudgetKind.PATCH_ATTEMPTS: ("max_patch_attempts", "patch_attempts"),
+    BudgetKind.TEST_RUNS: ("max_test_runs", "test_runs"),
+    BudgetKind.PDB_OBSERVATIONS: ("max_pdb_observations", "pdb_observations"),
+    BudgetKind.SOURCE_OBSERVATIONS: ("max_source_observations", "source_observations"),
+}
+_NO_HANDLER_REASONS = frozenset({
+    ToolDispatchReason.UNKNOWN_ACTION,
+    ToolDispatchReason.STATE_ACTION_NOT_ALLOWED,
+    ToolDispatchReason.TOOL_NOT_REGISTERED,
+    ToolDispatchReason.INVALID_ARGUMENTS,
+})
+
+
+def _remaining(limits: ControllerBudgetLimits, state: ControllerBudgetState,
+               kind: BudgetKind) -> int:
+    limit_field, state_field = _BUDGET_FIELDS[kind]
+    return getattr(limits, limit_field) - getattr(state, state_field)
+
+
+def _consume_direct(limits: ControllerBudgetLimits, state: ControllerBudgetState,
+                    kind: BudgetKind) -> ControllerBudgetState:
+    values = {
+        "patch_attempts": state.patch_attempts,
+        "test_runs": state.test_runs,
+        "pdb_observations": state.pdb_observations,
+        "source_observations": state.source_observations,
+    }
+    _, field_name = _BUDGET_FIELDS[kind]
+    values[field_name] += 1
+    try:
+        return ControllerBudgetState(**values)
+    except Exception:
+        _invariant("budget_state")
+
+
+def _failure_state(state: ControllerState) -> ControllerState:
+    if type(state) is not ControllerState or state in (ControllerState.DONE, ControllerState.FAILED):
+        _invariant("failure_state")
+    try:
+        allowed = is_transition_allowed(state, ControllerState.FAILED)
+    except Exception:
+        _invariant("failure_transition")
+    if type(allowed) is not bool or not allowed:
+        _invariant("failure_transition")
+    return ControllerState.FAILED
+
+
+def _canonical_directive(directive: object) -> tuple[ModelDirectiveKind, object]:
+    try:
+        kind = directive_kind(directive)
+        if type(kind) is not ModelDirectiveKind:
+            _input("directive")
+        if type(directive) is ActionDirective:
+            return kind, ActionDirective(directive.name, directive.arguments)
+        if type(directive) is TransitionDirective:
+            return kind, TransitionDirective(directive.target_state, directive.reason)
+        if type(directive) is AddHypothesisDirective:
+            return kind, AddHypothesisDirective(
+                directive.hypothesis_id, directive.statement, directive.confidence,
+                directive.evidence_refs, directive.requires_runtime_evidence,
+            )
+        if type(directive) is ReviseHypothesisDirective:
+            return kind, ReviseHypothesisDirective(
+                directive.hypothesis_id, directive.statement, directive.confidence,
+                directive.evidence_refs, directive.requires_runtime_evidence,
+            )
+        if type(directive) is SetHypothesisStatusDirective:
+            return kind, SetHypothesisStatusDirective(directive.hypothesis_id, directive.status)
+    except Exception:
+        _input("directive")
+    _input("directive")
+
+
+def _assert_dispatch_identity(record_action: Action, dispatch_action: Action) -> None:
+    if type(dispatch_action) is not Action:
+        _invariant("action")
+    for field_name in ("action_id", "run_id", "task_id", "state", "name"):
+        expected = getattr(record_action, field_name)
+        actual = getattr(dispatch_action, field_name)
+        if type(actual) is not type(expected):
+            _invariant("action")
+        if actual != expected:
+            _invariant("action")
+
+
+def _canonical_observation(value: object, action: Action,
+                           expected_observation_id: str) -> tuple[Observation, ToolDispatchReason]:
+    if type(value) is not Observation:
+        _invariant("observation")
+    try:
+        observation_id = value.observation_id
+        action_id = value.action_id
+        run_id = value.run_id
+        task_id = value.task_id
+        name = value.name
+        status = value.status
+        payload = value.payload
+        summary = value.summary
+        truncated = value.truncated
+    except Exception:
+        _invariant("observation")
+    if (
+        type(observation_id) is not str
+        or type(action_id) is not str
+        or type(run_id) is not str
+        or type(task_id) is not str
+        or type(name) is not str
+        or type(status) is not ObservationStatus
+        or type(payload) is not dict
+        or type(summary) is not str
+        or type(truncated) is not bool
+    ):
+        _invariant("observation")
+    copied_payload = _copy_json(payload)
+    if type(copied_payload) is not dict:
+        _invariant("observation")
+    if "dispatch_reason" not in copied_payload or type(copied_payload["dispatch_reason"]) is not str:
+        _invariant("dispatch_reason")
+    reason_value = copied_payload["dispatch_reason"]
+    reason = next((candidate for candidate in ToolDispatchReason
+                   if candidate.value == reason_value), None)
+    if reason is None:
+        _invariant("dispatch_reason")
+    if (
+        observation_id != expected_observation_id
+        or action_id != action.action_id
+        or run_id != action.run_id
+        or task_id != action.task_id
+        or name != action.name
+    ):
+        _invariant("observation")
+    try:
+        observation = Observation(
+            observation_id=observation_id,
+            action_id=action_id,
+            run_id=run_id,
+            task_id=task_id,
+            name=name,
+            status=status,
+            payload=copied_payload,
+            summary=summary,
+            truncated=truncated,
+        )
+    except Exception:
+        _invariant("observation")
+    return observation, reason
 
 
 @dataclass(frozen=True)
