@@ -1,36 +1,36 @@
 # Agentic Debugger
 
-Evidence-driven software repair for Python projects.
+A terminal application for debugging and repairing Python projects.
 
 ![Agentic Debugger terminal welcome screen](docs/assets/agentic-debugger-welcome.png)
 
 ## What it does
 
-Agentic Debugger investigates and repairs Python bugs in an isolated workspace, runs validation, and records evidence for independent verification.
-
-Instead of only suggesting code, it reproduces a bug, diagnoses it with debugging tools, applies a candidate repair away from your source tree, and accepts the repair only after independent checks pass.
+Agentic Debugger reproduces a reported Python bug, inspects code, tests, and runtime state, applies a candidate patch in an isolated workspace, and accepts the repair only after independent validation passes.
 
 ## Quick start
 
 Requires Python 3.11+ and git. No GPU, model provider, or WSL is needed to install and launch.
 
-```powershell
+Standard install:
+
+```sh
 git clone https://github.com/dlgonur/agentic-debugging.git
 cd agentic-debugging
-.\scripts\install_windows_alias.ps1
+python -m pip install -e ".[app]"
 agenticdebugger
 ```
 
 Check the installation without contacting any provider:
 
-```powershell
+```sh
 agenticdebugger --doctor
 ```
 
-Alternative portable install for developers on any OS:
+On Windows, `scripts\install_windows_alias.ps1` is a convenience option that installs the `agenticdebugger` launcher globally:
 
 ```powershell
-python -m pip install -e ".[app]"
+.\scripts\install_windows_alias.ps1
 agenticdebugger
 ```
 
@@ -38,7 +38,7 @@ agenticdebugger
 
 Launch with `agenticdebugger` from anywhere.
 
-- Try it with no provider: start a curated task with the deterministic offline model. Offline runs contact no provider.
+- Try it with no provider: curated demo tasks can run offline without contacting a model provider.
 - Configure a model: press `m` (Model Providers) from Home or Session Setup. Fresh installs configure none.
 - Debug your own code: press `p` (Debug Local Project), pick a clean Git repository, describe the bug, and select a live model. Local Project sessions require a live model.
 
@@ -46,9 +46,9 @@ Launch with `agenticdebugger` from anywhere.
 
 1. Reproduce the bug and inspect code, tests, and runtime state.
 2. Diagnose the root cause.
-3. Patch in a disposable workspace, never directly in your source tree.
+3. Patch in an isolated workspace, never directly in your source tree.
 4. Run validation tests.
-5. Accept the repair only after an independent verifier passes.
+5. Accept the repair only if all checks pass.
 6. Local Project changes reach your repository only through the explicit Apply To Project gate.
 
 ## More information
@@ -62,8 +62,8 @@ Launch with `agenticdebugger` from anywhere.
 
 ## Limitations
 
-- Local Project sessions require a configured live model; curated tasks can run offline with the deterministic model.
-- Configured command-model sessions launch a user-configured local command with that executable's host capabilities; child-process network isolation is not enforced.
+- Local Project sessions require a configured live model; curated tasks can run offline without contacting a provider.
+- Configured command-model sessions are not network-sandboxed. Run only commands you trust.
 
 ## License
 
