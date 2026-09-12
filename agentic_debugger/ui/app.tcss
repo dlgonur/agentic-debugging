@@ -1100,9 +1100,18 @@ ModelProvidersScreen, ProviderConnectionsScreen {
     overflow: hidden;
 }
 
-/* Narrow terminals: stack sidebar above details, stack action buttons. */
+/* Narrow terminals: single-flow vertical scroll; header stacks so the
+   subtitle can never steal width from the manager title. */
+#providers-manager-card.narrow #providers-manager-header {
+    layout: vertical;
+}
+
 #providers-manager-card.narrow #providers-manager-body {
     layout: vertical;
+    overflow-y: auto;
+    scrollbar-size: 1 1;
+    scrollbar-color: $line;
+    scrollbar-background: $surface;
 }
 
 #providers-manager-card.narrow #providers-sidebar {
@@ -1110,7 +1119,6 @@ ModelProvidersScreen, ProviderConnectionsScreen {
     max-width: 100%;
     min-width: 0;
     height: auto;
-    max-height: 38%;
     border-right: none;
     border-bottom: solid $line;
     padding: 0 0 1 0;
@@ -1118,13 +1126,12 @@ ModelProvidersScreen, ProviderConnectionsScreen {
 
 #providers-manager-card.narrow #providers-sidebar-list {
     height: auto;
-    max-height: 12;
 }
 
 #providers-manager-card.narrow #provider-main-view {
     width: 100%;
     min-width: 0;
-    height: 1fr;
+    height: auto;
     padding: 1 0 0 0;
 }
 
