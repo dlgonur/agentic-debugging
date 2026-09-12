@@ -214,6 +214,17 @@ class ModelProvidersScreen(Screen):
             hint.update(self.PROVIDERS_HINT_COMPACT if width < 95 else self.PROVIDERS_HINT)
         except Exception:
             pass
+        try:
+            card = self.query_one("#providers-manager-card")
+            # Stack only on genuinely narrow terminals. At 80 cols the
+            # side-by-side layout still shows Refresh/Edit fully; stacking
+            # there pushes actions below the fold.
+            if width < 75:
+                card.add_class("narrow")
+            else:
+                card.remove_class("narrow")
+        except Exception:
+            pass
 
     # -- state ---------------------------------------------------------------
 

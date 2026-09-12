@@ -140,32 +140,33 @@ class AddProviderDialogScreen(Screen):
     def compose(self) -> ComposeResult:
         with Vertical(id="provider-dialog-card"):
             yield Static("ADD MODEL PROVIDER", id="dialog-title")
-            yield Static("Provider Name", classes="dialog-label")
-            yield Input(placeholder="e.g. Groq Direct or DeepSeek V3", id="input-name")
-            yield Static("Base URL", classes="dialog-label")
-            yield Input(placeholder="https://api.groq.com/openai/v1", id="input-url")
-            yield Static("API Key (optional for no-auth loopback; stored securely)", classes="dialog-label")
-            yield Input(password=True, placeholder="API key", id="input-key")
-            yield Static("API Protocol Format", classes="dialog-label")
-            with Horizontal(id="format-buttons-row"):
-                yield Button("Chat Completions", id="fmt-chat", classes="fmt-btn -selected")
-                yield Button("Responses", id="fmt-resp", classes="fmt-btn")
-                yield Button("Messages", id="fmt-msg", classes="fmt-btn")
-            yield Static("Authentication", classes="dialog-label")
-            with Horizontal(id="auth-buttons-row"):
-                yield Button("Bearer", id="auth-bearer", classes="fmt-btn -selected")
-                yield Button("Anthropic", id="auth-anthropic", classes="fmt-btn")
-                yield Button("None (loopback)", id="auth-none", classes="fmt-btn")
-            yield Static("Catalog", classes="dialog-label")
-            with Horizontal(id="catalog-buttons-row"):
-                yield Button("Auto (/models)", id="cat-auto", classes="fmt-btn -selected")
-                yield Button("Manual only", id="cat-manual", classes="fmt-btn")
-            yield Static("Endpoint contract", classes="dialog-label")
-            with Horizontal(id="profile-buttons-row"):
-                yield Button("Generic / OpenAI-compatible", id="prof-generic", classes="fmt-btn -selected")
-                yield Button("CommandCode", id="prof-commandcode", classes="fmt-btn")
-                yield Button("OpenCode", id="prof-opencode", classes="fmt-btn")
-                yield Button("Ollama", id="prof-ollama", classes="fmt-btn")
+            with VerticalScroll(id="provider-dialog-body"):
+                yield Static("Provider Name", classes="dialog-label")
+                yield Input(placeholder="e.g. Groq Direct or DeepSeek V3", id="input-name")
+                yield Static("Base URL", classes="dialog-label")
+                yield Input(placeholder="https://api.groq.com/openai/v1", id="input-url")
+                yield Static("API Key (optional for no-auth loopback; stored securely)", classes="dialog-label")
+                yield Input(password=True, placeholder="API key", id="input-key")
+                yield Static("API Protocol Format", classes="dialog-label")
+                with Horizontal(id="format-buttons-row"):
+                    yield Button("Chat Completions", id="fmt-chat", classes="fmt-btn -selected")
+                    yield Button("Responses", id="fmt-resp", classes="fmt-btn")
+                    yield Button("Messages", id="fmt-msg", classes="fmt-btn")
+                yield Static("Authentication", classes="dialog-label")
+                with Horizontal(id="auth-buttons-row"):
+                    yield Button("Bearer", id="auth-bearer", classes="fmt-btn -selected")
+                    yield Button("Anthropic", id="auth-anthropic", classes="fmt-btn")
+                    yield Button("None (loopback)", id="auth-none", classes="fmt-btn")
+                yield Static("Catalog", classes="dialog-label")
+                with Horizontal(id="catalog-buttons-row"):
+                    yield Button("Auto (/models)", id="cat-auto", classes="fmt-btn -selected")
+                    yield Button("Manual only", id="cat-manual", classes="fmt-btn")
+                yield Static("Endpoint contract", classes="dialog-label")
+                with Horizontal(id="profile-buttons-row"):
+                    yield Button("Generic / OpenAI-compatible", id="prof-generic", classes="fmt-btn -selected")
+                    yield Button("CommandCode", id="prof-commandcode", classes="fmt-btn")
+                    yield Button("OpenCode", id="prof-opencode", classes="fmt-btn")
+                    yield Button("Ollama", id="prof-ollama", classes="fmt-btn")
             yield Static("", id="dialog-feedback")
             with Horizontal(id="dialog-actions-row"):
                 yield Button("Save & discover", id="btn-save-dialog", classes="primary-action")
@@ -173,6 +174,21 @@ class AddProviderDialogScreen(Screen):
 
     def on_mount(self) -> None:
         self.query_one("#input-name", Input).focus()
+        self._update_responsive()
+
+    def on_resize(self, event: Any) -> None:
+        self._update_responsive()
+
+    def _update_responsive(self) -> None:
+        try:
+            card = self.query_one("#provider-dialog-card")
+            width = self.size.width or 0
+            if width and width < 85:
+                card.add_class("narrow")
+            else:
+                card.remove_class("narrow")
+        except Exception:
+            pass
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         self._do_save()
@@ -367,33 +383,34 @@ class EditProviderDialogScreen(Screen):
 
         with Vertical(id="provider-dialog-card"):
             yield Static(f"EDIT PROVIDER: {self._config.name}", id="dialog-title")
-            yield Static("Provider Name", classes="dialog-label")
-            yield Input(value=self._config.name, id="input-name")
-            yield Static("Base URL", classes="dialog-label")
-            yield Input(value=self._config.base_url, id="input-url")
-            yield Static("API Key (blank keeps current; re-enter when Base URL changes)", classes="dialog-label")
-            yield Input(password=True, placeholder="new API key", id="input-key")
-            yield Static(cred_status, id="dialog-credential-status", classes="dialog-cred-status")
-            yield Static("API Protocol Format", classes="dialog-label")
-            with Horizontal(id="format-buttons-row"):
-                yield Button("Chat Completions", id="fmt-chat", classes=f"fmt-btn {'-selected' if self._format == 'chat_completions' else ''}")
-                yield Button("Responses", id="fmt-resp", classes=f"fmt-btn {'-selected' if self._format == 'responses' else ''}")
-                yield Button("Messages", id="fmt-msg", classes=f"fmt-btn {'-selected' if self._format == 'messages' else ''}")
-            yield Static("Authentication", classes="dialog-label")
-            with Horizontal(id="auth-buttons-row"):
-                yield Button("Bearer", id="auth-bearer", classes=f"fmt-btn {'-selected' if self._auth == 'bearer' else ''}")
-                yield Button("Anthropic", id="auth-anthropic", classes=f"fmt-btn {'-selected' if self._auth == 'anthropic' else ''}")
-                yield Button("None (loopback)", id="auth-none", classes=f"fmt-btn {'-selected' if self._auth == 'none' else ''}")
-            yield Static("Catalog", classes="dialog-label")
-            with Horizontal(id="catalog-buttons-row"):
-                yield Button("Auto (/models)", id="cat-auto", classes=f"fmt-btn {'-selected' if self._catalog == 'openai' else ''}")
-                yield Button("Manual only", id="cat-manual", classes=f"fmt-btn {'-selected' if self._catalog == 'disabled' else ''}")
-            yield Static("Endpoint contract", classes="dialog-label")
-            with Horizontal(id="profile-buttons-row"):
-                yield Button("Generic / OpenAI-compatible", id="prof-generic", classes=f"fmt-btn {'-selected' if self._profile == 'generic' else ''}")
-                yield Button("CommandCode", id="prof-commandcode", classes=f"fmt-btn {'-selected' if self._profile == 'commandcode_goat' else ''}")
-                yield Button("OpenCode", id="prof-opencode", classes=f"fmt-btn {'-selected' if self._profile == 'opencode_go' else ''}")
-                yield Button("Ollama", id="prof-ollama", classes=f"fmt-btn {'-selected' if self._profile == 'ollama_cloud' else ''}")
+            with VerticalScroll(id="provider-dialog-body"):
+                yield Static("Provider Name", classes="dialog-label")
+                yield Input(value=self._config.name, id="input-name")
+                yield Static("Base URL", classes="dialog-label")
+                yield Input(value=self._config.base_url, id="input-url")
+                yield Static("API Key (blank keeps current; re-enter when Base URL changes)", classes="dialog-label")
+                yield Input(password=True, placeholder="new API key", id="input-key")
+                yield Static(cred_status, id="dialog-credential-status", classes="dialog-cred-status")
+                yield Static("API Protocol Format", classes="dialog-label")
+                with Horizontal(id="format-buttons-row"):
+                    yield Button("Chat Completions", id="fmt-chat", classes=f"fmt-btn {'-selected' if self._format == 'chat_completions' else ''}")
+                    yield Button("Responses", id="fmt-resp", classes=f"fmt-btn {'-selected' if self._format == 'responses' else ''}")
+                    yield Button("Messages", id="fmt-msg", classes=f"fmt-btn {'-selected' if self._format == 'messages' else ''}")
+                yield Static("Authentication", classes="dialog-label")
+                with Horizontal(id="auth-buttons-row"):
+                    yield Button("Bearer", id="auth-bearer", classes=f"fmt-btn {'-selected' if self._auth == 'bearer' else ''}")
+                    yield Button("Anthropic", id="auth-anthropic", classes=f"fmt-btn {'-selected' if self._auth == 'anthropic' else ''}")
+                    yield Button("None (loopback)", id="auth-none", classes=f"fmt-btn {'-selected' if self._auth == 'none' else ''}")
+                yield Static("Catalog", classes="dialog-label")
+                with Horizontal(id="catalog-buttons-row"):
+                    yield Button("Auto (/models)", id="cat-auto", classes=f"fmt-btn {'-selected' if self._catalog == 'openai' else ''}")
+                    yield Button("Manual only", id="cat-manual", classes=f"fmt-btn {'-selected' if self._catalog == 'disabled' else ''}")
+                yield Static("Endpoint contract", classes="dialog-label")
+                with Horizontal(id="profile-buttons-row"):
+                    yield Button("Generic / OpenAI-compatible", id="prof-generic", classes=f"fmt-btn {'-selected' if self._profile == 'generic' else ''}")
+                    yield Button("CommandCode", id="prof-commandcode", classes=f"fmt-btn {'-selected' if self._profile == 'commandcode_goat' else ''}")
+                    yield Button("OpenCode", id="prof-opencode", classes=f"fmt-btn {'-selected' if self._profile == 'opencode_go' else ''}")
+                    yield Button("Ollama", id="prof-ollama", classes=f"fmt-btn {'-selected' if self._profile == 'ollama_cloud' else ''}")
             yield Static("", id="dialog-feedback")
             with Horizontal(id="dialog-actions-row"):
                 yield Button("Save changes", id="btn-save-dialog", classes="primary-action")
@@ -401,6 +418,21 @@ class EditProviderDialogScreen(Screen):
 
     def on_mount(self) -> None:
         self.query_one("#input-name", Input).focus()
+        self._update_responsive()
+
+    def on_resize(self, event: Any) -> None:
+        self._update_responsive()
+
+    def _update_responsive(self) -> None:
+        try:
+            card = self.query_one("#provider-dialog-card")
+            width = self.size.width or 0
+            if width and width < 85:
+                card.add_class("narrow")
+            else:
+                card.remove_class("narrow")
+        except Exception:
+            pass
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         self._do_save()
