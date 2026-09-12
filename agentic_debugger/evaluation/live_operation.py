@@ -150,6 +150,7 @@ def _acceptance_live_case(*,repository_root,task_id,policy,repetition,workspace_
                 require_pdb_evidence_before_patch=(
                     scenario.runtime_probe.exact_public_reproduction
                 ),
+                deterministic_post_patch_validation=True,
             ),
             observer=(
                 _ControllerOperationObserver(operation_observer)

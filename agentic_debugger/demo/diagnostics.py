@@ -75,13 +75,16 @@ class DemoToolError(RuntimeError):
 def _observation_id_for_action(action: Action) -> str:
     """Derive the controller's detached observation id for this action."""
 
-    prefix = "action-"
+    if action.action_id.startswith("det-action-"):
+        prefix, observation_prefix = "det-action-", "det-observation-"
+    else:
+        prefix, observation_prefix = "action-", "observation-"
     if not action.action_id.startswith(prefix):
         raise DemoToolError("controller action id is not canonical")
     suffix = action.action_id[len(prefix):]
     if not suffix.isdigit():
         raise DemoToolError("controller action id has no numeric observation index")
-    return "observation-" + suffix
+    return observation_prefix + suffix
 
 
 def bounded_diagnostic_text(text: str, workspace_root: Optional[str] = None) -> str:

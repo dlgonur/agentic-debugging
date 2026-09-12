@@ -83,17 +83,24 @@ def project_controller_run(
         sequence += 1
 
     for step in result.steps:
+        decision_payload: dict[str, object] = {
+            "directive_kind": step.directive_kind.value if step.directive_kind else None,
+            "model_call_index": step.model_call_index,
+            "stop_reason": step.stop_reason.value if step.stop_reason else None,
+            "budget_before": _budget_mapping(step.budget_before),
+            "budget_after": _budget_mapping(step.budget_after),
+        }
+        if step.deterministic:
+            # Controller-owned continuation carries no model directive;
+            # mark it explicitly so trajectory consumers never mistake it
+            # for a model request.  Omitted (not False) on model-owned
+            # steps so flag-off runs stay byte-identical.
+            decision_payload["deterministic"] = True
         add(
             EventType.DECISION,
             DECISION_EVENT_NAME,
             step.state_before,
-            {
-                "directive_kind": step.directive_kind.value if step.directive_kind else None,
-                "model_call_index": step.model_call_index,
-                "stop_reason": step.stop_reason.value if step.stop_reason else None,
-                "budget_before": _budget_mapping(step.budget_before),
-                "budget_after": _budget_mapping(step.budget_after),
-            },
+            decision_payload,
         )
         if step.action is not None:
             add(

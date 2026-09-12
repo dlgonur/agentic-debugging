@@ -61,6 +61,8 @@ from agentic_debugger.agent.controller_results import (
     ControllerRunResult,
     ControllerStepResult,
     _action_id,
+    _det_action_id,
+    _det_observation_id,
     _observation_id,
 )
 from agentic_debugger.agent.model_adapter import (
@@ -254,6 +256,7 @@ class DeterministicController:
     _model_method: Callable[..., object] = field(init=False, repr=False, compare=False)
     _canonical_max_model_calls: int | None = field(init=False, repr=False, compare=False)
     _canonical_require_pdb_evidence_before_patch: bool = field(init=False, repr=False, compare=False)
+    _canonical_deterministic_post_patch_validation: bool = field(init=False, repr=False, compare=False)
     _canonical_observer: ControllerObserver = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
@@ -268,9 +271,12 @@ class DeterministicController:
             pass
         elif type(max_model_calls) is not int or isinstance(max_model_calls, bool) or not 1 <= max_model_calls <= MAX_CONTROLLER_MODEL_CALLS:
             _input("config")
+        if type(self.config.deterministic_post_patch_validation) is not bool:
+            _input("config")
         canonical_config = ControllerRunConfig(
             max_model_calls,
             self.config.require_pdb_evidence_before_patch,
+            self.config.deterministic_post_patch_validation,
         )
         method = _resolve_model_method(self.model_adapter)
         _resolve_observer_notify(self.observer)
@@ -282,6 +288,11 @@ class DeterministicController:
             self,
             "_canonical_require_pdb_evidence_before_patch",
             self.config.require_pdb_evidence_before_patch,
+        )
+        object.__setattr__(
+            self,
+            "_canonical_deterministic_post_patch_validation",
+            self.config.deterministic_post_patch_validation,
         )
         object.__setattr__(self, "_canonical_observer", self.observer)
 
@@ -297,6 +308,8 @@ class DeterministicController:
             or not 1 <= _max_calls <= MAX_CONTROLLER_MODEL_CALLS
         ):
             _invariant("max_model_calls")
+        if type(self._canonical_deterministic_post_patch_validation) is not bool:
+            _invariant("deterministic_post_patch_validation")
         if not inspect.isfunction(self._model_method) or not callable(self._model_method):
             _invariant("model_method")
         if not callable(getattr(self._canonical_observer, "notify", None)):
@@ -344,6 +357,13 @@ class DeterministicController:
         steps: list[ControllerStepResult] = []
         model_calls = 0
         last_request_index = model_call_index
+        # Successful Session Token Efficiency v1: run-scoped deterministic
+        # identity sequence.  Deterministic continuation steps never
+        # consume model_call_index (model request ordinals must identify
+        # REAL model requests with no gaps); their action/observation
+        # uniqueness comes from this counter in the disjoint
+        # det-action-/det-observation- namespace instead.
+        det_seq = 0
 
         def _emit(kind: ControllerObservationKind, **details: object) -> None:
             """Fire one detached observation; observer failure never alters
@@ -370,24 +390,29 @@ class DeterministicController:
             if cancel_check is not None:
                 cancel_check()
 
-        def _completed_request_telemetry() -> tuple[Optional[TokenUsage], Optional[TokenUsageCoverage]]:
-            """Read provider-reported usage and coverage of the just-finished request.
+        def _completed_request_telemetry() -> tuple[Optional[TokenUsage], Optional[TokenUsageCoverage], Optional[int]]:
+            """Read provider-reported usage, coverage, and request size.
 
-            Only adapters implementing the optional usage seam can report
-            it (live provider adapters aggregating transport retries and
-            directive repairs); scripted adapters legitimately report
-            none.  A seam failure or invalid value never fails the
-            controller request itself.
+            Only adapters implementing the optional seams can report them
+            (live provider adapters aggregating transport retries and
+            directive repairs; scripted adapters legitimately report
+            none).  A seam failure or invalid value never fails the
+            controller request itself.  Request size is the serialized
+            provider-owned request payload in bytes (counts only, never
+            prompts or bodies).
             """
             adapter = self.model_adapter
             if not isinstance(adapter, UsageReportingModelAdapter):
-                return None, None
+                # A non-usage adapter may still report payload size via the
+                # standalone size seam below.
+                size_only = _completed_request_size_only(adapter)
+                return None, None, size_only
             try:
                 usage = adapter.last_request_token_usage()
             except Exception:
-                return None, None
+                return None, None, _completed_request_size_only(adapter)
             if not isinstance(usage, TokenUsage):
-                return None, None
+                return None, None, _completed_request_size_only(adapter)
             coverage = None
             cov_getter = getattr(adapter, "last_request_token_coverage", None)
             if callable(cov_getter):
@@ -397,7 +422,22 @@ class DeterministicController:
                         coverage = cov
                 except Exception:
                     coverage = None
-            return usage, coverage
+            return usage, coverage, _completed_request_size_only(adapter)
+
+        def _completed_request_size_only(adapter: object) -> Optional[int]:
+            """Read the optional serialized request-size seam (counts only)."""
+            getter = getattr(adapter, "last_request_payload_bytes", None)
+            if not callable(getter):
+                return None
+            try:
+                value = getter()
+            except Exception:
+                return None
+            if type(value) is not int or isinstance(value, bool):
+                return None
+            if not 0 <= value <= 100_000_000:
+                return None
+            return value
 
         _emit(
             ControllerObservationKind.RUN_STARTED,
@@ -488,6 +528,548 @@ class DeterministicController:
                 stop_reason=reason.value,
             )
 
+        # Successful Session Token Efficiency v1: deterministic
+        # post-patch continuation.  After a successfully applied
+        # candidate patch, the mandatory validation pipeline
+        # (syntax, Validate transition, post-patch reproduction,
+        # regression, classification, Done transition) is mechanically
+        # determined and requires no new model reasoning.  The helpers
+        # below dispatch those tools and transitions without consuming
+        # model requests.  Any semantic failure (syntax/repro/regression
+        # evidence indicating a non-fixed candidate) or any non-fatal
+        # tool outcome returns control to the model with the latest
+        # observation preserved.  Non-recoverable infrastructure failures
+        # terminate honestly; they are never converted into model
+        # feedback or success.
+        def _det_is_fatal(observation: Observation) -> bool:
+            try:
+                payload = observation.payload
+                status = observation.status
+            except Exception:
+                return False
+            if status not in (
+                ObservationStatus.ERROR,
+                ObservationStatus.REJECTED,
+            ):
+                return False
+            if not isinstance(payload, dict):
+                return False
+            if payload.get("recoverable") is False:
+                return True
+            inner = payload.get("patch_failure")
+            if isinstance(inner, dict) and inner.get("recoverable") is False:
+                return True
+            return False
+
+        def _det_dispatch_tool(
+            action_name: object,
+            arguments: dict[str, object],
+            trig_index: int,
+        ) -> tuple[Observation | None, str]:
+            """Dispatch one deterministic tool; never consumes a model request.
+
+            The owning model request's ordinal (``trig_index``) is recorded
+            on the step for attribution, but the model ordinal sequence is
+            NOT advanced: the next model snapshot keeps the contiguous
+            next ordinal.  Action/observation uniqueness comes from the
+            run-scoped deterministic sequence in the disjoint
+            det-action-/det-observation- namespace.
+
+            Returns (observation, outcome) where outcome is one of:
+            "ok" (tool succeeded, step recorded, continue pipeline),
+            "abort" (not dispatchable or non-fatal tool outcome; return
+            control to the model with preserved state), "failed"
+            (non-recoverable failure; terminal FAILED already recorded),
+            "controller_error" / "budget_exhausted" (terminal already
+            recorded with that stop reason).
+            """
+            nonlocal state, budget_state, last_observation, det_seq
+            det_index = trig_index
+            det_state_before = state
+            det_budget_before = budget_state
+            det_hypotheses_before = hypotheses
+            # Deterministic dispatch is only valid for exact action names.
+            try:
+                from agentic_debugger.agent.controller_policy import ActionName as _DetActionName
+            except Exception:
+                return None, "abort"
+            if type(action_name) is not _DetActionName:
+                return None, "abort"
+            try:
+                allowed = is_action_allowed(state, action_name)
+            except Exception:
+                # Fail closed as controller error (terminal, honest).
+                _det_record_controller_error(
+                    det_index, det_state_before, det_budget_before,
+                    det_hypotheses_before, None,
+                )
+                return None, "controller_error"
+            if not allowed:
+                return None, "abort"
+            try:
+                self._canonical_registry.get(action_name)
+            except Exception:
+                return None, "abort"
+            try:
+                bkind = budget_kind_for_action(action_name)
+            except Exception:
+                _det_record_controller_error(
+                    det_index, det_state_before, det_budget_before,
+                    det_hypotheses_before, None,
+                )
+                return None, "controller_error"
+            if bkind is not None:
+                try:
+                    remaining = _remaining(snapshot.budget_limits, budget_state, bkind)
+                except Exception:
+                    _det_record_controller_error(
+                        det_index, det_state_before, det_budget_before,
+                        det_hypotheses_before, None,
+                    )
+                    return None, "controller_error"
+                if remaining <= 0:
+                    # Honest budget exhaustion during deterministic work.
+                    nonlocal_state_before = det_state_before
+                    try:
+                        state = _failure_state(nonlocal_state_before)
+                    except Exception:
+                        return None, "controller_error"
+                    _emit(
+                        ControllerObservationKind.STATE_TRANSITION,
+                        model_call_index=det_index,
+                        state_before=nonlocal_state_before,
+                        state_after=state,
+                    )
+                    steps.append(ControllerStepResult(
+                        model_call_index=det_index,
+                        state_before=nonlocal_state_before,
+                        state_after=state,
+                        directive_kind=None,
+                        action=None,
+                        observation=None,
+                        transition_reason=None,
+                        budget_before=det_budget_before,
+                        budget_after=budget_state,
+                        hypotheses_before=det_hypotheses_before,
+                        hypotheses_after=hypotheses,
+                        stop_reason=ControllerStopReason.BUDGET_EXHAUSTED,
+                        deterministic=True,
+                    ))
+                    _emit(
+                        ControllerObservationKind.STEP_COMPLETED,
+                        model_call_index=det_index,
+                        step_index=len(steps) - 1,
+                        state_before=nonlocal_state_before,
+                        state_after=state,
+                        directive_kind=None,
+                        stop_reason=ControllerStopReason.BUDGET_EXHAUSTED.value,
+                    )
+                    return None, "budget_exhausted"
+            try:
+                copied_args = _copy_json(arguments)
+            except Exception:
+                _det_record_controller_error(
+                    det_index, det_state_before, det_budget_before,
+                    det_hypotheses_before, None,
+                )
+                return None, "controller_error"
+            if type(copied_args) is not dict:
+                _det_record_controller_error(
+                    det_index, det_state_before, det_budget_before,
+                    det_hypotheses_before, None,
+                )
+                return None, "controller_error"
+            try:
+                det_action_id = _det_action_id(det_seq)
+                det_observation_id = _det_observation_id(det_seq)
+                det_seq += 1
+            except Exception:
+                _det_record_controller_error(
+                    det_index, det_state_before, det_budget_before,
+                    det_hypotheses_before, None,
+                )
+                return None, "controller_error"
+            try:
+                record_action = Action(
+                    action_id=det_action_id,
+                    run_id=run_id,
+                    task_id=task_id,
+                    state=det_state_before,
+                    name=action_name.value,
+                    arguments=copied_args,
+                )
+                dispatch_action = Action(
+                    action_id=det_action_id,
+                    run_id=run_id,
+                    task_id=task_id,
+                    state=det_state_before,
+                    name=action_name.value,
+                    arguments=_copy_json(copied_args),
+                )
+            except Exception:
+                _det_record_controller_error(
+                    det_index, det_state_before, det_budget_before,
+                    det_hypotheses_before, None,
+                )
+                return None, "controller_error"
+            _check_cancelled()
+            _emit(
+                ControllerObservationKind.TOOL_STARTED,
+                model_call_index=det_index,
+                state_before=det_state_before,
+                tool_name=action_name.value,
+            )
+            tool_started = True
+            try:
+                observation_raw = ToolRegistry.dispatch(
+                    self._canonical_registry,
+                    dispatch_action,
+                    observation_id=det_observation_id,
+                )
+                _assert_dispatch_identity(record_action, dispatch_action)
+                observation, reason = _canonical_observation(
+                    observation_raw, record_action, det_observation_id
+                )
+            except CancellationError:
+                raise
+            except Exception:
+                _emit(
+                    ControllerObservationKind.TOOL_COMPLETED,
+                    model_call_index=det_index,
+                    state_before=det_state_before,
+                    tool_name=action_name.value,
+                    observation_status=ObservationStatus.ERROR,
+                )
+                _det_record_controller_error(
+                    det_index, det_state_before, det_budget_before,
+                    det_hypotheses_before, record_action,
+                )
+                return None, "controller_error"
+            tool_observations.append(observation)
+            _emit(
+                ControllerObservationKind.TOOL_COMPLETED,
+                model_call_index=det_index,
+                state_before=det_state_before,
+                tool_name=action_name.value,
+                observation_status=observation.status,
+            )
+            if bkind is not None and reason not in _NO_HANDLER_REASONS:
+                try:
+                    budget_state = _consume_direct(
+                        snapshot.budget_limits, budget_state, bkind
+                    )
+                except Exception:
+                    _det_record_controller_error(
+                        det_index, det_state_before, det_budget_before,
+                        det_hypotheses_before, record_action,
+                    )
+                    return None, "controller_error"
+            last_observation = observation
+            if _det_is_fatal(observation):
+                failed_before = det_state_before
+                try:
+                    state = _failure_state(failed_before)
+                except Exception:
+                    _det_record_controller_error(
+                        det_index, det_state_before, det_budget_before,
+                        det_hypotheses_before, record_action,
+                    )
+                    return None, "controller_error"
+                steps.append(ControllerStepResult(
+                    model_call_index=det_index,
+                    state_before=det_state_before,
+                    state_after=state,
+                    directive_kind=None,
+                    action=record_action,
+                    observation=observation,
+                    transition_reason=None,
+                    budget_before=det_budget_before,
+                    budget_after=budget_state,
+                    hypotheses_before=det_hypotheses_before,
+                    hypotheses_after=hypotheses,
+                    stop_reason=ControllerStopReason.FAILED,
+                    deterministic=True,
+                ))
+                _emit(
+                    ControllerObservationKind.STEP_COMPLETED,
+                    model_call_index=det_index,
+                    step_index=len(steps) - 1,
+                    state_before=det_state_before,
+                    state_after=state,
+                    directive_kind=None,
+                    stop_reason=ControllerStopReason.FAILED.value,
+                )
+                _emit(
+                    ControllerObservationKind.STATE_TRANSITION,
+                    model_call_index=det_index,
+                    state_before=failed_before,
+                    state_after=state,
+                    transition_reason="fatal non-recoverable tool execution failure",
+                )
+                return observation, "failed"
+            steps.append(ControllerStepResult(
+                model_call_index=det_index,
+                state_before=det_state_before,
+                state_after=det_state_before,
+                directive_kind=None,
+                action=record_action,
+                observation=observation,
+                transition_reason=None,
+                budget_before=det_budget_before,
+                budget_after=budget_state,
+                hypotheses_before=det_hypotheses_before,
+                hypotheses_after=hypotheses,
+                stop_reason=None,
+                deterministic=True,
+            ))
+            _emit(
+                ControllerObservationKind.STEP_COMPLETED,
+                model_call_index=det_index,
+                step_index=len(steps) - 1,
+                state_before=det_state_before,
+                state_after=det_state_before,
+                directive_kind=None,
+            )
+            # Non-OK tool status (TIMEOUT/REJECTED/ERROR without fatal
+            # marking) preserves honest evidence but requires a model
+            # decision; abort the pipeline with state preserved.  The model
+            # ordinal sequence is untouched: the next model snapshot keeps
+            # the contiguous next ordinal.
+            if observation.status is not ObservationStatus.OK:
+                return observation, "abort"
+            return observation, "ok"
+
+        def _det_record_controller_error(
+            det_index: int,
+            det_state_before: ControllerState,
+            det_budget_before: ControllerBudgetState,
+            det_hypotheses_before: HypothesisLedger,
+            record_action: Action | None,
+        ) -> None:
+            nonlocal state
+            try:
+                state = _failure_state(det_state_before)
+            except Exception:
+                return
+            _emit(
+                ControllerObservationKind.STATE_TRANSITION,
+                model_call_index=det_index,
+                state_before=det_state_before,
+                state_after=state,
+            )
+            try:
+                steps.append(ControllerStepResult(
+                    model_call_index=det_index,
+                    state_before=det_state_before,
+                    state_after=state,
+                    directive_kind=None,
+                    action=record_action,
+                    observation=None,
+                    transition_reason=None,
+                    budget_before=det_budget_before,
+                    budget_after=budget_state,
+                    hypotheses_before=det_hypotheses_before,
+                    hypotheses_after=hypotheses,
+                    stop_reason=ControllerStopReason.CONTROLLER_ERROR,
+                    deterministic=True,
+                ))
+            except Exception:
+                return
+            _emit(
+                ControllerObservationKind.STEP_COMPLETED,
+                model_call_index=det_index,
+                step_index=len(steps) - 1,
+                state_before=det_state_before,
+                state_after=state,
+                directive_kind=None,
+                stop_reason=ControllerStopReason.CONTROLLER_ERROR.value,
+            )
+
+        def _det_transition(target: ControllerState, reason_text: str, trig_index: int) -> str:
+            """Deterministically advance state; returns outcome string.
+
+            "ok" (transition recorded, continue), "abort" (not allowed;
+            return to model), "controller_error" (terminal already
+            recorded).  The model ordinal sequence is NOT advanced: the
+            step is attributed to the owning model request.
+            """
+            nonlocal state
+            det_index = trig_index
+            det_state_before = state
+            det_budget_before = budget_state
+            det_hypotheses_before = hypotheses
+            try:
+                allowed = is_transition_allowed(state, target)
+            except Exception:
+                _det_record_controller_error(
+                    det_index, det_state_before, det_budget_before,
+                    det_hypotheses_before, None,
+                )
+                return "controller_error"
+            if not allowed:
+                return "abort"
+            _check_cancelled()
+            state = target
+            stop = None
+            if state is ControllerState.DONE:
+                stop = ControllerStopReason.DONE
+            elif state is ControllerState.FAILED:
+                stop = ControllerStopReason.FAILED
+            _emit(
+                ControllerObservationKind.STATE_TRANSITION,
+                model_call_index=det_index,
+                state_before=det_state_before,
+                state_after=state,
+                transition_reason=reason_text,
+            )
+            try:
+                steps.append(ControllerStepResult(
+                    model_call_index=det_index,
+                    state_before=det_state_before,
+                    state_after=state,
+                    directive_kind=None,
+                    action=None,
+                    observation=None,
+                    transition_reason=reason_text,
+                    budget_before=det_budget_before,
+                    budget_after=budget_state,
+                    hypotheses_before=det_hypotheses_before,
+                    hypotheses_after=hypotheses,
+                    stop_reason=stop,
+                    deterministic=True,
+                ))
+            except Exception:
+                _det_record_controller_error(
+                    det_index, det_state_before, det_budget_before,
+                    det_hypotheses_before, None,
+                )
+                return "controller_error"
+            _emit(
+                ControllerObservationKind.STEP_COMPLETED,
+                model_call_index=det_index,
+                step_index=len(steps) - 1,
+                state_before=det_state_before,
+                state_after=state,
+                directive_kind=None,
+                transition_reason=reason_text,
+                stop_reason=stop.value if stop is not None else None,
+            )
+            return "ok"
+
+        def _run_deterministic_post_patch(trig_index: int) -> object | None:
+            """Run the mandatory validation pipeline without model requests.
+
+            ``trig_index`` is the owning APPLY_PATCH request's ordinal;
+            all deterministic steps are attributed to it and the model
+            ordinal sequence is left contiguous for the next model call.
+
+            Returns a terminal ControllerRunResult when the pipeline
+            reaches an honest terminal state (DONE, FAILED,
+            BUDGET_EXHAUSTED, CONTROLLER_ERROR), otherwise None to
+            return control to the model with preserved evidence.
+            """
+            nonlocal state
+            from agentic_debugger.agent.controller_policy import ActionName as _PipelineAction
+            # 1. Mandatory syntax validation in PATCH.
+            _check_cancelled()
+            syntax_obs, syntax_outcome = _det_dispatch_tool(
+                _PipelineAction.SYNTAX_CHECK, {}, trig_index
+            )
+            if syntax_outcome in ("failed", "controller_error", "budget_exhausted"):
+                if syntax_outcome == "failed":
+                    return result(ControllerStopReason.FAILED, state)
+                if syntax_outcome == "budget_exhausted":
+                    return result(ControllerStopReason.BUDGET_EXHAUSTED, state)
+                return result(ControllerStopReason.CONTROLLER_ERROR, state)
+            if syntax_outcome != "ok":
+                return None
+            # Syntax tool succeeded; the candidate must pass to continue.
+            try:
+                syntax_passed = bool(syntax_obs.payload.get("all_passed"))
+            except Exception:
+                return None
+            if syntax_obs.status is not ObservationStatus.OK or not syntax_passed:
+                # Model-correctable: revised repair required.
+                return None
+            # 2. Deterministic PATCH -> VALIDATE transition.
+            _check_cancelled()
+            transition_outcome = _det_transition(
+                ControllerState.VALIDATE,
+                "deterministic continuation: syntax validated; advancing to Validate",
+                trig_index,
+            )
+            if transition_outcome == "controller_error":
+                return result(ControllerStopReason.CONTROLLER_ERROR, state)
+            if transition_outcome != "ok":
+                return None
+            # 3. Mandatory post-patch reproduction in VALIDATE.
+            _check_cancelled()
+            repro_obs, repro_outcome = _det_dispatch_tool(
+                _PipelineAction.RUN_REPRODUCTION, {"phase": "post_patch"}, trig_index
+            )
+            if repro_outcome in ("failed", "controller_error", "budget_exhausted"):
+                if repro_outcome == "failed":
+                    return result(ControllerStopReason.FAILED, state)
+                if repro_outcome == "budget_exhausted":
+                    return result(ControllerStopReason.BUDGET_EXHAUSTED, state)
+                return result(ControllerStopReason.CONTROLLER_ERROR, state)
+            if repro_outcome != "ok":
+                return None
+            if repro_obs.status is not ObservationStatus.OK:
+                return None
+            # 4. Mandatory regression checks in VALIDATE.
+            _check_cancelled()
+            regression_obs, regression_outcome = _det_dispatch_tool(
+                _PipelineAction.RUN_REGRESSION_TESTS, {}, trig_index
+            )
+            if regression_outcome in ("failed", "controller_error", "budget_exhausted"):
+                if regression_outcome == "failed":
+                    return result(ControllerStopReason.FAILED, state)
+                if regression_outcome == "budget_exhausted":
+                    return result(ControllerStopReason.BUDGET_EXHAUSTED, state)
+                return result(ControllerStopReason.CONTROLLER_ERROR, state)
+            if regression_outcome != "ok":
+                return None
+            if regression_obs.status is not ObservationStatus.OK:
+                return None
+            # 5. Mandatory outcome classification in VALIDATE.
+            _check_cancelled()
+            classify_obs, classify_outcome = _det_dispatch_tool(
+                _PipelineAction.CLASSIFY_OUTCOME, {}, trig_index
+            )
+            if classify_outcome in ("failed", "controller_error", "budget_exhausted"):
+                if classify_outcome == "failed":
+                    return result(ControllerStopReason.FAILED, state)
+                if classify_outcome == "budget_exhausted":
+                    return result(ControllerStopReason.BUDGET_EXHAUSTED, state)
+                return result(ControllerStopReason.CONTROLLER_ERROR, state)
+            if classify_outcome != "ok":
+                return None
+            if classify_obs.status is not ObservationStatus.OK:
+                return None
+            try:
+                outcome_value = classify_obs.payload.get("outcome")
+            except Exception:
+                return None
+            # Only an authoritative RESOLVED classification completes
+            # deterministically.  Any other outcome (BREAKING_RESOLVED,
+            # PARTIALLY_RESOLVED, NO_OP, REGRESSION, unclassified) requires
+            # a model repair decision; preserve evidence and return.
+            if outcome_value != "RESOLVED":
+                return None
+            # 6. Deterministic VALIDATE -> DONE transition.
+            _check_cancelled()
+            done_outcome = _det_transition(
+                ControllerState.DONE,
+                "deterministic continuation: controller validation classified RESOLVED",
+                trig_index,
+            )
+            if done_outcome == "controller_error":
+                return result(ControllerStopReason.CONTROLLER_ERROR, state)
+            if done_outcome != "ok":
+                return None
+            return result(ControllerStopReason.DONE, state)
+
         while True:
             _check_cancelled()
             # Task 44: a finite ``max_calls`` is honored only when an
@@ -541,27 +1123,29 @@ class DeterministicController:
             except CancellationError:
                 raise
             except ModelScriptExhaustedError:
-                req_usage, req_coverage = _completed_request_telemetry()
+                req_usage, req_coverage, req_bytes = _completed_request_telemetry()
                 _emit(ControllerObservationKind.MODEL_REQUEST_COMPLETED,
                       model_call_index=model_call_index, state_before=state,
                       request_status="error", error_kind="model_script_exhausted",
                       error_message="scripted model response is unavailable",
                       token_usage=req_usage,
-                      token_usage_coverage=req_coverage)
+                      token_usage_coverage=req_coverage,
+                      request_bytes=req_bytes)
                 failure_step(ControllerStopReason.MODEL_SCRIPT_EXHAUSTED)
                 return result(ControllerStopReason.MODEL_SCRIPT_EXHAUSTED, state)
             except ModelScriptMismatchError:
-                req_usage, req_coverage = _completed_request_telemetry()
+                req_usage, req_coverage, req_bytes = _completed_request_telemetry()
                 _emit(ControllerObservationKind.MODEL_REQUEST_COMPLETED,
                       model_call_index=model_call_index, state_before=state,
                       request_status="error", error_kind="model_script_mismatch",
                       error_message="scripted model response does not match controller state",
                       token_usage=req_usage,
-                      token_usage_coverage=req_coverage)
+                      token_usage_coverage=req_coverage,
+                      request_bytes=req_bytes)
                 failure_step(ControllerStopReason.MODEL_SCRIPT_MISMATCH)
                 return result(ControllerStopReason.MODEL_SCRIPT_MISMATCH, state)
             except ModelAdapterError as exc:
-                req_usage, req_coverage = _completed_request_telemetry()
+                req_usage, req_coverage, req_bytes = _completed_request_telemetry()
                 _emit(ControllerObservationKind.MODEL_REQUEST_COMPLETED,
                       model_call_index=model_call_index, state_before=state,
                       request_status="error",
@@ -574,36 +1158,39 @@ class DeterministicController:
                           512,
                       ),
                       token_usage=req_usage,
-                      token_usage_coverage=req_coverage)
+                      token_usage_coverage=req_coverage,
+                      request_bytes=req_bytes)
                 failure_step(ControllerStopReason.MODEL_ERROR)
                 return result(ControllerStopReason.MODEL_ERROR, state)
             except Exception:
-                req_usage, req_coverage = _completed_request_telemetry()
+                req_usage, req_coverage, req_bytes = _completed_request_telemetry()
                 _emit(ControllerObservationKind.MODEL_REQUEST_COMPLETED,
                       model_call_index=model_call_index, state_before=state,
                       request_status="error", error_kind="unexpected_model_error",
                       error_message="unexpected model request failure",
                       token_usage=req_usage,
-                      token_usage_coverage=req_coverage)
+                      token_usage_coverage=req_coverage,
+                      request_bytes=req_bytes)
                 failure_step(ControllerStopReason.MODEL_ERROR)
                 return result(ControllerStopReason.MODEL_ERROR, state)
 
             try:
                 kind, directive = _canonical_directive(directive)
             except Exception:
-                req_usage, req_coverage = _completed_request_telemetry()
+                req_usage, req_coverage, req_bytes = _completed_request_telemetry()
                 _emit(ControllerObservationKind.MODEL_REQUEST_COMPLETED,
                       model_call_index=model_call_index, state_before=state,
                       request_status="error", error_kind="invalid_directive",
                       error_message="model response did not produce a canonical directive",
                       token_usage=req_usage,
-                      token_usage_coverage=req_coverage)
+                      token_usage_coverage=req_coverage,
+                      request_bytes=req_bytes)
                 failure_step(ControllerStopReason.MODEL_ERROR)
                 return result(ControllerStopReason.MODEL_ERROR, state)
 
             _check_cancelled()
             model_call_index += 1
-            req_usage, req_coverage = _completed_request_telemetry()
+            req_usage, req_coverage, req_bytes = _completed_request_telemetry()
             _emit(
                 ControllerObservationKind.MODEL_REQUEST_COMPLETED,
                 model_call_index=model_call_index - 1,
@@ -611,6 +1198,7 @@ class DeterministicController:
                 request_status="ok",
                 token_usage=req_usage,
                 token_usage_coverage=req_coverage,
+                request_bytes=req_bytes,
             )
             if kind is ModelDirectiveKind.ACTION:
                 _check_cancelled()
@@ -742,6 +1330,28 @@ class DeterministicController:
                         transition_reason="fatal non-recoverable tool execution failure",
                     )
                     return result(ControllerStopReason.FAILED, state)
+                # Successful Session Token Efficiency v1: after a
+                # successfully applied candidate, continue the mandatory
+                # validation pipeline deterministically (no new model
+                # request for mechanical transitions/tools).  Any
+                # semantic or recoverable outcome returns to the model;
+                # terminal outcomes return directly.
+                if (
+                    self._canonical_deterministic_post_patch_validation
+                    and action_directive.name is ActionName.APPLY_PATCH
+                    and state is ControllerState.PATCH
+                    and observation.status is ObservationStatus.OK
+                    and isinstance(observation.payload, dict)
+                    and observation.payload.get("applied") is True
+                ):
+                    _check_cancelled()
+                    # Attribute deterministic work to the owning APPLY_PATCH
+                    # request; the model ordinal sequence stays contiguous.
+                    _det_terminal = _run_deterministic_post_patch(model_call_index - 1)
+                    if _det_terminal is not None:
+                        return _det_terminal
+                    # Deterministic pipeline preserved evidence and
+                    # returned control; continue to the next model request.
             elif kind is ModelDirectiveKind.TRANSITION:
                 transition = directive
                 if not is_transition_allowed(state, transition.target_state):

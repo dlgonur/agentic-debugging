@@ -320,7 +320,7 @@ def _payload_request_completed(payload: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(payload, Mapping):
         raise SchemaValidationError("model.request_completed payload must be a mapping")
     required = {"request_index", "status"}
-    optional = {"error_kind", "error_message", "token_usage", "token_usage_coverage"}
+    optional = {"error_kind", "error_message", "token_usage", "token_usage_coverage", "request_bytes"}
     _check_required(payload, required, "model.request_completed payload")
     _check_no_unknown(payload, required | optional, "model.request_completed payload")
     result = {
@@ -387,6 +387,19 @@ def _payload_request_completed(payload: Mapping[str, Any]) -> dict[str, Any]:
         raise SchemaValidationError(
             "model.request_completed cannot carry token_usage_coverage without token_usage"
         )
+    if "request_bytes" in payload:
+        # Optional provider-owned serialized request size (additive v1
+        # field, counts only).  Historical events without it remain valid.
+        request_bytes = payload["request_bytes"]
+        if (
+            type(request_bytes) is not int
+            or isinstance(request_bytes, bool)
+            or not 0 <= request_bytes <= 100_000_000
+        ):
+            raise SchemaValidationError(
+                "model.request_completed request_bytes is invalid"
+            )
+        result["request_bytes"] = request_bytes
     return result
 
 

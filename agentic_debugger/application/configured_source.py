@@ -659,6 +659,10 @@ def run_configured_session(
             fixture_dir=fixture_dir,
             scenario=ladder_scenario if is_level32 else None,
             repository_root=staging_root,
+            # Successful Session Token Efficiency v1: live configured
+            # models (stateless LiveModelAdapter) deterministically
+            # continue mandatory validation without mechanical requests.
+            deterministic_post_patch_validation=True,
         )
     except ModelExecutionError as exc:
         # Enrich the honest failure with the adapter's bounded transport

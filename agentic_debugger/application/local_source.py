@@ -154,6 +154,7 @@ def run_local_session(
     fixture_dir: Optional[Path] = None,
     scenario: Optional[DemoScenario] = None,
     repository_root: Optional[Path] = None,
+    deterministic_post_patch_validation: bool = False,
 ) -> None:
     """Execute one real local debugging session through the shared pipeline.
 
@@ -257,6 +258,7 @@ def run_local_session(
                     require_pdb_evidence_before_patch=(
                         scenario.runtime_probe.exact_public_reproduction
                     ),
+                    deterministic_post_patch_validation=deterministic_post_patch_validation,
                 ),
                 observer=controller_adapter,
             )

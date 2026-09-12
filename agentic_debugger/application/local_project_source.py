@@ -294,7 +294,7 @@ def run_local_project_session(ctx: ScenarioContext, params: Mapping[str, Any]) -
     snapshot=ControllerSnapshot(run_id=run_id, task_id=task_id, state=initial_state, model_call_index=0, budget_limits=ControllerBudgetLimits.from_task_constraints(local_task.constraints), budget_state=ControllerBudgetState(), hypotheses=HypothesisLedger())
     model=_model_factory(demo_context, registry)
     # Task 44: unbounded controller (None = no total-session ceiling).
-    controller=DeterministicController(registry, model, ControllerRunConfig(max_model_calls=None, require_pdb_evidence_before_patch=False), observer=controller_obs)
+    controller=DeterministicController(registry, model, ControllerRunConfig(max_model_calls=None, require_pdb_evidence_before_patch=False, deterministic_post_patch_validation=True), observer=controller_obs)
     try:
         result=controller.run(snapshot, cancel_check=ctx.token.check)
     except ModelExecutionError:

@@ -53,6 +53,9 @@ MAX_OBSERVATION_SHORT_TEXT_BYTES = 64
 MAX_OBSERVATION_NAME_BYTES = 256
 MAX_OBSERVATION_TRANSITION_REASON_BYTES = 2048
 MAX_OBSERVATION_ERROR_MESSAGE_BYTES = 512
+#: Hard bound for one logical model-request serialized payload size.
+#: Far above any real request while keeping the count JSON-safe.
+MAX_OBSERVATION_REQUEST_BYTES = 100_000_000
 
 
 class ControllerObservationError(ValueError):
@@ -169,6 +172,13 @@ class ControllerObservation:
     #: fabricate it.
     token_usage: Optional[TokenUsage] = None
     token_usage_coverage: Optional[TokenUsageCoverage] = None
+    #: Serialized request payload size in bytes for the completed logical
+    #: model request (provider-owned request size, counts only).  ``None``
+    #: means the adapter did not report a size — the truthful unavailable
+    #: state, never a zero claim.  Scripted/offline adapters legitimately
+    #: report none; live adapters report the exact serialized bytes they
+    #: handed to the transport.  Never carries prompts or bodies.
+    request_bytes: Optional[int] = None
 
     def __post_init__(self) -> None:
         if type(self.kind) is not ControllerObservationKind:
@@ -238,6 +248,13 @@ class ControllerObservation:
             and type(self.token_usage_coverage) is not TokenUsageCoverage
         ):
             raise _invalid("token_usage_coverage")
+        if self.request_bytes is not None:
+            if (
+                type(self.request_bytes) is not int
+                or isinstance(self.request_bytes, bool)
+                or not 0 <= self.request_bytes <= MAX_OBSERVATION_REQUEST_BYTES
+            ):
+                raise _invalid("request_bytes")
 
 
 class ControllerObserver(Protocol):

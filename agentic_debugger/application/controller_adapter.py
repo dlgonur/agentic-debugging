@@ -473,6 +473,18 @@ class ControllerSessionEventAdapter(ControllerObserver):
                     payload["token_usage"] = usage_block
                     if cov_block:
                         payload["token_usage_coverage"] = cov_block
+            # Successful Session Token Efficiency v1: serialized
+            # provider-owned request size (counts only, never prompts).
+            # Validated as a bounded non-negative int; invalid values are
+            # dropped while preserving the lifecycle event.
+            if observation.request_bytes is not None:
+                request_bytes = observation.request_bytes
+                if (
+                    type(request_bytes) is int
+                    and not isinstance(request_bytes, bool)
+                    and 0 <= request_bytes <= 100_000_000
+                ):
+                    payload["request_bytes"] = request_bytes
             self._emit(
                 SessionEventKind.MODEL_REQUEST_COMPLETED,
                 payload,

@@ -42,6 +42,32 @@ def _observation_id(index: int) -> str:
     return f"observation-{index:09d}"
 
 
+#: Prefixes for controller-owned deterministic continuation identities.
+#: Deterministic tool steps never consume a model-request ordinal, so
+#: their action/observation identities live in a disjoint namespace that
+#: cannot collide with (or be mistaken for) real model-request identities.
+_DET_ACTION_PREFIX = "det-action-"
+_DET_OBSERVATION_PREFIX = "det-observation-"
+
+
+def _det_action_id(sequence: int) -> str:
+    return f"{_DET_ACTION_PREFIX}{sequence:09d}"
+
+
+def _det_observation_id(sequence: int) -> str:
+    return f"{_DET_OBSERVATION_PREFIX}{sequence:09d}"
+
+
+def _det_sequence_suffix(value: str, prefix: str) -> str | None:
+    """Return the numeric suffix when ``value`` is a deterministic identity."""
+    if type(value) is not str or not value.startswith(prefix):
+        return None
+    suffix = value[len(prefix):]
+    if len(suffix) != 9 or not suffix.isdigit():
+        return None
+    return suffix
+
+
 @dataclass(frozen=True)
 class ControllerStepResult:
     model_call_index: int
@@ -56,6 +82,16 @@ class ControllerStepResult:
     hypotheses_before: HypothesisLedger
     hypotheses_after: HypothesisLedger
     stop_reason: ControllerStopReason | None = None
+    # Successful Session Token Efficiency v1: True for controller-owned
+    # deterministic post-patch continuation steps.  Such steps carry no
+    # model directive (directive_kind is None) and consume no model
+    # request; they must never be counted as model directives.  Their
+    # model_call_index is the OWNING model request's ordinal (the
+    # APPLY_PATCH request that triggered the pipeline), never a new
+    # ordinal: deterministic work must not create gaps in the model
+    # request sequence.  Action/observation uniqueness comes from the
+    # disjoint det-action-/det-observation- identity namespace instead.
+    deterministic: bool = False
 
     def __post_init__(self) -> None:
         if type(self.model_call_index) is not int or self.model_call_index < 0:
@@ -66,6 +102,10 @@ class ControllerStepResult:
             raise ControllerInvariantError("invalid directive_kind")
         if self.stop_reason is not None and type(self.stop_reason) is not ControllerStopReason:
             raise ControllerInvariantError("invalid stop_reason")
+        if type(self.deterministic) is not bool:
+            raise ControllerInvariantError("invalid deterministic")
+        if self.deterministic and self.directive_kind is not None:
+            raise ControllerInvariantError("invalid deterministic directive")
         _validate_budget_records(self._limits_for_validation(), self.budget_before)
         _validate_budget_records(self._limits_for_validation(), self.budget_after)
         _validate_ledger_shape(self.hypotheses_before)
@@ -78,7 +118,15 @@ class ControllerStepResult:
                 raise ControllerInvariantError("invalid action")
             if self.action.state is not self.state_before:
                 raise ControllerInvariantError("invalid action state")
-            if self.action.action_id != _action_id(self.model_call_index):
+            if self.deterministic:
+                # Deterministic continuation identities live in a disjoint
+                # namespace: they must never consume or mimic a
+                # model-request ordinal.  The owning model request is
+                # recorded in model_call_index; uniqueness comes from the
+                # deterministic sequence embedded in the identity itself.
+                if _det_sequence_suffix(self.action.action_id, _DET_ACTION_PREFIX) is None:
+                    raise ControllerInvariantError("invalid deterministic action id")
+            elif self.action.action_id != _action_id(self.model_call_index):
                 raise ControllerInvariantError("invalid action id")
             if self.action.name not in {candidate.value for candidate in ActionName}:
                 raise ControllerInvariantError("invalid action name")
@@ -121,7 +169,12 @@ class ControllerStepResult:
                 raise ControllerInvariantError("invalid dispatch_reason")
             if not observation_id or not action_id or not observation_run_id or not observation_task_id or not observation_name:
                 raise ControllerInvariantError("invalid observation")
-            if observation_id != _observation_id(self.model_call_index):
+            if self.deterministic:
+                action_suffix = _det_sequence_suffix(action_id, _DET_ACTION_PREFIX)
+                observation_suffix = _det_sequence_suffix(observation_id, _DET_OBSERVATION_PREFIX)
+                if action_suffix is None or observation_suffix != action_suffix:
+                    raise ControllerInvariantError("invalid deterministic observation id")
+            elif observation_id != _observation_id(self.model_call_index):
                 raise ControllerInvariantError("invalid observation id")
             if (
                 action_id != self.action.action_id
@@ -167,7 +220,37 @@ class ControllerStepResult:
             if self.action is not None or self.observation is not None or self.transition_reason is not None:
                 raise ControllerInvariantError("invalid hypothesis step")
         elif self.directive_kind is None:
-            if self.action is not None or self.observation is not None or self.transition_reason is not None or self.stop_reason is None:
+            if self.deterministic:
+                # Controller-owned deterministic continuation: either a
+                # deterministic tool step (action+observation, no
+                # transition reason) or a deterministic transition step
+                # (transition reason, no action/observation).  Neither
+                # carries a model directive and neither consumes a model
+                # request.
+                is_tool_step = self.action is not None
+                is_transition_step = (
+                    self.action is None
+                    and self.observation is None
+                    and self.transition_reason is not None
+                )
+                if is_tool_step:
+                    if self.transition_reason is not None:
+                        raise ControllerInvariantError("invalid deterministic action step")
+                    if self.observation is None and self.stop_reason is not ControllerStopReason.CONTROLLER_ERROR:
+                        raise ControllerInvariantError("invalid deterministic action observation")
+                elif is_transition_step:
+                    pass
+                else:
+                    # Deterministic failure marker without action/transition
+                    # is only valid as a terminal failure step.
+                    if (
+                        self.action is not None
+                        or self.observation is not None
+                        or self.transition_reason is not None
+                        or self.stop_reason is None
+                    ):
+                        raise ControllerInvariantError("invalid deterministic step")
+            elif self.action is not None or self.observation is not None or self.transition_reason is not None or self.stop_reason is None:
                 raise ControllerInvariantError("invalid failure step")
         if self.stop_reason is not None:
             if self.stop_reason is ControllerStopReason.DONE:
@@ -214,7 +297,15 @@ class ControllerRunResult:
             raise ControllerError("invalid model_calls")
         if type(self.steps) is not tuple or any(type(step) is not ControllerStepResult for step in self.steps):
             raise ControllerError("invalid steps")
-        if self.model_calls < len(self.steps):
+        # Successful Session Token Efficiency v1: deterministic
+        # continuation steps consume no model request, so the run may
+        # contain more steps than model calls.  Every model call still
+        # owns exactly one non-deterministic step; deterministic steps
+        # are the only allowed excess.
+        if self.model_calls > len(self.steps):
+            raise ControllerError("invalid model_calls")
+        nondeterministic = sum(1 for step in self.steps if not step.deterministic)
+        if self.model_calls != nondeterministic:
             raise ControllerError("invalid model_calls")
         if type(self.budget_state) is not ControllerBudgetState:
             raise ControllerError("invalid budget_state")

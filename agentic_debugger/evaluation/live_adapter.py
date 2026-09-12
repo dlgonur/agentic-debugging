@@ -88,6 +88,11 @@ class LiveModelAdapter(LiveProofMixin):
         # (reset at the top of every ``next_directive``).  ``None`` until
         # the first provider-completed response of the current call.
         self._call_usage: _LogicalRequestUsage | None = None
+        # Serialized provider-owned request payload size in bytes for the
+        # most recent logical model call (sum over transport attempts in
+        # the call; counts only, never prompts or bodies).  Reset per
+        # call like usage; ``None`` means no size was recorded.
+        self._call_request_bytes: int | None = None
 
     def reconcile_tool_dispatch(self, controller_result: Any) -> None:
         """Bind dispatch truth from completed controller/tool steps.
@@ -178,6 +183,12 @@ class LiveModelAdapter(LiveProofMixin):
         # One logical model call: per-call usage aggregation restarts here
         # so a stale value from the previous call can never be reported.
         self._call_usage=_LogicalRequestUsage()
+        # Successful Session Token Efficiency v1: per-call serialized
+        # request-size aggregation restarts here as well (counts only).
+        # None until the first transport attempt serializes a request,
+        # so a call that never reaches the transport truthfully reports
+        # unavailable rather than zero.
+        self._call_request_bytes = None
         # The gate is consumed from ``UNDERSTAND``.  ``_runtime_transition_authorized``
         # marks that the controller is already inside an authorized RUNTIME_EVIDENCE
         # visit; it is reset to ``False`` whenever the controller has left that
@@ -263,6 +274,15 @@ class LiveModelAdapter(LiveProofMixin):
             self.metrics.transport_attempts+=1
             self.metrics.cumulative_request_bytes += len(request_bytes)
             self.metrics.max_request_bytes = max(self.metrics.max_request_bytes, len(request_bytes))
+            # Successful Session Token Efficiency v1: per-logical-call
+            # serialized request-size aggregation (counts only).
+            try:
+                if self._call_request_bytes is None:
+                    self._call_request_bytes = len(request_bytes)
+                else:
+                    self._call_request_bytes += len(request_bytes)
+            except Exception:
+                pass
             # The cumulative model-phase bound is an emergency guard checked
             # between calls.  A currently progressing streamed response is
             # governed by the transport's inactivity watchdog and is not cut
@@ -407,6 +427,22 @@ class LiveModelAdapter(LiveProofMixin):
         provider-completed attempts or are truthful lower bounds.
         """
         return self._call_usage.build_coverage() if self._call_usage is not None else None
+
+    def last_request_payload_bytes(self) -> int | None:
+        """Serialized request size of the most recent logical model call.
+
+        Optional adapter seam consumed by the controller after a model
+        request completes (success or failure).  The value sums the exact
+        serialized bytes handed to the transport across every attempt in
+        the call (counts only, never prompts or bodies).  ``None`` means
+        no size was recorded; it is never a zero claim.
+        """
+        value = self._call_request_bytes
+        if type(value) is not int or isinstance(value, bool):
+            return None
+        if not 0 <= value <= 100_000_000:
+            return None
+        return value
 
     def _remaining(self):
         left=self.limits.max_model_phase_seconds-self.model_phase_elapsed_seconds

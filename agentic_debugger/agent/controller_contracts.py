@@ -371,6 +371,16 @@ class ControllerRunConfig:
     # for unrestricted sessions.
     max_model_calls: int | None = None
     require_pdb_evidence_before_patch: bool = False
+    # Successful Session Token Efficiency v1: when True, a successfully
+    # accepted/applied candidate patch deterministically continues the
+    # mandatory validation pipeline (syntax check, Validate transition,
+    # post-patch reproduction, regression, classification, Done
+    # transition) without additional model requests.  Any semantic or
+    # recoverable failure returns control to the model; non-recoverable
+    # infrastructure failures terminate honestly.  Default False preserves
+    # the historical per-step model-request behavior for explicit
+    # scripted harnesses; product sources opt in explicitly.
+    deterministic_post_patch_validation: bool = False
 
     def __post_init__(self) -> None:
         if self.max_model_calls is None:
@@ -381,6 +391,8 @@ class ControllerRunConfig:
             raise ControllerInputError("invalid max_model_calls")
         if type(self.require_pdb_evidence_before_patch) is not bool:
             raise ControllerInputError("invalid require_pdb_evidence_before_patch")
+        if type(self.deterministic_post_patch_validation) is not bool:
+            raise ControllerInputError("invalid deterministic_post_patch_validation")
 
 
 def _validate_action(value: object) -> None:
