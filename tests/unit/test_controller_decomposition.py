@@ -181,4 +181,3 @@ def test_single_controller_authority_markers():
     # never constructs a run result and owns no model loop ordinals.
     assert "PostPatchOutcome(" in helper_src
     assert "def run_post_patch_validation(" in helper_src
-
