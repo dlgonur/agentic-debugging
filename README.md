@@ -36,10 +36,10 @@ agenticdebugger
 
 ## Using the app
 
-Launch with `agenticdebugger` from anywhere.
+Launch with `agenticdebugger`.
 
 - Try it with no provider: curated demo tasks can run offline without contacting a model provider.
-- Configure a model: press `m` (Model Providers) from Home or Session Setup. Fresh installs configure none.
+- Configure a model: press `m` (Model Providers) from Home or Session Setup. No model provider is configured by default.
 - Debug your own code: press `p` (Debug Local Project), pick a clean Git repository, describe the bug, and select a live model. Local Project sessions require a live model.
 
 ## How a repair works
