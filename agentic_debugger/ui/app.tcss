@@ -1146,6 +1146,28 @@ ModelProvidersScreen, ProviderConnectionsScreen {
     margin: 0 0 1 0;
 }
 
+/* Compact terminals (below full width, above narrow): the two-column
+   manager remains, but both action rows stack full-width so no button can
+   cross the right edge. Labels keep full readable width; the detail pane
+   keeps its vertical scroll. Vertical rhythm is tightened (no text-block
+   margins, no button gaps) so Refresh + Edit still land inside the initial
+   viewport on 24-line screens; Delete and below stay scroll-reachable. */
+#providers-manager-card.compact .provider-actions,
+#providers-manager-card.compact .provider-models-actions {
+    layout: vertical;
+}
+
+#providers-manager-card.compact .provider-summary,
+#providers-manager-card.compact .provider-refresh {
+    margin: 0;
+}
+
+#providers-manager-card.compact .provider-action-button {
+    width: 1fr;
+    min-width: 0;
+    margin: 0;
+}
+
 /* -- Provider Dialogs & Catalog Browser ------------------------------- */
 
 AddProviderDialogScreen, EditProviderDialogScreen, AddManualModelDialogScreen, ConfirmDeleteProviderDialogScreen, ModelCatalogBrowserScreen {

@@ -216,13 +216,23 @@ class ModelProvidersScreen(Screen):
             pass
         try:
             card = self.query_one("#providers-manager-card")
-            # Stack only on genuinely narrow terminals. At 80 cols the
-            # side-by-side layout still shows Refresh/Edit fully; stacking
-            # there pushes actions below the fold.
+            # Three responsive modes with clear responsibilities:
+            # - narrow (<75): full vertical flow, everything scrolls.
+            # - compact (<100): two columns remain, but both action rows
+            #   stack full-width: at these widths the card is narrower than
+            #   100 cols, so the three side-by-side detail buttons cannot
+            #   fit next to the sidebar without crossing the right edge.
+            #   At >=100 the card is a full 100 cols and the row fits.
+            # - normal (>=100): two columns with horizontal action rows.
             if width < 75:
                 card.add_class("narrow")
+                card.remove_class("compact")
+            elif width < 100:
+                card.remove_class("narrow")
+                card.add_class("compact")
             else:
                 card.remove_class("narrow")
+                card.remove_class("compact")
         except Exception:
             pass
 
