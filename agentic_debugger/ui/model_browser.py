@@ -1,12 +1,19 @@
-"""Model browser/selector v2: searchable, provider-aware, readiness-explicit.
+"""Model browser/selector v2: searchable, provider-aware, quiet by default.
 
-Pure helpers here are Textual-free and unit-testable (filtering,
-protocol badges, responsive row rendering, details text).  The
-:class:`ModelBrowserScreen` composes them into a responsive Textual
-surface with search, provider filtering, protocol/readiness badges,
-disabled reasons, current-selection marking, and keyboard-first Enter
-selection — without raw giant unstructured lists or horizontal
-clipping at constrained sizes.
+Pure helpers here are Textual-free and unit-testable (filtering and
+responsive row rendering).  The :class:`ModelBrowserScreen` composes
+them into a responsive Textual surface with search, provider
+filtering, disabled (muted) rows, current-selection marking, and
+keyboard-first Enter selection — without raw giant unstructured
+lists or horizontal clipping at constrained sizes.
+
+Information hierarchy: the picker is a selector, not an
+inspection/debugging screen.  Every row carries exactly the scannable
+identity (model name + quiet provider text, plus the current-selection
+check).  Protocol, model id, routing/route state, readiness counts,
+and qualification notes are implementation details and never appear
+in the picker.  There is no persistent details pane; unavailable rows
+stay disabled/muted with no explanatory routing text.
 """
 
 from __future__ import annotations
@@ -67,7 +74,12 @@ def filter_model_options(
     search: str = "",
     provider: str = "all",
 ) -> List[Any]:
-    """Search + provider filtering (pure, case-insensitive substring)."""
+    """Search + provider filtering (pure, case-insensitive substring).
+
+    Search matches model name, model id, and provider label only.
+    Protocol/routing families are implementation details and are never
+    search keys.
+    """
     query = search.strip().lower() if type(search) is str else ""
     provider_key = provider.strip() if type(provider) is str else "all"
     result: List[Any] = []
@@ -80,7 +92,6 @@ def filter_model_options(
                 str(getattr(option, "display", "") or "").lower(),
                 str(getattr(option, "model_id", "") or "").lower(),
                 _option_provider_label(option).lower(),
-                protocol_badge(_option_protocol(option)).lower(),
             ]
             if not any(query in hay for hay in haystacks):
                 continue
@@ -105,38 +116,51 @@ def model_choice_key(provider: str, model_id: str) -> str:
     return f"{provider}:{model_id}"
 
 
+def _is_routing_only_detail(text: str) -> bool:
+    """Whether a catalog note is pure routing noise (never shown)."""
+    if not text or not text.strip():
+        return True
+    low = text.lower()
+    tmp = (
+        low.replace("direct api", " ")
+        .replace("·", " ")
+        .replace("•", " ")
+        .replace(":", " ")
+    )
+    for token in (
+        "chat_completions",
+        "responses",
+        "messages",
+        "chat",
+        "resp",
+        "msg",
+        "unresolved",
+    ):
+        tmp = tmp.replace(token, " ")
+    tmp = tmp.strip(" .·-—–_,;:!?()[]")
+    return not tmp.strip()
+
+
+def _row_status(option: Any) -> str:
+    """Row status (always empty: the picker shows no per-row status).
+
+    Unavailable rows stay disabled/muted via :func:`is_selectable`
+    and dim row styling; no routing or explanatory text is rendered.
+    """
+    return ""
+
+
 def details_for_option(option: Any, *, is_current: bool = False) -> str:
-    """Multiline details for the footer pane (wraps, never clips)."""
-    if option is None:
-        return "No model selected."
-    display = getattr(option, "display", "") or getattr(option, "model_id", "")
-    provider_label = _option_provider_label(option)
-    model_id = getattr(option, "model_id", "")
-    badge = protocol_badge(_option_protocol(option))
-    available = bool(getattr(option, "available", False))
-    reason = getattr(option, "unavailable_reason", None)
-    detail = getattr(option, "detail", "") or ""
-    lines = [
-        f"{display}",
-        f"Provider: {provider_label}  ·  Model ID: {model_id}",
-        f"Protocol: {badge}  ·  Status: {'Ready' if available else 'Unavailable'}"
-        + ("  ·  Current selection" if is_current else ""),
-    ]
-    if type(detail) is str and detail.strip():
-        detail_text = detail.strip()
-        # The detail carries the route/qualification note (e.g. Level-32
-        # non-qualified); surface it once when it adds information beyond
-        # the protocol badge line above.
-        if detail_text.lower() not in (badge.lower(), f"direct api · {badge}".lower()):
-            lines.append(f"Note: {detail_text}")
-    if not available and type(reason) is str and reason.strip():
-        lines.append(f"Why unavailable: {reason.strip()}")
-    if _option_protocol(option) is None:
-        lines.append(
-            "Tip: set an explicit protocol override when adding this model "
-            "manually (Responses / Chat Completions / Messages)."
-        )
-    return "\n".join(lines)
+    """Details text (always empty: the picker has no details pane).
+
+    The picker is a selector, not an inspection/debugging screen, so
+    neither ready nor exceptional selections produce details prose —
+    no model id, protocol, route state, status, or qualification note.
+    Routing truth stays in the provider/runtime layer
+    (:func:`is_selectable` and transport resolution), never in picker
+    copy.
+    """
+    return ""
 
 
 def _truncate(value: str, width: int) -> str:
@@ -152,38 +176,33 @@ def _truncate(value: str, width: int) -> str:
 def render_model_row(
     option: Any, width: int, *, is_current: bool = False
 ) -> Any:
-    """One responsive list row as Rich Text (never exceeds width)."""
+    """One quiet list row as Rich Text (never exceeds width).
+
+    Every row carries exactly the scannable identity: model name plus
+    quiet secondary provider text (``Display  Provider``) and a small
+    current-selection check.  No protocol badge, model id, readiness
+    dot, route status, or other per-row chrome — unavailable rows are
+    distinguished only by disabled/muted styling via
+    :func:`is_selectable`.
+    """
     from rich.text import Text as _Text
 
     display = str(getattr(option, "display", "") or getattr(option, "model_id", ""))
-    model_id = str(getattr(option, "model_id", ""))
-    badge = protocol_badge(_option_protocol(option))
     available = bool(getattr(option, "available", False))
-    dot = "●" if available else "○"
     current_mark = " ✓" if is_current else ""
     provider_label = _option_provider_label(option)
+    show_provider = bool(provider_label.strip()) and provider_label.strip() != display.strip()
 
-    # Width budgets: narrow (<60) shows name + badge only; compact
-    # (<90) adds provider; normal shows name + id + badge + provider.
-    # Everything is truncated to fit so constrained terminals never clip.
+    # Single layout at every width: name, then provider, then the
+    # current-selection check.  Everything is truncated to fit so
+    # constrained terminals never clip.
     safe_width = max(20, int(width or 80))
-    if safe_width < 60:
-        badge_short = {"Chat Completions": "Chat", "Responses": "Resp", "Messages": "Msg"}.get(badge, "—")
-        core = f"{dot} {display} [{badge_short}]{current_mark}"
-        text = _Text(_truncate(core, safe_width))
-    elif safe_width < 90:
-        core = f"{dot} {display} [{badge}]{current_mark}"
-        suffix = f" {provider_label}"
-        room = safe_width - len(suffix)
-        if room < 20:
-            text = _Text(_truncate(core, safe_width))
-        else:
-            text = _Text(_truncate(core, room) + suffix)
-            if len((core + suffix)) > safe_width:
-                text = _Text(_truncate(core + suffix, safe_width))
+    if show_provider:
+        core = f"{display}  {provider_label}"
     else:
-        core = f"{dot} {display} ({model_id}) [{badge}] {provider_label}{current_mark}"
-        text = _Text(_truncate(core, safe_width))
+        core = f"{display}"
+    core = f"{core}{current_mark}"
+    text = _Text(_truncate(core, safe_width))
     if not available:
         text.stylize("dim")
     elif is_current:
@@ -238,13 +257,15 @@ except Exception:  # pragma: no cover - helpers remain testable
 if _TEXTUAL_AVAILABLE:
 
     class ModelBrowserScreen(Screen):  # type: ignore[no-redef]
-        """Searchable model browser with provider context and readiness."""
+        """Quiet searchable model browser (name + provider only, no details pane)."""
 
         BINDINGS = [
             Binding("escape", "cancel", "Cancel"),
             Binding("/", "focus_search", "Search"),
             Binding("[", "prev_provider", "Previous provider", show=False),
             Binding("]", "next_provider", "Next provider", show=False),
+            Binding("pageup", "page_up", "Page up", show=False),
+            Binding("pagedown", "page_down", "Page down", show=False),
         ]
 
         def __init__(
@@ -268,9 +289,8 @@ if _TEXTUAL_AVAILABLE:
         def compose(self) -> ComposeResult:
             with Vertical(id="model-browser-dialog"):
                 yield Static(self._title_text, id="model-browser-title")
-                yield Static("", id="model-browser-current")
                 yield Input(
-                    placeholder="Search models… (name, id, provider, protocol)",
+                    placeholder="Search models...",
                     id="model-browser-search",
                 )
                 with Horizontal(id="model-browser-filters"):
@@ -281,9 +301,8 @@ if _TEXTUAL_AVAILABLE:
                     )
                     yield Static("", id="model-browser-count")
                 yield OptionList(id="model-browser-list")
-                yield Static("", id="model-browser-details")
                 yield Static(
-                    "up/down navigate · enter select · [ ] provider · / search · esc cancel",
+                    "Enter select   Esc cancel",
                     id="model-browser-hint",
                 )
 
@@ -292,15 +311,13 @@ if _TEXTUAL_AVAILABLE:
             return ["all"] + [p.provider_id for p in self._providers]
 
         def _filter_button_label(self) -> str:
-            """Visible provider-filter value with ready counts (always fits)."""
+            """Visible provider-filter value (quiet, no counts)."""
             if self._provider_filter == "all":
-                total = len(self._all_options)
-                ready = sum(1 for o in self._all_options if bool(getattr(o, "available", False)))
-                return f"Provider: All ({ready}/{total})"
+                return "All providers"
             for provider in self._providers:
                 if provider.provider_id == self._provider_filter:
-                    return f"Provider: {provider.label} ({provider.ready}/{provider.total})"
-            return f"Provider: {self._provider_filter}"
+                    return provider.label
+            return str(self._provider_filter)
 
         def _refresh_filter_button(self) -> None:
             try:
@@ -336,10 +353,23 @@ if _TEXTUAL_AVAILABLE:
 
         def on_resize(self, event: Any) -> None:
             try:
-                self._populate_list()
+                # Re-render rows for the new width but keep the user's
+                # highlight (and its scroll position) instead of snapping
+                # back to the current selection.
+                self._populate_list(preserve_highlight=True)
             except Exception:
                 pass
             self._update_responsive()
+            try:
+                from agentic_debugger.ui.screens_shared import (
+                    ensure_option_list_highlight_visible,
+                )
+
+                ensure_option_list_highlight_visible(
+                    self.query_one("#model-browser-list", OptionList)
+                )
+            except Exception:
+                pass
 
         def _update_responsive(self) -> None:
             try:
@@ -358,39 +388,56 @@ if _TEXTUAL_AVAILABLE:
             except Exception:
                 return 72
 
+        def _is_filtered(self) -> bool:
+            if self._provider_filter not in ("", "all"):
+                return True
+            return bool((self._search_text or "").strip())
+
         def _refresh_header(self) -> None:
-            try:
-                current = self.query_one("#model-browser-current", Static)
-            except Exception:
-                return
-            total = len(self._all_options)
-            ready = sum(1 for o in self._all_options if bool(getattr(o, "available", False)))
-            current_opt = None
-            if self._current_key:
-                for opt in self._all_options:
-                    if model_choice_key(getattr(opt, "provider", ""), getattr(opt, "model_id", "")) == self._current_key:
-                        current_opt = opt
-                        break
-            if current_opt is not None:
-                current.update(
-                    f"Current: {getattr(current_opt, 'display', '')} "
-                    f"({getattr(current_opt, 'model_id', '')}) · {ready}/{total} ready"
-                )
-            else:
-                current.update(f"{ready}/{total} ready · type to filter, Enter to select")
+            """Update only the secondary filtered-result count.
+
+            The header stays quiet: title plus list marking carry the
+            selection.  A count appears only when search/filtering makes
+            it useful, and remains visually secondary.
+            """
             try:
                 count = self.query_one("#model-browser-count", Static)
-                count.update(f"{len(self._filtered)} shown")
+            except Exception:
+                return
+            try:
+                if not self._is_filtered():
+                    count.update("")
+                else:
+                    count.update(f"{len(self._filtered)} of {len(self._all_options)}")
             except Exception:
                 pass
 
-        def _populate_list(self) -> None:
+        def _populate_list(self, *, preserve_highlight: bool = False) -> None:
             from textual.widgets.option_list import Option
 
             try:
                 opt_list = self.query_one("#model-browser-list", OptionList)
             except Exception:
                 return
+            # When only re-rendering (resize), remember the visible
+            # selection by key so the rebuild below restores it instead
+            # of snapping back to the stored current selection.
+            keep_key: Optional[str] = None
+            keep_manage = False
+            if preserve_highlight:
+                try:
+                    current_hl = opt_list.highlighted
+                    if current_hl is not None and 0 <= current_hl < len(self._filtered):
+                        previous = self._filtered[current_hl]
+                        keep_key = model_choice_key(
+                            getattr(previous, "provider", ""),
+                            getattr(previous, "model_id", ""),
+                        )
+                    elif current_hl == len(self._filtered):
+                        keep_manage = True
+                except Exception:
+                    keep_key = None
+                    keep_manage = False
             self._filtered = filter_model_options(
                 self._all_options, self._search_text, self._provider_filter
             )
@@ -407,42 +454,43 @@ if _TEXTUAL_AVAILABLE:
                     Option(row, disabled=not is_selectable(option), id=f"model::{key}")
                 )
             opt_list.add_option(Option("Manage model providers…", id="model::providers:manage"))
-            # Highlight the current selection when visible, else first ready.
+            # Highlight the preserved row when still present, else the
+            # current selection when visible, else first ready.
             target = None
-            for index, option in enumerate(self._filtered):
-                key = model_choice_key(getattr(option, "provider", ""), getattr(option, "model_id", ""))
-                if key == self._current_key and is_selectable(option):
-                    target = index
-                    break
+            if keep_manage:
+                target = len(self._filtered)
+            else:
+                wanted_keys = []
+                if keep_key is not None:
+                    wanted_keys.append(keep_key)
+                if self._current_key is not None and self._current_key not in wanted_keys:
+                    wanted_keys.append(self._current_key)
+                for wanted in wanted_keys:
+                    for index, option in enumerate(self._filtered):
+                        key = model_choice_key(
+                            getattr(option, "provider", ""),
+                            getattr(option, "model_id", ""),
+                        )
+                        if key == wanted and is_selectable(option):
+                            target = index
+                            break
+                    if target is not None:
+                        break
             if target is None:
                 for index, option in enumerate(self._filtered):
                     if is_selectable(option):
                         target = index
                         break
-            if target is not None:
-                try:
-                    opt_list.highlighted = target
-                except Exception:
-                    pass
-            self._refresh_header()
-            self._refresh_details()
+            from agentic_debugger.ui.screens_shared import (
+                ensure_option_list_highlight_visible,
+                set_option_list_highlight,
+            )
 
-        def _refresh_details(self) -> None:
-            try:
-                details = self.query_one("#model-browser-details", Static)
-                opt_list = self.query_one("#model-browser-list", OptionList)
-            except Exception:
-                return
-            highlighted = opt_list.highlighted
-            if highlighted is None or highlighted >= len(self._filtered):
-                if highlighted == len(self._filtered):
-                    details.update("Manage providers, refresh catalogs, and set API keys.")
-                else:
-                    details.update("")
-                return
-            option = self._filtered[highlighted]
-            key = model_choice_key(getattr(option, "provider", ""), getattr(option, "model_id", ""))
-            details.update(details_for_option(option, is_current=(key == self._current_key)))
+            set_option_list_highlight(opt_list, target)
+            self._refresh_header()
+            # No details pane: the list keeps the recovered space, so the
+            # shared post-layout reveal is the only follow-up needed.
+            ensure_option_list_highlight_visible(opt_list)
 
         def on_button_pressed(self, event: Any) -> None:
             btn_id = getattr(event.button, "id", "") or ""
@@ -460,6 +508,36 @@ if _TEXTUAL_AVAILABLE:
         def action_next_provider(self) -> None:
             self._cycle_provider(+1)
 
+        def _page_model_list(self, direction: int) -> None:
+            """Page the model list even when focus sits in the search box.
+
+            The list handles page keys natively while focused; this
+            forwarding covers the search/button focus case so page
+            scrolling always agrees with the scrollbar.
+            """
+            try:
+                opt_list = self.query_one("#model-browser-list", OptionList)
+            except Exception:
+                return
+            try:
+                if self.focused is opt_list:
+                    return  # native OptionList binding already paged
+            except Exception:
+                pass
+            try:
+                if direction < 0:
+                    opt_list.action_page_up()
+                else:
+                    opt_list.action_page_down()
+            except Exception:
+                pass
+
+        def action_page_up(self) -> None:
+            self._page_model_list(-1)
+
+        def action_page_down(self) -> None:
+            self._page_model_list(+1)
+
         def on_input_changed(self, event: Input.Changed) -> None:
             if getattr(event.input, "id", "") == "model-browser-search":
                 self._search_text = event.value or ""
@@ -467,7 +545,19 @@ if _TEXTUAL_AVAILABLE:
                 event.stop()
 
         def on_option_list_option_highlighted(self, event: Any) -> None:
-            self._refresh_details()
+            # Native End/Home/arrows/page keys assign highlighted via the
+            # OptionList watcher, bypassing _populate_list.  Re-assert the
+            # same shared highlight-visible invariant.
+            try:
+                from agentic_debugger.ui.screens_shared import (
+                    ensure_option_list_highlight_visible,
+                )
+
+                ensure_option_list_highlight_visible(
+                    self.query_one("#model-browser-list", OptionList)
+                )
+            except Exception:
+                pass
 
         def on_option_list_option_selected(self, event: Any) -> None:
             index = getattr(event, "option_index", None)

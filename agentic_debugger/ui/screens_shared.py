@@ -347,3 +347,127 @@ class HelpModalScreen(Screen):
 
     def action_close_help(self) -> None:
         self.app.pop_screen()
+
+
+def _reveal_option_list_highlight(option_list: Any) -> None:
+    """Reveal the current highlight now and after the pending layout.
+
+    ``OptionList.scroll_to_highlight()`` runs synchronously against the
+    current ``virtual_size``/``container_size``.  During a
+    clear/add rebuild (or a details-pane show/hide that follows a
+    highlight change) that geometry is stale, so the immediate scroll is
+    clamped to a stale ``max_scroll_y`` and never retried.  Scheduling a
+    second reveal via the canonical ``call_after_refresh`` lifecycle
+    retries the same reveal once layout has refreshed, without sleeps,
+    hardcoded offsets, or index special-casing.  Never raises.
+    """
+    try:
+        option_list.refresh(layout=True)
+    except Exception:
+        pass
+    try:
+        option_list.scroll_to_highlight()
+    except Exception:
+        pass
+    try:
+        schedule = getattr(option_list, "call_after_refresh", None)
+        reveal = getattr(option_list, "scroll_to_highlight", None)
+        if callable(schedule) and callable(reveal):
+            try:
+                schedule(reveal)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
+def ensure_option_list_highlight_visible(option_list: Any) -> None:
+    """Keep the current highlight scrolled into view (native-key path).
+
+    Native ``OptionList`` bindings (End/Home/Up/Down/PageUp/PageDown)
+    assign ``highlighted`` through the reactive watcher, bypassing
+    :func:`set_option_list_highlight`.  Screens must call this from
+    ``on_option_list_option_highlighted`` (after any details/layout
+    update) and from ``on_resize`` so keyboard movement ends with the
+    same highlight-visible invariant as programmatic rebuilds.  Never
+    raises.
+    """
+    try:
+        if option_list is None:
+            return
+        try:
+            count = int(option_list.option_count)  # type: ignore[union-attr]
+        except Exception:
+            return
+        if count <= 0:
+            return
+        try:
+            highlighted = option_list.highlighted
+        except Exception:
+            return
+        if highlighted is None:
+            return
+        _reveal_option_list_highlight(option_list)
+    except Exception:
+        pass
+
+
+def set_option_list_highlight(option_list: Any, index: Any) -> None:
+    """Highlight one ``OptionList`` row and keep it scrolled into view.
+
+    The list's own ``highlighted``/scroll state is the single source of
+    truth: the scrollbar thumb is derived from it, so every highlight
+    change (keyboard, mouse, page keys, filter rebuilds) must flow
+    through one place that both assigns the index and explicitly reveals
+    it.  Relying only on the reactive watcher is not enough: a
+    programmatic assignment during mount/resize/filter rebuilds can run
+    against a stale viewport, leaving the highlight off-screen while the
+    thumb shows the old position.
+
+    The reveal is two-phase: an immediate ``scroll_to_highlight()``
+    plus a canonical ``call_after_refresh`` retry once layout has
+    refreshed the scroll extent.  No sleeps, no hardcoded offsets.
+
+    ``index`` is clamped to the live option range; ``None`` clears the
+    highlight (empty/disabled-only lists).  Never raises: pickers must
+    stay usable in any terminal state.
+    """
+    try:
+        count = int(option_list.option_count)
+    except Exception:
+        return
+    if count <= 0:
+        return
+    if index is None:
+        try:
+            option_list.highlighted = None
+        except Exception:
+            pass
+        try:
+            option_list.refresh(layout=True)
+        except Exception:
+            pass
+        try:
+            option_list.scroll_to(y=0, animate=False)
+        except Exception:
+            pass
+        try:
+            schedule = getattr(option_list, "call_after_refresh", None)
+            if callable(schedule):
+                try:
+                    schedule(option_list.scroll_to, y=0, animate=False)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        return
+    try:
+        target = int(index)
+    except (TypeError, ValueError):
+        target = 0
+    target = max(0, min(target, count - 1))
+    try:
+        option_list.highlighted = target
+    except Exception:
+        return
+    _reveal_option_list_highlight(option_list)

@@ -11,8 +11,9 @@ Recreates the actual failure class observed on the repaired product:
 Expected (offline, no live inference, no provider recreation, no
 catalog deletion):
 
-- Model Browser projection renders Responses/Ready (etc.) from CURRENT
-  runtime truth;
+- Model Browser projection derives from CURRENT runtime truth
+  (proven via protocol badges and transport resolution; picker rows
+  stay name + provider only with no routing text);
 - transport resolution (ModelGateway.resolve / LiveModelConfig) uses the
   same current truth;
 - unknown models remain Unresolved / disabled / fail-closed;
@@ -208,8 +209,13 @@ class TestStaleCatalogHealsWithoutRecreation:
         spark = _as_option(by_id["muse-spark-1.3-contributor"])
         assert protocol_badge(spark.protocol) == "Responses"
         assert is_selectable(spark) is True
-        assert "Responses" in str(render_model_row(spark, 100))
-        assert "Ready" in details_for_option(spark)
+        # Quiet hierarchy: healed ready rows show name + provider only;
+        # details stay empty.  Routing truth is proven via protocol_badge
+        # and the transport tests below, not via row copy.
+        spark_row = str(render_model_row(spark, 100))
+        assert "Muse Spark" in spark_row or "muse-spark" in spark_row.lower()
+        assert "Responses" not in spark_row
+        assert details_for_option(spark) == ""
 
         flash = _as_option(by_id["deepseek-v4.1-flash"])
         assert protocol_badge(flash.protocol) == "Chat Completions"
@@ -222,7 +228,16 @@ class TestStaleCatalogHealsWithoutRecreation:
         unknown = _as_option(by_id[UNKNOWN_ID])
         assert protocol_badge(unknown.protocol) == "Unresolved"
         assert is_selectable(unknown) is False
-        assert "Unresolved" in str(render_model_row(unknown, 100))
+        # Presentation-only: the picker shows no routing text, so the
+        # unknown row carries name + provider only while staying
+        # disabled/muted; routing truth is proven via protocol_badge
+        # and the transport tests below, not via row copy.
+        unknown_row = str(render_model_row(unknown, 100))
+        assert "Route needed" not in unknown_row
+        assert "Route unresolved" not in unknown_row
+        assert "Unresolved" not in unknown_row
+        assert "!" not in unknown_row
+        assert details_for_option(unknown) == ""
 
     def test_transport_resolves_from_current_truth(self) -> None:
         _install_stale_saved_state()

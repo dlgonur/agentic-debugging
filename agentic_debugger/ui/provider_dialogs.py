@@ -36,6 +36,8 @@ class ModelCatalogBrowserScreen(Screen):
 
     BINDINGS = [
         Binding("escape", "back", "Back"),
+        Binding("pageup", "page_up", "Page up", show=False),
+        Binding("pagedown", "page_down", "Page down", show=False),
     ]
 
     def __init__(
@@ -66,8 +68,24 @@ class ModelCatalogBrowserScreen(Screen):
         self._populate_list()
         self.query_one("#catalog-filter-input", Input).focus()
 
-    def _populate_list(self) -> None:
+    def _highlighted_model_id(self) -> Optional[str]:
+        """Id of the currently highlighted row in the live filtered list."""
+        try:
+            opt_list = self.query_one("#catalog-models-list", OptionList)
+            current_hl = opt_list.highlighted
+            if current_hl is not None and 0 <= current_hl < len(self._filtered_models):
+                return self._filtered_models[current_hl].model_id
+        except Exception:
+            pass
+        return None
+
+    def _populate_list(self, keep_id: Optional[str] = None) -> None:
         from textual.widgets.option_list import Option
+
+        from agentic_debugger.ui.screens_shared import (
+            ensure_option_list_highlight_visible,
+            set_option_list_highlight,
+        )
 
         opt_list = self.query_one("#catalog-models-list", OptionList)
         opt_list.clear_options()
@@ -87,6 +105,7 @@ class ModelCatalogBrowserScreen(Screen):
                 opt_list.add_option(
                     Option(Text("No models discovered in catalog yet.", style=FAINT), disabled=True)
                 )
+            set_option_list_highlight(opt_list, None)
             return
 
         for m in self._filtered_models:
@@ -96,9 +115,48 @@ class ModelCatalogBrowserScreen(Screen):
             if m.protocol:
                 t.append(f" [{m.protocol}]", style=FAINT)
             opt_list.add_option(Option(t, id=f"model::{m.model_id}"))
+        target = 0
+        if keep_id is not None:
+            for index, m in enumerate(self._filtered_models):
+                if m.model_id == keep_id:
+                    target = index
+                    break
+        set_option_list_highlight(opt_list, target)
+        # Retry the same reveal after layout refreshes the scroll extent.
+        ensure_option_list_highlight_visible(opt_list)
+
+    def on_resize(self, event: Any) -> None:
+        try:
+            from agentic_debugger.ui.screens_shared import (
+                ensure_option_list_highlight_visible,
+            )
+
+            ensure_option_list_highlight_visible(
+                self.query_one("#catalog-models-list", OptionList)
+            )
+        except Exception:
+            pass
+
+    def on_option_list_option_highlighted(self, event: Any) -> None:
+        # Native End/Home/arrows/page keys bypass _populate_list; keep the
+        # same shared highlight-visible invariant after layout settles.
+        try:
+            from agentic_debugger.ui.screens_shared import (
+                ensure_option_list_highlight_visible,
+            )
+
+            ensure_option_list_highlight_visible(
+                self.query_one("#catalog-models-list", OptionList)
+            )
+        except Exception:
+            pass
 
     def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id == "catalog-filter-input":
+            # Capture the visible row BEFORE narrowing so the rebuild can
+            # keep a valid highlight instead of stranding it past the end
+            # of the list (no visible selection, stale scroll position).
+            keep_id = self._highlighted_model_id()
             self._filter_text = event.value.strip().lower()
             if self._filter_text:
                 self._filtered_models = [
@@ -109,11 +167,36 @@ class ModelCatalogBrowserScreen(Screen):
                 ]
             else:
                 self._filtered_models = list(self._all_models)
-            self._populate_list()
+            self._populate_list(keep_id=keep_id)
             event.stop()
 
     def action_back(self) -> None:
         self.app.pop_screen()
+
+    def _page_catalog_list(self, direction: int) -> None:
+        """Page the catalog list even while the filter input is focused."""
+        try:
+            opt_list = self.query_one("#catalog-models-list", OptionList)
+        except Exception:
+            return
+        try:
+            if self.focused is opt_list:
+                return  # native OptionList binding already paged
+        except Exception:
+            pass
+        try:
+            if direction < 0:
+                opt_list.action_page_up()
+            else:
+                opt_list.action_page_down()
+        except Exception:
+            pass
+
+    def action_page_up(self) -> None:
+        self._page_catalog_list(-1)
+
+    def action_page_down(self) -> None:
+        self._page_catalog_list(+1)
 
     def on_button_pressed(self, event: Any) -> None:
         btn_id = getattr(event.button, "id", "")
