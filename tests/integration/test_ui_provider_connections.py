@@ -32,6 +32,7 @@ from agentic_debugger.ui.screens import (  # noqa: E402
     ChoicePickerScreen,
     ConfirmDeleteProviderDialogScreen,
     EditProviderDialogScreen,
+    ModelBrowserScreen,
     ModelCatalogBrowserScreen,
     ProviderConnectionsScreen,
     StartSessionScreen,
@@ -256,21 +257,25 @@ def test_model_picker_shows_discovered_notes_and_management_entry(
         start._open_model_picker()
         await pilot.pause()
         picker = pilot.app.screen
-        assert isinstance(picker, ChoicePickerScreen)
-        values = [choice.value for choice in picker.choices]
-        assert "opencode_go:opencode-go/kimi-k3" in values
-        assert "opencode_go:opencode-go/glm-5" in values
-        assert "commandcode_goat:deepseek/deepseek-v4-flash" in values
-        assert "providers:manage" in values
+        assert isinstance(picker, ModelBrowserScreen)
+        keys = {
+            f"{opt.provider}:{opt.model_id}" for opt in picker._all_options
+        }
+        assert "opencode_go:opencode-go/kimi-k3" in keys
+        assert "opencode_go:opencode-go/glm-5" in keys
+        assert "commandcode_goat:deepseek/deepseek-v4-flash" in keys
         # Provider identity preserved: same display text never collapses
         # distinct provider routes.
-        titles = [choice.title for choice in picker.choices]
+        titles = [opt.display for opt in picker._all_options]
         assert "Kimi K3" in titles
         goat = next(
-            c for c in picker.choices
-            if c.value == "commandcode_goat:deepseek/deepseek-v4-flash"
+            o for o in picker._all_options
+            if o.provider == "commandcode_goat" and o.model_id == "deepseek/deepseek-v4-flash"
         )
-        assert goat.disabled is True
+        assert goat.available is False
+        # The manage-providers affordance stays one Enter away (last list row).
+        option_list = picker.query_one("#model-browser-list")
+        assert option_list.option_count == len(picker._filtered) + 1
 
     run_headless(app, actions, size=(120, 32))
 
@@ -297,7 +302,7 @@ def test_model_picker_management_entry_opens_provider_screen(
         start._open_model_picker()
         await pilot.pause()
         picker = pilot.app.screen
-        assert isinstance(picker, ChoicePickerScreen)
+        assert isinstance(picker, ModelBrowserScreen)
         picker._on_select("providers:manage")
         await pilot.pause()
         assert isinstance(pilot.app.screen, ProviderConnectionsScreen)
@@ -469,12 +474,14 @@ def test_capability_ladder_isolation_with_custom_provider(tmp_path: Path, monkey
         start._open_model_picker()
         await pilot.pause()
         picker = pilot.app.screen
-        assert isinstance(picker, ChoicePickerScreen)
-        custom_choices = [c for c in picker.choices if "custom_ai" in str(c.value)]
-        for c in custom_choices:
+        assert isinstance(picker, ModelBrowserScreen)
+        custom_options = [o for o in picker._all_options if o.provider == "custom_ai"]
+        assert custom_options, "custom provider models must still be listed (never hidden)"
+        for opt in custom_options:
             # Custom provider models must be disabled / ineligible for Level 32 Ladder
-            assert c.disabled is True
-            assert "ladder" in str(c.disabled_reason).lower() or "unavailable" in str(c.disabled_reason).lower()
+            assert opt.available is False
+            reason = str(opt.unavailable_reason or "").lower()
+            assert "ladder" in reason or "unavailable" in reason or "credential" in reason or "protocol" in reason
 
     run_headless(app, actions, size=(120, 32))
 

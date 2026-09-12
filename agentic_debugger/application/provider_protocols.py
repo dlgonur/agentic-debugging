@@ -17,6 +17,7 @@ from typing import Any, Mapping, Optional
 
 from agentic_debugger.application import provider_config as _config
 from agentic_debugger.application import provider_identity as _identity
+from agentic_debugger.application import provider_runtime as _runtime
 from agentic_debugger.application.provider_identity import (
     HISTORICAL_TRANSPORT_PROFILES,
     PROTOCOL_CHAT_COMPLETIONS,
@@ -31,61 +32,20 @@ from agentic_debugger.application.provider_identity import (
 )
 # -- protocol resolution ------------------------------------------------------
 
-_OPENCODE_GO_DOCUMENTED_PROTOCOLS: Mapping[str, str] = {
-    # /responses (OpenAI Responses family)
-    "grok-4.6": PROTOCOL_RESPONSES,
-    "gpt-5.6-luna": PROTOCOL_RESPONSES,
-    "muse-spark-1.2-contributor": PROTOCOL_RESPONSES,
-    # /messages (Anthropic Messages family)
-    "minimax-m3": PROTOCOL_MESSAGES,
-    "minimax-m2.7": PROTOCOL_MESSAGES,
-    "minimax-m2.5": PROTOCOL_MESSAGES,
-    "qwen3.8-max": PROTOCOL_MESSAGES,
-    "qwen3.8-flash": PROTOCOL_MESSAGES,
-    "qwen3.7-max": PROTOCOL_MESSAGES,
-    "qwen3.7-plus": PROTOCOL_MESSAGES,
-    "qwen3.6-plus": PROTOCOL_MESSAGES,
-    # /chat/completions (OpenAI-compatible family)
-    "glm-5.3-flash": PROTOCOL_CHAT_COMPLETIONS,
-    "glm-5.3": PROTOCOL_CHAT_COMPLETIONS,
-    "glm-5.2": PROTOCOL_CHAT_COMPLETIONS,
-    "glm-5.1": PROTOCOL_CHAT_COMPLETIONS,
-    "kimi-k3": PROTOCOL_CHAT_COMPLETIONS,
-    "kimi-k2.7-code": PROTOCOL_CHAT_COMPLETIONS,
-    "kimi-k2.6": PROTOCOL_CHAT_COMPLETIONS,
-    "longcat-2.0": PROTOCOL_CHAT_COMPLETIONS,
-    "deepseek-v4-pro": PROTOCOL_CHAT_COMPLETIONS,
-    "deepseek-v4-flash": PROTOCOL_CHAT_COMPLETIONS,
-    "deepseek-v4-flash-vision-exp": PROTOCOL_CHAT_COMPLETIONS,
-    "mimo-v2.5": PROTOCOL_CHAT_COMPLETIONS,
-    "mimo-v2.5-pro": PROTOCOL_CHAT_COMPLETIONS,
-    "hy4-preview": PROTOCOL_CHAT_COMPLETIONS,
-    "hy3": PROTOCOL_CHAT_COMPLETIONS,
-}
+#: Single-sourced OpenCode Go documented table.  The runtime-profile layer
+#: owns the mapping; this alias preserves the historical import surface so
+#: existing seams keep resolving to the identical object.
+_OPENCODE_GO_DOCUMENTED_PROTOCOLS: Mapping[str, str] = _runtime.OPENCODE_GO_MODEL_PROTOCOLS
 
-_OPENCODE_GO_MODEL_PREFIX = "opencode-go/"
+_OPENCODE_GO_MODEL_PREFIX = _runtime.OPENCODE_GO_MODEL_PREFIX
 
 
 def resolve_opencode_go_protocol(model_id: str) -> Optional[str]:
-    if type(model_id) is not str or not model_id:
-        return None
-    text = model_id.strip()
-    if text.startswith(_OPENCODE_GO_MODEL_PREFIX):
-        text = text[len(_OPENCODE_GO_MODEL_PREFIX):]
-    return _OPENCODE_GO_DOCUMENTED_PROTOCOLS.get(text)
+    return _runtime.resolve_opencode_go_protocol(model_id)
 
 
 def resolve_commandcode_protocol(model_id: str) -> Optional[str]:
-    if type(model_id) is not str or not model_id.strip():
-        return None
-    text = model_id.strip()
-    lowered = text.lower()
-    if lowered.startswith("anthropic/"):
-        return PROTOCOL_MESSAGES
-    base = lowered.rsplit("/", 1)[-1]
-    if base.startswith("claude"):
-        return PROTOCOL_MESSAGES
-    return PROTOCOL_CHAT_COMPLETIONS
+    return _runtime.resolve_commandcode_protocol(model_id)
 
 
 def resolve_model_protocol(kind: str, model_id: str) -> Optional[str]:
@@ -96,13 +56,26 @@ def resolve_model_protocol(kind: str, model_id: str) -> Optional[str]:
     transport profile — never from the technical ID alone.  A generic
     provider (even one identified ``opencode_go``) resolves through its
     configured models and provider default.
+
+    An explicit per-model protocol stored on the configuration always
+    wins over the documented historical table, so operators can route a
+    newly discovered model (or correct a stale mapping) without a source
+    change.  Unknown OpenCode Go models without an override resolve to
+    ``None`` (discovered but not runnable) and must never be silently
+    sent through the provider default.
     """
     cfg = _config.get_provider_config(kind)
     if cfg is None or not cfg.enabled:
         raise ProviderConnectionError(f"provider {kind!r} is not configured")
     if cfg.transport_profile == TRANSPORT_OPENCODE_GO:
+        explicit = _runtime.find_explicit_model_protocol(cfg, model_id)
+        if explicit is not None:
+            return explicit
         return resolve_opencode_go_protocol(model_id)
     if cfg.transport_profile == TRANSPORT_COMMANDCODE_GOAT:
+        explicit = _runtime.find_explicit_model_protocol(cfg, model_id)
+        if explicit is not None:
+            return explicit
         return resolve_commandcode_protocol(model_id)
     for m in cfg.models:
         if m.model_id == model_id and m.protocol:
@@ -154,12 +127,22 @@ def resolve_model_protocol_for_config(cfg: Any, model_id: str) -> Optional[str]:
     ``cfg`` snapshot.  Global wrapper :func:`resolve_model_protocol` reads
     current config once and delegates here, so normal behavior is unchanged
     while snapshot resolution never observes a different authority.
+
+    An explicit per-model protocol on the snapshot always wins over the
+    documented historical table; unknown OpenCode Go models without an
+    override resolve to ``None`` (discovered but not runnable).
     """
     if cfg is None or not getattr(cfg, "enabled", False):
         raise ProviderConnectionError(f"provider {getattr(cfg, 'provider_id', '?')!r} is not configured")
     if getattr(cfg, "transport_profile", None) == TRANSPORT_OPENCODE_GO:
+        explicit = _runtime.find_explicit_model_protocol(cfg, model_id)
+        if explicit is not None:
+            return explicit
         return resolve_opencode_go_protocol(model_id)
     if getattr(cfg, "transport_profile", None) == TRANSPORT_COMMANDCODE_GOAT:
+        explicit = _runtime.find_explicit_model_protocol(cfg, model_id)
+        if explicit is not None:
+            return explicit
         return resolve_commandcode_protocol(model_id)
     for m in getattr(cfg, "models", ()):
         if getattr(m, "model_id", None) == model_id and getattr(m, "protocol", None):

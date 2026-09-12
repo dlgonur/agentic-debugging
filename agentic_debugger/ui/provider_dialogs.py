@@ -582,6 +582,10 @@ class AddManualModelDialogScreen(Screen):
         super().__init__()
         self._provider_id = provider_id
         self._on_save = on_save
+        # None = provider default; otherwise an explicit protocol override
+        # that wins over the documented historical table (needed when a
+        # newly discovered model has no trustworthy route mapping).
+        self._protocol: Optional[str] = None
 
     def compose(self) -> ComposeResult:
         with Vertical(id="provider-dialog-card"):
@@ -590,6 +594,18 @@ class AddManualModelDialogScreen(Screen):
             yield Input(placeholder="e.g. llama-3.3-70b-versatile or claude-3-7-sonnet", id="input-model-id")
             yield Static("Display Name (optional)", classes="dialog-label")
             yield Input(placeholder="e.g. Llama 3.3 70B", id="input-model-disp")
+            yield Static("Protocol override (only when the model has no known route)", classes="dialog-label")
+            with Horizontal(id="manual-protocol-row"):
+                yield Button("Provider default", id="mproto-default", classes="fmt-btn -selected")
+                yield Button("Responses", id="mproto-resp", classes="fmt-btn")
+                yield Button("Chat Completions", id="mproto-chat", classes="fmt-btn")
+                yield Button("Messages", id="mproto-msg", classes="fmt-btn")
+            yield Static(
+                "Leave Provider default unless the catalog shows this model as "
+                "unresolved (no known Responses / Chat Completions / Messages route).",
+                id="manual-protocol-help",
+                classes="dialog-help",
+            )
             yield Static("", id="dialog-feedback")
             with Horizontal(id="dialog-actions-row"):
                 yield Button("Add model", id="btn-save-dialog", classes="primary-action")
@@ -602,10 +618,43 @@ class AddManualModelDialogScreen(Screen):
         self.app.pop_screen()
         self._on_save(None, None, None)
 
+    def _update_protocol_buttons(self) -> None:
+        mapping = [
+            ("mproto-default", None),
+            ("mproto-resp", "responses"),
+            ("mproto-chat", "chat_completions"),
+            ("mproto-msg", "messages"),
+        ]
+        for button_id, value in mapping:
+            try:
+                button = self.query_one(f"#{button_id}", Button)
+                if self._protocol == value:
+                    button.add_class("-selected")
+                else:
+                    button.remove_class("-selected")
+            except Exception:
+                pass
+
     def on_button_pressed(self, event: Any) -> None:
         btn_id = getattr(event.button, "id", "")
         if btn_id == "btn-cancel-dialog":
             self.action_cancel()
+            event.stop()
+        elif btn_id == "mproto-default":
+            self._protocol = None
+            self._update_protocol_buttons()
+            event.stop()
+        elif btn_id == "mproto-resp":
+            self._protocol = "responses"
+            self._update_protocol_buttons()
+            event.stop()
+        elif btn_id == "mproto-chat":
+            self._protocol = "chat_completions"
+            self._update_protocol_buttons()
+            event.stop()
+        elif btn_id == "mproto-msg":
+            self._protocol = "messages"
+            self._update_protocol_buttons()
             event.stop()
         elif btn_id == "btn-save-dialog":
             mid = self.query_one("#input-model-id", Input).value.strip()
@@ -615,7 +664,7 @@ class AddManualModelDialogScreen(Screen):
                 feedback.update("[red]Model ID is required[/]")
                 return
             self.app.pop_screen()
-            self._on_save(mid, disp or None, None)
+            self._on_save(mid, disp or None, self._protocol)
             event.stop()
 
 

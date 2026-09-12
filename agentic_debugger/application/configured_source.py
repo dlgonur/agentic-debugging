@@ -411,6 +411,25 @@ def run_configured_session(
                 f"provider credential is unavailable: {exc}"
             ) from exc
         environment = dict(_env) if _env is not None else None
+        # Session-scoped runtime metadata (profile-gated, non-secret): the
+        # stable Agentic Debugger session identity is issued to the adapter
+        # child alongside the credential channel for providers whose
+        # runtime profile requires it (OpenCode Go x-opencode-session).
+        # Generic providers receive no extra values.
+        if _provenance_route == "direct_api":
+            try:
+                from agentic_debugger.application import provider_runtime as _rt
+
+                _prof = _rt.runtime_profile_for_kind(provider)
+                if getattr(_prof, "requires_session_header", False):
+                    _raw_sid = getattr(getattr(ctx, "emitter", None), "session_id", None)
+                    _sid = _raw_sid if _rt.is_valid_transport_session_id(_raw_sid) else _rt.new_transport_session_id()
+                    _sess_env = _rt.transport_session_environment(_sid)
+                    _merged = dict(environment) if environment is not None else {}
+                    _merged.update(_sess_env)
+                    environment = _merged
+            except Exception:
+                pass
         ctx.emitter.emit(
             SessionEventKind.MODEL_CONFIGURED,
             {

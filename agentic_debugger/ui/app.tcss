@@ -1170,7 +1170,7 @@ ModelProvidersScreen, ProviderConnectionsScreen {
 
 /* -- Provider Dialogs & Catalog Browser ------------------------------- */
 
-AddProviderDialogScreen, EditProviderDialogScreen, AddManualModelDialogScreen, ConfirmDeleteProviderDialogScreen, ModelCatalogBrowserScreen {
+AddProviderDialogScreen, EditProviderDialogScreen, AddManualModelDialogScreen, ConfirmDeleteProviderDialogScreen, ModelCatalogBrowserScreen, ModelBrowserScreen {
     align: center middle;
     background: $background 90%;
 }
@@ -1465,5 +1465,141 @@ AddProviderDialogScreen, EditProviderDialogScreen, AddManualModelDialogScreen, C
 #provider-dialog-card.narrow .fmt-btn {
     width: 1fr;
     min-width: 0;
+    margin: 0 0 1 0;
+}
+
+/* -- Model Browser v2 -------------------------------------------------- */
+
+#model-browser-dialog {
+    width: 76;
+    max-width: 95%;
+    height: auto;
+    max-height: 92%;
+    background: $surface;
+    border: round $line;
+    padding: 1 2;
+}
+
+#model-browser-dialog.narrow {
+    width: 100%;
+    max-width: 100%;
+    padding: 1 1;
+}
+
+#model-browser-title {
+    height: 1;
+    color: $primary;
+    text-style: bold;
+    margin: 0 0 1 0;
+}
+
+#model-browser-current {
+    height: auto;
+    min-height: 1;
+    color: $foreground-muted;
+    margin: 0 0 1 0;
+}
+
+#model-browser-search {
+    width: 100%;
+    height: 3;
+    margin: 0 0 1 0;
+    background: $background;
+    border: round $line;
+    color: $foreground;
+}
+
+#model-browser-search:focus {
+    border: round $line-strong;
+}
+
+#model-browser-filters {
+    width: 100%;
+    height: auto;
+    min-height: 3;
+    margin: 0 0 1 0;
+    layout: horizontal;
+}
+
+#model-browser-dialog.narrow #model-browser-filters {
+    layout: vertical;
+}
+
+#model-browser-provider-label {
+    width: auto;
+    height: 3;
+    color: $foreground-muted;
+    margin: 0 1 0 0;
+    padding: 1 0 0 0;
+}
+
+#model-browser-provider {
+    width: 1fr;
+    min-width: 0;
+    height: 3;
+    margin: 0 1 0 0;
+}
+
+#model-browser-count {
+    width: auto;
+    height: 3;
+    color: $foreground-muted;
+    padding: 1 0 0 0;
+}
+
+#model-browser-list {
+    width: 100%;
+    height: auto;
+    min-height: 6;
+    max-height: 14;
+    background: $background;
+    border: round $line;
+    margin: 0 0 1 0;
+    scrollbar-size: 1 1;
+    scrollbar-color: $line;
+    scrollbar-background: $background;
+}
+
+#model-browser-list:focus {
+    border: round $line-strong;
+}
+
+#model-browser-details {
+    width: 100%;
+    height: auto;
+    min-height: 4;
+    max-height: 8;
+    color: $foreground-muted;
+    background: $background;
+    border: round $line;
+    padding: 1 1;
+    margin: 0 0 1 0;
+}
+
+#model-browser-hint {
+    height: 1;
+    color: $foreground-muted;
+}
+
+#manual-protocol-row {
+    width: 100%;
+    height: auto;
+    min-height: 3;
+    margin: 0 0 1 0;
+    layout: horizontal;
+}
+
+#provider-dialog-card.narrow #manual-protocol-row {
+    layout: vertical;
+}
+
+#manual-protocol-row .fmt-btn {
+    width: 1fr;
+    min-width: 0;
+}
+
+#manual-protocol-help, .dialog-help {
+    height: auto;
+    color: $foreground-muted;
     margin: 0 0 1 0;
 }

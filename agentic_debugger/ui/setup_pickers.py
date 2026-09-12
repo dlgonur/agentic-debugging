@@ -94,6 +94,8 @@ def gather_catalog(screen) -> None:
                     detail=item.note or "",
                     available=item.available,
                     unavailable_reason=item.unavailable_reason,
+                    protocol=getattr(item, "protocol", None),
+                    provider_label=item.provider_label,
                 )
             )
     except Exception as exc:
@@ -220,160 +222,102 @@ def open_task_picker(screen) -> None:
 
 
 def open_model_picker(screen) -> None:
+    """Model browser v2: searchable, provider-aware, readiness-explicit."""
+    from agentic_debugger.ui.model_browser import ModelBrowserScreen
+
     screen._gather_catalog()
     target = screen._config.target
-    choices: list[ChoiceOption] = []
+
+    browser_options: list[ModelOption] = []
+    # Offline entry first (compatibility-gated like before).
     offline_ok, offline_reason = model_compatibility(
         target, ModelOption(PROVIDER_OFFLINE, "", "Offline")
     )
-    offline_group_note = "unavailable for Capability Ladder" if target == TARGET_LADDER else ""
-    choices.append(
-        ChoiceOption(
-            screen._model_choice_key(OFFLINE_CHOICE),
-            "Offline",
+    browser_options.append(
+        ModelOption(
+            PROVIDER_OFFLINE,
             "",
-            group="OFFLINE",
-            group_note=offline_group_note,
-            disabled=not offline_ok,
-            disabled_reason=offline_reason,
+            "Offline",
+            detail="" if offline_ok else (offline_reason or ""),
+            available=offline_ok,
+            unavailable_reason=None if offline_ok else offline_reason,
+            protocol=None,
+            provider_label="Offline",
         )
     )
-    provider_groups: list[tuple[str, str]] = []
-    try:
-        from agentic_debugger.application.provider_connections import list_configured_providers
-        for cfg in list_configured_providers():
-            if cfg.provider_id in (
-                PROVIDER_CONFIGURED,
-                PROVIDER_OFFLINE,
-            ):
-                continue
-            if not cfg.enabled:
-                continue
-            provider_groups.append((cfg.provider_id, cfg.name.upper()))
-    except Exception:
-        pass
-    configured_group = (PROVIDER_CONFIGURED, "CUSTOM COMMAND PROFILES")
-    groups = tuple(provider_groups + [configured_group])
 
-    # One stable provider world for every target.  The qualified roster
-    # annotates Ollama entries; it never replaces the general catalog or
-    # hides the other provider groups.  Missing qualified aliases are
-    # merged into the one Ollama group, not duplicated in a second island.
-    options_by_provider: dict[str, list[ModelOption]] = {
-        provider: [] for provider, _ in groups
-    }
-    seen_keys: set[tuple[str, str]] = set()
-    for option in screen._catalog.models:
+    # One stable provider world for every target (same merge as before):
+    # configured catalog + qualified ladder roster (deduped).
+    seen_keys: set[tuple[str, str]] = {(PROVIDER_OFFLINE, "")}
+    merged: list[ModelOption] = []
+    for option in list(screen._catalog.models) + list(screen._catalog.ladder_models):
         if option.provider == PROVIDER_OFFLINE:
             continue
         key = (option.provider, option.model_id)
         if key in seen_keys:
             continue
         seen_keys.add(key)
-        options_by_provider.setdefault(option.provider, []).append(option)
-    for option in screen._catalog.ladder_models:
-        key = (option.provider, option.model_id)
-        if key not in seen_keys:
-            seen_keys.add(key)
-            options_by_provider.setdefault(PROVIDER_OLLAMA, []).append(option)
+        merged.append(option)
 
-    for provider, group in groups:
-        provider_options = options_by_provider.get(provider, [])
-        group_note = ""
-        if provider == PROVIDER_CONFIGURED and screen._catalog.configured_error:
-            group_note = "configuration error"
-        elif provider == PROVIDER_CONFIGURED and not provider_options:
-            group_note = "none configured"
-        elif provider_options and not any(opt.available for opt in provider_options):
-            first_reason = provider_options[0].unavailable_reason or ""
-            if (
-                "auth store not found" in first_reason.lower()
-                or "cli not found" in first_reason.lower()
-                or "no direct api credential" in first_reason.lower()
-            ):
-                group_note = "not configured"
-            else:
-                group_note = _short_unavailable_reason(first_reason)
-
-        if not provider_options:
-            reason = (
-                _short_unavailable_reason(screen._catalog.configured_error)
-                if provider == PROVIDER_CONFIGURED and screen._catalog.configured_error
-                else f"No {_provider_label(provider)} models configured"
-            )
-            title = (
-                "Configuration error"
-                if provider == PROVIDER_CONFIGURED and screen._catalog.configured_error
-                else "None configured"
-            )
-            choices.append(
-                ChoiceOption(
-                    f"unavailable:{provider}",
-                    title,
-                    "",
-                    group=group,
-                    group_note=group_note,
-                    disabled=True,
-                    disabled_reason=reason,
-                )
-            )
-            continue
-
-        for index, option in enumerate(provider_options):
-            qualified = screen._catalog.ladder_model(option.choice)
-            effective = qualified or option
-            is_level32 = target == TARGET_LADDER and screen._config.task_id == LEVEL32_TASK_ID
-            compatible, compat_reason = model_compatibility(
-                target,
-                effective,
-                ladder_qualified=qualified is not None,
-            )
-            disabled = not effective.available or not compatible
-            if not compatible:
-                reason = compat_reason
-            elif not effective.available:
-                reason = _short_unavailable_reason(effective.unavailable_reason)
-            else:
-                reason = ""
-            if provider == PROVIDER_CONFIGURED:
-                display_name = effective.display or effective.model_id
-            else:
-                display_name = format_model_display_name(effective.display or effective.model_id)
-            # Discovered-catalog detail (direct-API protocol family or
-            # the bounded unresolved-protocol note) stays secondary.
-            if is_level32 and qualified is None and effective.available and provider != PROVIDER_OFFLINE:
-                if effective.detail:
-                    secondary = f"{effective.detail} · not qualified for frozen Level-32 comparison"
-                else:
-                    secondary = "not qualified for frozen Level-32 comparison"
-            else:
-                secondary = effective.detail if effective.available else ""
-            choices.append(
-                ChoiceOption(
-                    screen._model_choice_key(effective.choice),
-                    display_name,
-                    "",
-                    secondary=secondary,
-                    group=group if index == 0 else "",
-                    group_note=group_note if index == 0 or group_note else "",
-                    disabled=disabled,
-                    disabled_reason=reason,
-                )
-            )
-    choices.append(
-        ChoiceOption(
-            "providers:manage",
-            "Manage model providers…",
-            "status, model refresh, API key (press m anytime)",
-            group="",
+    try:
+        from agentic_debugger.application.provider_connections import (
+            list_configured_providers as _list_cfgs,
         )
-    )
+
+        _provider_labels = {c.provider_id: c.name for c in _list_cfgs() if c.enabled}
+    except Exception:
+        _provider_labels = {}
+
+    for option in merged:
+        qualified = screen._catalog.ladder_model(option.choice)
+        effective = qualified or option
+        is_level32 = target == TARGET_LADDER and screen._config.task_id == LEVEL32_TASK_ID
+        compatible, compat_reason = model_compatibility(
+            target,
+            effective,
+            ladder_qualified=qualified is not None,
+        )
+        effective_available = bool(effective.available) and compatible
+        if not compatible:
+            effective_reason: Optional[str] = compat_reason
+        else:
+            effective_reason = effective.unavailable_reason
+        _eff_label = getattr(effective, "provider_label", None)
+        if type(_eff_label) is str and _eff_label.strip():
+            label = _eff_label.strip()
+        else:
+            label = _provider_labels.get(effective.provider, effective.provider)
+        # Level-32 qualification note stays visible without blocking
+        # execution (qualification controls classification, never
+        # eligibility).
+        detail = effective.detail or ""
+        if is_level32 and qualified is None and bool(effective.available) and effective.provider != PROVIDER_OFFLINE:
+            extra = "not qualified for frozen Level-32 comparison"
+            detail = f"{detail} · {extra}" if detail else extra
+        if getattr(option, "provider", "") == PROVIDER_CONFIGURED:
+            display_name = effective.display or effective.model_id
+        else:
+            display_name = format_model_display_name(effective.display or effective.model_id)
+        browser_options.append(
+            ModelOption(
+                effective.provider,
+                effective.model_id,
+                display_name,
+                detail=detail,
+                available=effective_available,
+                unavailable_reason=effective_reason,
+                protocol=getattr(effective, "protocol", getattr(option, "protocol", None)),
+                provider_label=label,
+            )
+        )
+
+    current_key = screen._model_choice_key(screen._config.model)
     screen.app.push_screen(
-        ChoicePickerScreen(
-            title="Select model",
-            choices=choices,
-            current=screen._model_choice_key(screen._config.model),
+        ModelBrowserScreen(
+            browser_options,
+            current_key=current_key,
             on_select=lambda value: screen._choice_selected(ROW_MODEL, value),
+            title="Select model",
         )
     )
 

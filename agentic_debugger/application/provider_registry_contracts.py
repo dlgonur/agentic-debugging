@@ -207,3 +207,4 @@ class ProviderModel:
     available: bool
     unavailable_reason: Optional[str] = None
     note: Optional[str] = None
+    protocol: Optional[str] = None

@@ -40,6 +40,7 @@ from agentic_debugger.ui.screens_editors import (
     TimeLimitEditorInput,
     TimeLimitEditorScreen,
 )
+from agentic_debugger.ui.model_browser import ModelBrowserScreen
 from agentic_debugger.ui.screens_editors import (
     _SingleLineEditorScreen as _SingleLineEditorScreen,
 )

@@ -149,6 +149,12 @@ def fake_opencode(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
             # V2-04: the CLI-auth value is resolved worker-side and issued
             # to the adapter under the private session credential channel.
             monkeypatch.setenv("AGENTIC_DEBUGGER_OPENCODE_GO_API_KEY", SECRET)
+            # Universal Provider Runtime v1: OpenCode Go inference requires
+            # a stable non-secret transport session identity; the product
+            # transport issues it per session, and direct adapter tests
+            # carry a fixed synthetic value (never a real session).
+            monkeypatch.setenv("AGENTIC_DEBUGGER_MODEL_SESSION_ID", "0123456789abcdef0123456789abcdef")
+            monkeypatch.setenv("AGENTIC_DEBUGGER_OPENCODE_SESSION_ID", "0123456789abcdef0123456789abcdef")
             yield server
 
     return factory

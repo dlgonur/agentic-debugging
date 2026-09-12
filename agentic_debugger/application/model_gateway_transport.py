@@ -181,11 +181,50 @@ def session_credential_environment(
     return gateway._vault.session_forwarding_environment(provider_id)
 
 
+def _ensure_transport_session_id(
+    binding: ModelBinding,
+    session_id: Optional[str] = None,
+) -> Optional[str]:
+    """Stable non-secret session identity for one transport (profile-gated).
+
+    Only direct-API bindings whose runtime profile requires session-scoped
+    metadata (OpenCode Go) receive an identity: an explicitly supplied
+    well-formed id is reused verbatim (stability across the session's
+    repeated requests), otherwise a fresh identity is issued.  Malformed
+    explicit ids fail closed.  All other routes/profiles yield ``None``
+    so unrelated providers never receive provider-specific metadata.
+    """
+    if binding.route != ROUTE_DIRECT_API or not binding.provider_id:
+        return None
+    try:
+        from agentic_debugger.application import provider_runtime as _runtime_mod
+    except Exception:
+        return None
+    try:
+        cfg = get_provider_config(binding.provider_id)
+    except Exception:
+        cfg = None
+    try:
+        profile = _runtime_mod.runtime_profile_for_config(cfg) if cfg is not None else _runtime_mod.runtime_profile_for_kind(binding.provider_id)
+    except Exception:
+        return None
+    if not getattr(profile, "requires_session_header", False):
+        return None
+    if session_id is not None:
+        if _runtime_mod.is_valid_transport_session_id(session_id):
+            return session_id
+        raise IncompatibleModelError(
+            "the transport session identity is invalid for this provider"
+        )
+    return _runtime_mod.new_transport_session_id()
+
+
 def transport_environment(
     gateway,
     binding: ModelBinding,
     credential_binding: Optional[Any] = None,
     credential_ticket: Optional[str] = None,
+    session_id: Optional[str] = None,
 ) -> Optional[Dict[str, str]]:
     """Adapter child credential environment (model channel only, V2-04).
 
@@ -197,6 +236,14 @@ def transport_environment(
     no-auth and external-CLI-authority routes intentionally forward
     nothing; a direct route with a missing/stale authority FAILS
     CLOSED here rather than producing a no-credential environment.
+
+    ``session_id`` carries the stable non-secret transport/session
+    identity for providers whose runtime profile requires session-scoped
+    metadata (OpenCode Go).  When required but omitted, a fresh identity
+    is issued for this environment mapping; when supplied it must be
+    well-formed.  The identity is merged alongside (never instead of)
+    the credential channel, so repeated requests sharing this mapping
+    share one stable session value.
 
     Repair 23: a retained ticket is inseparable from its binding (a
     ticket without its binding fails closed before materialization);
@@ -235,12 +282,31 @@ def transport_environment(
     # CURRENT provider authority before ANY retained or fresh egress.
     if credential_binding is not None:
         gateway._vault.authorize_binding_for_transport(credential_binding)
-    return gateway._vault.transport_materialization(
+    credential_env = gateway._vault.transport_materialization(
         binding.provider_id,
         route=binding.route,
         credential_binding=credential_binding,
         credential_ticket=credential_ticket,
     )
+    # Session-scoped runtime metadata (profile-gated, non-secret): merged
+    # alongside the credential channel.  Generic providers yield no
+    # session identity and no extra environment, so OpenCode-only values
+    # never reach unrelated adapters.
+    resolved_session = _ensure_transport_session_id(binding, session_id)
+    if resolved_session is None:
+        return credential_env
+    try:
+        from agentic_debugger.application import provider_runtime as _runtime_mod2
+        session_env = _runtime_mod2.transport_session_environment(resolved_session)
+    except Exception as exc:
+        raise IncompatibleModelError(
+            "the transport session identity could not be issued for this provider"
+        ) from exc
+    merged: Dict[str, str] = {}
+    if credential_env:
+        merged.update(dict(credential_env))
+    merged.update(session_env)
+    return merged
 
 
 def create_transport(
@@ -257,6 +323,7 @@ def create_transport(
     credential_binding: Optional[Any] = None,
     credential_ticket: Optional[str] = None,
     config_root: Optional[Any] = None,
+    session_id: Optional[str] = None,
 ) -> Tuple[Any, Any]:
     """Create the (CancellableJsonlCommandTransport, LiveModelConfig) pair.
 
@@ -267,6 +334,15 @@ def create_transport(
     is proven coherent with the ModelBinding (provider, runtime
     authority, auth mode, route/source compatibility) before any
     secret materialization.
+
+    ``session_id`` (optional): the stable non-secret transport/session
+    identity for providers whose runtime profile requires session-scoped
+    metadata (OpenCode Go).  When omitted for a requiring provider a
+    fresh identity is issued for this transport; when supplied it must
+    be well-formed and is reused verbatim so every inference request in
+    the session shares one stable value.  The identity is delivered to
+    the adapter child through the transport environment (never argv),
+    alongside the credential channel.
     """
     from agentic_debugger.application.command_transport import CancellableJsonlCommandTransport
     from agentic_debugger.evaluation.live import LiveModelConfig
@@ -492,10 +568,18 @@ def create_transport(
                 f"(expected {binding.tool_version!r}, found {live_config.tool_version!r})"
             )
 
+        # Stable non-secret session identity for this transport: issued
+        # once here (or reused when the caller supplies the session's
+        # identity) so every inference request in the session shares one
+        # value.  Delivered via the transport environment, never argv, so
+        # live-config corroboration above stays session-independent.
+        transport_session = _ensure_transport_session_id(binding, session_id)
+
         env = gateway.transport_environment(
             binding,
             credential_binding=credential_binding,
             credential_ticket=credential_ticket,
+            session_id=transport_session,
         )
         transport = CancellableJsonlCommandTransport(
             live_config,

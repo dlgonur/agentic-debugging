@@ -57,6 +57,7 @@ __all__ = [
     "request_json",
     "sanitize_text",
     "validate_and_canonicalize_url",
+    "validate_extra_headers",
 ]
 
 #: Explicit authentication modes for provider transport.  Protocol family
@@ -93,6 +94,49 @@ _MAX_ERROR_SNIPPET_CHARS = 200
 _MAX_URL_CHARS = 2048
 
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
+
+#: Bounded extra (non-credential) request headers, e.g. provider runtime
+#: session/agent metadata.  Names are HTTP tokens, values are bounded and
+#: CRLF-free.  Credential-shaped values are rejected so a caller can never
+#: smuggle a secret through this channel.
+_EXTRA_HEADER_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,63}$")
+_MAX_EXTRA_HEADERS = 8
+_MAX_EXTRA_HEADER_VALUE_CHARS = 512
+
+
+def validate_extra_headers(value: Any) -> Dict[str, str]:
+    """Validate and normalize optional extra request headers (pure)."""
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise ProviderHttpError("extra headers must be a mapping or None", kind="invalid_request")
+    if len(value) > _MAX_EXTRA_HEADERS:
+        raise ProviderHttpError("too many extra headers", kind="invalid_request")
+    cleaned: Dict[str, str] = {}
+    for raw_name, raw_value in value.items():
+        if type(raw_name) is not str or _EXTRA_HEADER_NAME_RE.fullmatch(raw_name) is None:
+            raise ProviderHttpError(f"invalid extra header name: {raw_name!r}", kind="invalid_request")
+        if type(raw_value) is not str or not raw_value:
+            raise ProviderHttpError(f"invalid extra header value for {raw_name!r}", kind="invalid_request")
+        if len(raw_value) > _MAX_EXTRA_HEADER_VALUE_CHARS:
+            raise ProviderHttpError(f"extra header value is oversized for {raw_name!r}", kind="invalid_request")
+        if any(ord(c) < 32 or ord(c) == 127 for c in raw_value):
+            raise ProviderHttpError(f"extra header value is invalid for {raw_name!r}", kind="invalid_request")
+        lowered = raw_name.lower()
+        if lowered in ("authorization", "x-api-key", "anthropic-version", "content-length", "host"):
+            raise ProviderHttpError(f"extra header overrides a reserved header: {raw_name!r}", kind="invalid_request")
+        # Credential-shaped values never travel this channel (the value is
+        # non-secret session/agent metadata by contract).
+        if _SECRET_VALUE.search(raw_value) is not None:
+            raise ProviderHttpError(f"extra header value is invalid for {raw_name!r}", kind="invalid_request")
+        if lowered in cleaned:
+            raise ProviderHttpError(f"duplicate extra header: {raw_name!r}", kind="invalid_request")
+        cleaned[lowered] = raw_value
+    # Preserve caller casing for the wire: rebuild with original names.
+    result: Dict[str, str] = {}
+    for raw_name in value:
+        result[str(raw_name)] = cleaned[str(raw_name).lower()]
+    return result
 
 _SECRET_VALUE = re.compile(
     r"(?i)\b(?:bearer|basic)\s+\S+|"
@@ -268,6 +312,7 @@ def _stdlib_request(
     timeout_seconds: float,
     max_response_bytes: int,
     auth_mode: str = AUTH_BEARER,
+    extra_headers: Optional[Mapping[str, str]] = None,
 ) -> Mapping[str, Any]:
     headers = {"Accept": "application/json"}
     if auth_mode == AUTH_ANTHROPIC:
@@ -279,6 +324,8 @@ def _stdlib_request(
     else:
         if credential:
             headers["Authorization"] = f"Bearer {credential}"
+    for extra_name, extra_value in (extra_headers or {}).items():
+        headers[str(extra_name)] = str(extra_value)
     if body is not None:
         headers["Content-Type"] = "application/json"
     request = urllib.request.Request(
@@ -348,6 +395,7 @@ def _curl_config(
     credential: Optional[str],
     body: Optional[bytes],
     auth_mode: str = AUTH_BEARER,
+    extra_headers: Optional[Mapping[str, str]] = None,
 ) -> str:
     """Build a curl stdin config; the credential never touches argv."""
 
@@ -365,6 +413,8 @@ def _curl_config(
         if credential:
             lines.append(f'header = "Authorization: Bearer {quote(credential)}"')
     lines.append('header = "Accept: application/json"')
+    for extra_name, extra_value in (extra_headers or {}).items():
+        lines.append(f'header = "{quote(str(extra_name))}: {quote(str(extra_value))}"')
     if body is not None:
         lines.append('header = "Content-Type: application/json"')
         lines.append(f'data = "{quote(body.decode("utf-8"))}"')
@@ -384,6 +434,7 @@ def _curl_request(
     max_response_bytes: int,
     executable: str,
     auth_mode: str = AUTH_BEARER,
+    extra_headers: Optional[Mapping[str, str]] = None,
 ) -> Mapping[str, Any]:
     argv = [
         executable,
@@ -402,7 +453,7 @@ def _curl_request(
     ]
     if url.lower().startswith("https://"):
         argv.extend(["--proto", "=https"])
-    config = _curl_config(method, url, credential=credential, body=body, auth_mode=auth_mode).encode("utf-8")
+    config = _curl_config(method, url, credential=credential, body=body, auth_mode=auth_mode, extra_headers=extra_headers).encode("utf-8")
     stdout = _BoundedCapture(max_response_bytes + 64)
     stderr = _BoundedCapture(4096)
     process: Optional[subprocess.Popen] = None
@@ -572,6 +623,7 @@ def request_json(
     engine: Optional[str] = None,
     tls_signature_blocked: bool = False,
     auth_mode: str = AUTH_BEARER,
+    extra_headers: Optional[Mapping[str, str]] = None,
 ) -> Mapping[str, Any]:
     """One JSON request with bounded response capture; exactly one network attempt.
 
@@ -592,6 +644,11 @@ def request_json(
     ``x-api-key`` plus the pinned ``anthropic-version``, and ``"none"``
     sends no credential header.  The credential value itself never
     touches argv, logs, or error text beyond redaction.
+
+    ``extra_headers`` carries non-secret provider runtime metadata (for
+    example the OpenCode session identity and coding-agent User-Agent
+    described by the provider runtime-profile layer).  Values are
+    validated and bounded; reserved credential headers are rejected.
     """
 
     if type(method) is not str or method not in ("GET", "POST"):
@@ -624,6 +681,7 @@ def request_json(
             "response capture bound is invalid", kind="invalid_request"
         )
     body = _body_bytes(json_payload, method)
+    cleaned_extra = validate_extra_headers(extra_headers)
     chosen = engine or (
         "curl" if tls_signature_blocked and curl_executable() else "stdlib"
     )
@@ -643,6 +701,7 @@ def request_json(
             max_response_bytes=max_response_bytes,
             executable=executable,
             auth_mode=auth_mode,
+            extra_headers=cleaned_extra,
         )
     if chosen == "stdlib":
         return _stdlib_request(
@@ -653,5 +712,6 @@ def request_json(
             timeout_seconds=float(timeout_seconds),
             max_response_bytes=max_response_bytes,
             auth_mode=auth_mode,
+            extra_headers=cleaned_extra,
         )
     raise ProviderHttpError(f"unknown HTTP engine: {chosen!r}", kind="invalid_request")

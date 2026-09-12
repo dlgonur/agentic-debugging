@@ -71,6 +71,8 @@ class FakeProviderServer:
                         "authorization": self.headers.get("Authorization"),
                         "x_api_key": self.headers.get("x-api-key"),
                         "anthropic_version": self.headers.get("anthropic-version"),
+                        "x_opencode_session": self.headers.get("x-opencode-session"),
+                        "user_agent": self.headers.get("User-Agent"),
                         "content_type": self.headers.get("Content-Type"),
                         "body": body,
                     }

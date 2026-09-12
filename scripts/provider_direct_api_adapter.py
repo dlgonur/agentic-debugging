@@ -460,6 +460,77 @@ def extract_usage(protocol: str, payload: Mapping[str, Any]) -> Optional[dict]:
 # -- one inference ------------------------------------------------------------
 
 
+def _resolve_transport_session_id(
+    provider: str,
+    explicit: Optional[str] = None,
+) -> Optional[str]:
+    """Non-secret transport/session identity for one inference (profile-gated).
+
+    The runtime-profile layer owns the requirement: providers whose
+    profile requires a session header (OpenCode Go) resolve the stable
+    per-session identity from the explicit ``--session-id`` argv value
+    first, then the ``AGENTIC_DEBUGGER_MODEL_SESSION_ID`` (or legacy
+    provider-scoped alias) environment channel.  A missing or malformed
+    identity fails closed for requiring providers; unrelated providers
+    always resolve to ``None`` and never emit the header.
+    """
+    try:
+        from agentic_debugger.application.provider_runtime import (
+            OPENCODE_SESSION_ENV_VAR,
+            TRANSPORT_SESSION_ENV_VAR,
+            is_valid_transport_session_id,
+            runtime_profile_for_kind,
+        )
+    except Exception:
+        return None
+    try:
+        profile = runtime_profile_for_kind(provider)
+    except Exception:
+        return None
+    if not getattr(profile, "requires_session_header", False):
+        return None
+    if type(explicit) is str and is_valid_transport_session_id(explicit.strip()):
+        return explicit.strip()
+    for var in (TRANSPORT_SESSION_ENV_VAR, OPENCODE_SESSION_ENV_VAR):
+        try:
+            candidate = os.environ.get(var)
+        except Exception:
+            candidate = None
+        if type(candidate) is str and is_valid_transport_session_id(candidate.strip()):
+            return candidate.strip()
+    raise ProviderDirectApiError(
+        "this provider requires a stable transport session identity "
+        "(x-opencode-session) but none was issued for this session",
+        kind="configuration",
+    )
+
+
+def _extra_inference_headers(
+    provider: str, session_id: Optional[str]
+) -> dict:
+    """Extra non-secret inference headers for one provider (profile-owned)."""
+    try:
+        from agentic_debugger.application.provider_runtime import (
+            extra_inference_headers,
+        )
+    except Exception as exc:
+        raise ProviderDirectApiError(
+            f"provider {provider!r} runtime profile is unavailable: {exc}",
+            kind="configuration",
+        ) from None
+    try:
+        # Generic providers ignore the session id and yield no extra
+        # headers; requiring providers fail closed when it is missing.
+        return dict(extra_inference_headers(provider, session_id))
+    except ValueError as exc:
+        raise ProviderDirectApiError(str(exc), kind="configuration") from None
+    except Exception as exc:
+        raise ProviderDirectApiError(
+            f"provider {provider!r} runtime headers are unavailable: {exc}",
+            kind="configuration",
+        ) from None
+
+
 def perform_inference(
     provider: str,
     model_id: str,
@@ -471,6 +542,7 @@ def perform_inference(
     engine: Optional[str] = None,
     base_url: Optional[str] = None,
     auth_mode: Optional[str] = None,
+    session_id: Optional[str] = None,
 ) -> tuple[str, Optional[dict]]:
     """Exactly ONE provider inference for one transport request.
 
@@ -479,6 +551,13 @@ def perform_inference(
     before calling here).  When omitted, the child resolves its own
     configured mode strictly — a missing/unreadable configuration fails
     closed instead of guessing Bearer.
+
+    ``session_id`` carries the stable non-secret transport/session
+    identity for providers whose runtime profile requires session-scoped
+    metadata (OpenCode Go ``x-opencode-session``).  When omitted the
+    adapter resolves it from the issued environment channel; requiring
+    providers fail closed when no valid identity exists, while generic
+    providers never send provider-specific headers.
     """
 
     from agentic_debugger.application.provider_connections import (
@@ -488,6 +567,17 @@ def perform_inference(
 
     verified_auth = auth_mode if auth_mode is not None else _load_child_auth_mode(provider)
     credential = _resolve_credential(provider, verified_auth)
+    # Session-scoped runtime metadata (profile-owned, non-secret): the
+    # explicit session id wins, otherwise the issued environment channel.
+    # Requiring providers fail closed here with zero HTTP when no valid
+    # identity exists; generic providers resolve to None (no extra wire).
+    if session_id is not None and type(session_id) is not str:
+        raise ProviderDirectApiError(
+            "transport session identity is invalid", kind="configuration"
+        )
+    explicit_session = session_id.strip() if type(session_id) is str and session_id.strip() else None
+    resolved_session = _resolve_transport_session_id(provider, explicit_session)
+    extra_headers = _extra_inference_headers(provider, resolved_session)
     path = inference_path_for(provider, protocol)
     payload = build_provider_payload(
         protocol,
@@ -516,6 +606,7 @@ def perform_inference(
             engine=engine,
             tls_signature_blocked=tls_blocked,
             auth_mode=verified_auth,
+            extra_headers=extra_headers or None,
         )
     except ProviderHttpError as exc:
         kind = {
@@ -575,6 +666,7 @@ def run_adapter(
     engine: Optional[str] = None,
     base_url: Optional[str] = None,
     auth_mode: Optional[str] = None,
+    session_id: Optional[str] = None,
 ) -> int:
     """Verify parent/child configuration identity, then run one inference.
 
@@ -585,6 +677,12 @@ def run_adapter(
     HTTP request.  Missing/corrupt/mismatched child metadata fails with
     a typed configuration error and zero network attempts.  Credentials
     never travel via argv.
+
+    ``session_id`` is the stable non-secret transport/session identity
+    for providers whose runtime profile requires session-scoped metadata
+    (OpenCode Go).  The parent may pass it explicitly; otherwise the
+    child resolves it from the issued environment channel.  Requiring
+    providers fail closed with zero HTTP when no valid identity exists.
     """
     if protocol not in ("chat_completions", "responses", "messages"):
         raise ProviderDirectApiError(
@@ -663,6 +761,7 @@ def run_adapter(
         engine=engine,
         base_url=verified_endpoint,
         auth_mode=verified_auth,
+        session_id=session_id,
     )
     response: dict[str, Any] = {
         "provider_completion_schema_version": PROVIDER_COMPLETION_SCHEMA_VERSION,
@@ -709,6 +808,16 @@ def main() -> None:
             "live config so parent, worker, and adapter agree byte-for-byte)."
         ),
     )
+    parser.add_argument(
+        "--session-id",
+        default=None,
+        help=(
+            "Stable non-secret transport session identity for providers "
+            "whose runtime profile requires session-scoped metadata "
+            "(OpenCode Go x-opencode-session). When omitted the adapter "
+            "resolves it from the issued environment channel."
+        ),
+    )
     args = parser.parse_args()
     try:
         raise SystemExit(
@@ -723,6 +832,7 @@ def main() -> None:
                 engine=args.engine,
                 base_url=args.base_url,
                 auth_mode=args.auth_mode,
+                session_id=args.session_id,
             )
         )
     except ProviderDirectApiError as exc:

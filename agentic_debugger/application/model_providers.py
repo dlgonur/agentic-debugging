@@ -331,6 +331,7 @@ def list_provider_models(
                         available=ok,
                         unavailable_reason=reason,
                         note=proto_note,
+                        protocol=m.protocol,
                     )
                 )
         elif cfg.transport_profile in (TRANSPORT_OPENCODE_GO, TRANSPORT_COMMANDCODE_GOAT, TRANSPORT_OLLAMA_CLOUD):
@@ -445,24 +446,54 @@ def _subscription_models(kind: str) -> List[ProviderModel]:
                             else "no direct API credential — connect in Model Providers (press m)"
                         ),
                         note=f"direct API · {m.protocol}" if m.protocol else None,
+                        protocol=m.protocol,
                     )
                 )
             return entries
         return []
 
     label = cfg.name if cfg else _PROVIDER_LABELS.get(kind, kind)
-    return [
-        ProviderModel(
-            kind=kind,
-            model_id=model_id,
-            display_name=format_model_display_name(model_id),
-            provider_label=label,
-            available=available,
-            unavailable_reason=reason,
-            note="direct API · chat_completions" if kind == PROVIDER_KIND_OLLAMA else None,
+    if profile == TRANSPORT_OPENCODE_GO:
+        try:
+            from agentic_debugger.application.provider_connections import (
+                resolve_opencode_go_protocol as _resolve_oc,
+            )
+        except Exception:
+            _resolve_oc = None  # type: ignore[assignment]
+    elif profile == TRANSPORT_COMMANDCODE_GOAT:
+        try:
+            from agentic_debugger.application.provider_connections import (
+                resolve_commandcode_protocol as _resolve_cc,
+            )
+        except Exception:
+            _resolve_cc = None  # type: ignore[assignment]
+    entries_out = []
+    for model_id in model_ids:
+        resolved_proto = None
+        try:
+            if profile == TRANSPORT_OPENCODE_GO and _resolve_oc is not None:
+                resolved_proto = _resolve_oc(model_id)
+            elif profile == TRANSPORT_COMMANDCODE_GOAT and _resolve_cc is not None:
+                resolved_proto = _resolve_cc(model_id)
+            elif profile == TRANSPORT_OLLAMA_CLOUD:
+                resolved_proto = "chat_completions"
+        except Exception:
+            resolved_proto = None
+        entries_out.append(
+            ProviderModel(
+                kind=kind,
+                model_id=model_id,
+                display_name=format_model_display_name(model_id),
+                provider_label=label,
+                available=available,
+                unavailable_reason=reason,
+                note="direct API · chat_completions" if kind == PROVIDER_KIND_OLLAMA else (
+                    f"direct API · {resolved_proto}" if resolved_proto else None
+                ),
+                protocol=resolved_proto,
+            )
         )
-        for model_id in model_ids
-    ]
+    return entries_out
 
 
 def _discovered_provider_models(kind: str) -> Optional[List[ProviderModel]]:
@@ -519,6 +550,7 @@ def _discovered_provider_models(kind: str) -> Optional[List[ProviderModel]]:
                 available=available,
                 unavailable_reason=unavailable_reason,
                 note=note,
+                protocol=item.protocol,
             )
         )
     return models

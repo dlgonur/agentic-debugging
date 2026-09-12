@@ -160,6 +160,8 @@ class ModelOption:
     detail: str = ""
     available: bool = True
     unavailable_reason: Optional[str] = None
+    protocol: Optional[str] = None
+    provider_label: Optional[str] = None
 
     @property
     def choice(self) -> ModelChoice:

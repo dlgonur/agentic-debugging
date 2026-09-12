@@ -378,6 +378,7 @@ class ModelGateway:
         binding: ModelBinding,
         credential_binding: Optional[Any] = None,
         credential_ticket: Optional[str] = None,
+        session_id: Optional[str] = None,
     ) -> Optional[Dict[str, str]]:
         """Adapter child credential environment (model channel only, V2-04).
 
@@ -389,6 +390,11 @@ class ModelGateway:
         no-auth and external-CLI-authority routes intentionally forward
         nothing; a direct route with a missing/stale authority FAILS
         CLOSED here rather than producing a no-credential environment.
+
+        ``session_id`` is the stable non-secret transport/session identity
+        for providers whose runtime profile requires session-scoped
+        metadata (OpenCode Go).  It is merged alongside the credential
+        channel; generic providers never receive provider-specific values.
 
         Repair 23: a retained ticket is inseparable from its binding (a
         ticket without its binding fails closed before materialization);
@@ -403,6 +409,7 @@ class ModelGateway:
             binding,
             credential_binding=credential_binding,
             credential_ticket=credential_ticket,
+            session_id=session_id,
         )
 
     def create_transport(
@@ -419,6 +426,7 @@ class ModelGateway:
         credential_binding: Optional[Any] = None,
         credential_ticket: Optional[str] = None,
         config_root: Optional[Any] = None,
+        session_id: Optional[str] = None,
     ) -> Tuple[Any, Any]:
         """Create the (CancellableJsonlCommandTransport, LiveModelConfig) pair.
 
@@ -429,6 +437,13 @@ class ModelGateway:
         is proven coherent with the ModelBinding (provider, runtime
         authority, auth mode, route/source compatibility) before any
         secret materialization.
+
+        ``session_id`` (optional): the stable non-secret transport/session
+        identity for providers whose runtime profile requires
+        session-scoped metadata (OpenCode Go ``x-opencode-session``).
+        Omitted identities are issued once per transport; supplied
+        identities must be well-formed and are reused verbatim across the
+        session's repeated requests.
         """
         return _transport_create(
             self,
@@ -441,4 +456,5 @@ class ModelGateway:
             credential_binding=credential_binding,
             credential_ticket=credential_ticket,
             config_root=config_root,
+            session_id=session_id,
         )
