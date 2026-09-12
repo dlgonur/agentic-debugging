@@ -4,11 +4,7 @@ Evidence-driven software repair for Python projects.
 
 ![Agentic Debugger terminal welcome screen](docs/assets/agentic-debugger-welcome.png)
 
-Agentic Debugger is a Python 3.11+ research prototype that combines a single
-controller, typed tools, bounded PDB sessions, disposable workspaces,
-unified-diff patching, immutable event journals, and an independent verifier.
-The terminal application exposes the same repair and replay path used by the
-research harness.
+Agentic Debugger is a Python 3.11+ research prototype: a single deterministic controller drives typed tools, bounded PDB sessions, disposable workspaces, unified-diff patching, immutable event journals, and an independent verifier.
 
 ## Highlights
 
@@ -22,11 +18,10 @@ research harness.
 ```powershell
 .\scripts\install_windows_alias.ps1     # install app-owned launcher once (Windows)
 agenticdebugger                         # launch from anywhere (PowerShell or CMD)
-agenticdebugger --doctor                # reports readiness; first curated task is offline demo
+agenticdebugger --doctor                # reports readiness without contacting providers
 ```
 
-`agenticdebugger` and canonical `agentic-debugger` share one entry point via an
-app-owned venv on User `PATH` (`pip install -e ".[app]"` also supported; `agentic debugger` unclaimed to avoid reserving `agentic`).
+Both names map to one entry point in an app-owned venv on User `PATH`. `pip install -e ".[app]"` also works; bare `agentic` is left unclaimed.
 
 Run the scientific demo directly:
 
@@ -55,23 +50,19 @@ task + policy
 The verifier is the correctness authority. A model, controller, or operator
 claim is never treated as proof of a repair.
 
+Sessions run as deterministic offline (no provider contacted), configured command-model, or Local Project Debug. Local Project repairs run in a disposable worktree; nothing reaches the source tree except through Apply To Project gates.
+
 ## Model providers
 
-Live execution is explicit. Model access routes through `ModelGateway` and user-configured providers (press `m`; fresh installs configure none). Credentials stay in
-`CredentialVault` and the OS secure store—never in source, argv, or evidence ([architecture](docs/architecture/model-providers-v1.md)).
-Model request size is provider-owned: Agentic Debugger sends the complete intended request and leaves size/context acceptance to the configured provider/transport; likewise, interactive/configured sessions have no total model-request, directive, or controller-step execution ceiling and progress counters are telemetry only.
+Live execution is explicit. Model access routes through `ModelGateway` and user-configured providers, including user-defined direct-API providers (press `m`; fresh installs configure none). Credentials stay in `CredentialVault` and the OS secure store — never in source, argv, or evidence ([architecture](docs/architecture/model-providers-v1.md)).
+Request-size authority belongs to the provider: oversized requests fail truthfully as provider errors, never as silent truncation. Interactive/configured sessions have no total model-request, directive, or step ceiling; progress counters are telemetry only.
 
 ## Current status
 
-The research cycle, Local Application V1, and V2 architecture campaign are
-complete. Release tag `v0.1.0` identifies the research release checkpoint;
-current source contains the accepted V2 architecture and later hygiene cleanup.
+The research cycle, Local Application V1, the V2 architecture campaign, and post-V2 Tasks 34 and 41-44 (token telemetry, CLI alias, universal execution eligibility, provider-owned request size, unbounded progress) are complete; see the [closeout](docs/project-closeout.md) (2026-09-10).
+Release tag `v0.1.0` marks the research release checkpoint.
 
-Selected accepted evidence includes a verifier-resolved real-provider product
-session, three verifier-resolved exact-PDB ladder tasks, two authoritative
-Level-32 resolutions in a frozen 15-model matrix, a leakage-clean base-14B
-5/5 result, and project-tuned 7B performance of 8/8 on task-disjoint QuixBugs
-validation. These results have different scopes and are not interchangeable.
+Accepted evidence includes a verifier-resolved real-provider product session, three verifier-resolved exact-PDB ladder tasks, two authoritative Level-32 resolutions in a frozen 15-model matrix, a leakage-clean base-14B 5/5, and a project-tuned 7B 8/8 on task-disjoint QuixBugs validation. Scopes differ; results are not interchangeable.
 See the [results and evidence index](docs/results-index.md) for evidence paths
 and mandatory qualifiers.
 
@@ -81,9 +72,12 @@ Verify the public evidence locally with:
 python scripts/verify_public_evidence.py --output public-evidence-attestation.json
 ```
 
-This gate checks a representative offline repair, independent verification,
-replay and cleanup, the frozen R6 chain of custody, deterministic professor
-trace regeneration, and leakage auditing. It does not rerun external campaigns.
+The gate covers one representative offline repair (verification, replay, cleanup) plus the frozen R6 chain of custody, trace regeneration, and leakage audit. It does not rerun external campaigns.
+
+## Limitations
+
+- Configured command-model sessions launch a user-configured local command with that executable's host capabilities; V1 does not isolate child-process network access.
+- BugsInPy external evaluation remains license-gated and unexecuted.
 
 ## Documentation
 
@@ -105,9 +99,7 @@ python -m pytest <affected-test-path> -q
 python -m compileall agentic_debugger scripts
 ```
 
-Generated runs, model checkpoints, provider credentials, external datasets,
-and review packages must not be committed. Real-provider, WSL, and
-license-gated dataset campaigns are not ordinary regression tests.
+Generated runs, model checkpoints, provider credentials, external datasets, and review packages must not be committed. Real-provider, WSL, and license-gated dataset campaigns are not ordinary regression tests.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution rules and
 [SECURITY.md](SECURITY.md) for private vulnerability reporting.
