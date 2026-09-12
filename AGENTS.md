@@ -109,6 +109,10 @@ change affects public evidence or its release claims. Remove generated smoke
 output after recording useful results. Do not contact providers or execute WSL
 or external-dataset campaigns as ordinary validation.
 
+- User-facing changes to installation, launcher/CLI commands, provider/model
+  setup, or primary session-start workflows must update README.md in the same
+  task when the documented flow changes.
+
 ## Git candidates and review transport
 
 - Work on a task branch or isolated worktree when needed to protect unrelated

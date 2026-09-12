@@ -52,12 +52,11 @@ FAMILY_ENTRY_POINTS = {
 
 REQUIRED_README_POINTERS = (
     "docs/architecture/local-application-v1.md",
+    "docs/architecture/model-providers-v1.md",
+    "docs/demo/guide.md",
     "docs/results-index.md",
-    "docs/final-report.md",
-    "docs/project-closeout.md",
-    "outdated/docs-archive/",
-    "outdated/docs-archive/status/README-historical-status-log-through-2026-08-07.md",
-    "experiments/README.md",
+    "CONTRIBUTING.md",
+    "SECURITY.md",
 )
 
 
@@ -114,14 +113,41 @@ def test_obsolete_master_plan_is_archived_not_at_root() -> None:
 def test_readme_navigation_pointers() -> None:
     missing = [pointer for pointer in REQUIRED_README_POINTERS if pointer not in README]
     assert missing == [], f"README missing navigation pointers: {missing}"
-    assert "Current status" in README
-    assert "docs/project-closeout.md" in README
-    assert "docs/final-report.md" in README
-    assert "docs/results-index.md" in README
+    for heading in (
+        "## What it does",
+        "## Quick start",
+        "## Using the app",
+        "## How a repair works",
+        "## More information",
+        "## Limitations",
+    ):
+        assert heading in README, f"README missing user-first heading: {heading}"
     assert (
-        "outdated/docs-archive/status/README-historical-status-log-through-2026-08-07.md"
-        in README
+        "![Agentic Debugger terminal welcome screen]"
+        "(docs/assets/agentic-debugger-welcome.png)" in README
     )
+    for marker in (
+        "Task 34",
+        "Tasks 41",
+        "ModelGateway",
+        "CredentialVault",
+        "chain-of-custody",
+        "5/5",
+        "8/8",
+    ):
+        assert marker not in README, f"README leaks maintainer history: {marker}"
+
+
+def test_readme_links_exist() -> None:
+    """Every repo-relative markdown link target in the README must exist."""
+    missing: list[str] = []
+    for raw in _markdown_link_targets(README):
+        if raw.startswith("http") or raw.startswith("#"):
+            continue
+        target = (REPO_ROOT / raw.split("#")[0]).resolve()
+        if not target.exists():
+            missing.append(raw)
+    assert missing == [], f"README links that do not exist: {missing}"
 
 
 def test_results_index_maps_accepted_boundaries() -> None:
