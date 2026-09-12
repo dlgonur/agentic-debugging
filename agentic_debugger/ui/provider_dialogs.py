@@ -169,7 +169,7 @@ class AddProviderDialogScreen(Screen):
             yield Static("", id="dialog-feedback")
             with Horizontal(id="dialog-actions-row"):
                 yield Button("Save & discover", id="btn-save-dialog", classes="primary-action")
-                yield Button("Cancel", id="btn-cancel-dialog")
+                yield Button("Cancel", id="btn-cancel-dialog", classes="secondary-action")
 
     def on_mount(self) -> None:
         self.query_one("#input-name", Input).focus()
@@ -397,7 +397,7 @@ class EditProviderDialogScreen(Screen):
             yield Static("", id="dialog-feedback")
             with Horizontal(id="dialog-actions-row"):
                 yield Button("Save changes", id="btn-save-dialog", classes="primary-action")
-                yield Button("Cancel", id="btn-cancel-dialog")
+                yield Button("Cancel", id="btn-cancel-dialog", classes="secondary-action")
 
     def on_mount(self) -> None:
         self.query_one("#input-name", Input).focus()
@@ -561,7 +561,7 @@ class AddManualModelDialogScreen(Screen):
             yield Static("", id="dialog-feedback")
             with Horizontal(id="dialog-actions-row"):
                 yield Button("Add model", id="btn-save-dialog", classes="primary-action")
-                yield Button("Cancel", id="btn-cancel-dialog")
+                yield Button("Cancel", id="btn-cancel-dialog", classes="secondary-action")
 
     def on_mount(self) -> None:
         self.query_one("#input-model-id", Input).focus()
@@ -616,7 +616,7 @@ class ConfirmDeleteProviderDialogScreen(Screen):
             yield Static("", id="dialog-feedback")
             with Horizontal(id="dialog-actions-row"):
                 yield Button("Delete provider", id="btn-confirm-delete", classes="danger-action")
-                yield Button("Cancel", id="btn-cancel-dialog")
+                yield Button("Cancel", id="btn-cancel-dialog", classes="secondary-action")
 
     def on_mount(self) -> None:
         self.query_one("#btn-cancel-dialog", Button).focus()

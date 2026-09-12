@@ -136,7 +136,7 @@ class ModelProvidersScreen(Screen):
                                         id=f"provider-select-{st.kind}",
                                         classes=f"provider-item-button{' -selected' if index == self._selected_index else ''}",
                                     )
-                        yield Button("+ Add provider", id="provider-add-button", classes="primary-action")
+                        yield Button("+ Add provider", id="provider-add-button", classes="secondary-action")
                     with VerticalScroll(id="provider-main-view"):
                         if config_error:
                             with Vertical(classes="provider-empty-panel", id="provider-empty-panel"):

@@ -808,7 +808,7 @@ ModelProvidersScreen, ProviderConnectionsScreen {
     max-width: 100%;
     height: 32;
     max-height: 100%;
-    border: round $primary;
+    border: round $line;
     background: $surface;
     padding: 1 2;
 }
@@ -824,14 +824,14 @@ ModelProvidersScreen, ProviderConnectionsScreen {
 #providers-title {
     width: 1fr;
     height: 1;
-    color: $primary;
+    color: $foreground;
     text-style: bold;
 }
 
 #providers-subtitle {
     width: auto;
     height: 1;
-    color: $foreground-muted;
+    color: $text-faint;
 }
 
 #providers-manager-body {
@@ -858,6 +858,8 @@ ModelProvidersScreen, ProviderConnectionsScreen {
     width: 100%;
     height: 1fr;
     scrollbar-size: 1 1;
+    scrollbar-color: $line;
+    scrollbar-background: $surface;
 }
 
 .providers-empty-text {
@@ -900,9 +902,9 @@ ModelProvidersScreen, ProviderConnectionsScreen {
 }
 
 .provider-item-button:focus, .provider-item-button.-selected {
-    background: $selection;
-    border: round $primary;
-    color: $primary;
+    background: $surface-raised;
+    border: round $line-strong;
+    color: $foreground;
     text-style: bold;
 }
 
@@ -911,14 +913,21 @@ ModelProvidersScreen, ProviderConnectionsScreen {
     height: 3;
     margin: 1 0 0 0;
     background: $surface;
-    border: round $primary;
-    color: $primary;
-    text-style: bold;
+    border: round $line;
+    color: $foreground-muted;
+    text-style: none;
+}
+
+#provider-add-button:hover {
+    background: $surface-raised;
+    color: $foreground;
+    border: round $line-strong;
 }
 
 #provider-add-button:focus {
-    background: $primary;
-    color: $background;
+    background: $surface-raised;
+    color: $foreground;
+    border: round $line-strong;
 }
 
 #provider-main-view {
@@ -926,6 +935,8 @@ ModelProvidersScreen, ProviderConnectionsScreen {
     height: 100%;
     padding: 0 0 0 2;
     scrollbar-size: 1 1;
+    scrollbar-color: $line;
+    scrollbar-background: $surface;
 }
 
 .provider-panel {
@@ -954,6 +965,8 @@ ModelProvidersScreen, ProviderConnectionsScreen {
     width: 100%;
     height: auto;
     margin: 0 0 1 0;
+    padding: 0 0 1 0;
+    border-bottom: solid $line;
 }
 
 .provider-action-button {
@@ -963,24 +976,54 @@ ModelProvidersScreen, ProviderConnectionsScreen {
     padding: 0 1;
     background: $surface;
     border: round $line;
-    color: $foreground;
+    color: $foreground-muted;
     text-wrap: nowrap;
 }
 
+.provider-action-button:hover {
+    background: $surface-raised;
+    color: $foreground;
+    border: round $line-strong;
+}
+
 .provider-action-button:focus {
-    background: $selection;
-    color: $primary;
-    border: round $primary;
+    background: $surface-raised;
+    color: $foreground;
+    border: round $line-strong;
+}
+
+.provider-action-button.primary-action {
+    background: $primary;
+    border: none;
+    color: $background;
+    text-style: bold;
+}
+
+.provider-action-button.primary-action:hover,
+.provider-action-button.primary-action:focus {
+    background: $primary;
+    border: none;
+    color: $background;
+    text-style: bold underline;
 }
 
 .danger-action {
     border: round $line;
-    color: $foreground-muted;
+    background: $surface;
+    color: $error;
+    text-style: none;
+}
+
+.danger-action:hover {
+    background: $surface-raised;
+    border: round $line-strong;
+    color: $error;
 }
 
 .danger-action:focus {
-    background: $line-strong;
-    color: $foreground;
+    background: $surface-raised;
+    border: round $line-strong;
+    color: $error;
 }
 
 .models-header {
@@ -1011,10 +1054,12 @@ ModelProvidersScreen, ProviderConnectionsScreen {
     padding: 0 1;
     margin: 0 0 1 0;
     scrollbar-size: 1 1;
+    scrollbar-color: $line;
+    scrollbar-background: $background;
 }
 
 .models-box:focus {
-    border: round $primary;
+    border: round $line-strong;
 }
 
 .models-list-text {
@@ -1035,7 +1080,7 @@ ModelProvidersScreen, ProviderConnectionsScreen {
     width: 100%;
     height: 1;
     padding: 0;
-    color: $foreground-muted;
+    color: $text-faint;
     text-wrap: nowrap;
     overflow: hidden;
 }
@@ -1044,7 +1089,7 @@ ModelProvidersScreen, ProviderConnectionsScreen {
 
 AddProviderDialogScreen, EditProviderDialogScreen, AddManualModelDialogScreen, ConfirmDeleteProviderDialogScreen, ModelCatalogBrowserScreen {
     align: center middle;
-    background: $background 80%;
+    background: $background 90%;
 }
 
 #catalog-browser-card {
@@ -1053,7 +1098,7 @@ AddProviderDialogScreen, EditProviderDialogScreen, AddManualModelDialogScreen, C
     height: 24;
     max-height: 90%;
     background: $surface;
-    border: round $primary;
+    border: round $line;
     padding: 1 2;
 }
 
@@ -1066,7 +1111,7 @@ AddProviderDialogScreen, EditProviderDialogScreen, AddManualModelDialogScreen, C
 #catalog-title {
     width: 1fr;
     height: 1;
-    color: $primary;
+    color: $foreground;
     text-style: bold;
 }
 
@@ -1087,7 +1132,7 @@ AddProviderDialogScreen, EditProviderDialogScreen, AddManualModelDialogScreen, C
 }
 
 #catalog-filter-input:focus {
-    border: round $primary;
+    border: round $line-strong;
 }
 
 #catalog-models-list {
@@ -1097,6 +1142,12 @@ AddProviderDialogScreen, EditProviderDialogScreen, AddManualModelDialogScreen, C
     border: round $line;
     margin: 0 0 1 0;
     scrollbar-size: 1 1;
+    scrollbar-color: $line;
+    scrollbar-background: $background;
+}
+
+#catalog-models-list:focus {
+    border: round $line-strong;
 }
 
 #catalog-browser-footer {
@@ -1121,24 +1172,29 @@ AddProviderDialogScreen, EditProviderDialogScreen, AddManualModelDialogScreen, C
     color: $foreground-muted;
 }
 
+.catalog-close-btn:hover {
+    background: $surface-raised;
+    color: $foreground;
+}
+
 .catalog-close-btn:focus {
-    background: $selection;
-    color: $primary;
-    text-style: bold;
+    background: $surface-raised;
+    color: $foreground;
+    text-style: none;
 }
 
 #provider-dialog-card {
     width: 70;
     height: auto;
     background: $surface;
-    border: round $primary;
+    border: round $line;
     padding: 1 2;
 }
 
 #dialog-title {
     width: 100%;
     height: 1;
-    color: $primary;
+    color: $foreground;
     text-style: bold;
     margin: 0 0 1 0;
 }
@@ -1146,7 +1202,6 @@ AddProviderDialogScreen, EditProviderDialogScreen, AddManualModelDialogScreen, C
 .dialog-label {
     height: 1;
     color: $foreground-muted;
-    text-style: bold;
     margin: 1 0 0 0;
 }
 
@@ -1159,15 +1214,19 @@ AddProviderDialogScreen, EditProviderDialogScreen, AddManualModelDialogScreen, C
     color: $foreground;
 }
 
+#input-name:focus, #input-url:focus, #input-key:focus, #input-model-id:focus, #input-model-disp:focus {
+    border: round $line-strong;
+}
+
 .dialog-cred-status {
     height: auto;
     color: $foreground-muted;
     margin: 0 0 1 0;
 }
 
-#format-buttons-row {
+#format-buttons-row, #auth-buttons-row, #catalog-buttons-row, #profile-buttons-row {
     width: 100%;
-    height: 3;
+    height: auto;
     margin: 0 0 1 0;
 }
 
@@ -1178,13 +1237,19 @@ AddProviderDialogScreen, EditProviderDialogScreen, AddManualModelDialogScreen, C
     padding: 0 1;
     background: $surface;
     border: round $line;
+    color: $foreground-muted;
+}
+
+.fmt-btn:hover {
+    background: $surface-raised;
+    border: round $line-strong;
     color: $foreground;
 }
 
 .fmt-btn:focus, .fmt-btn.-selected {
-    background: $selection;
-    border: round $primary;
-    color: $primary;
+    background: $surface-raised;
+    border: round $line-strong;
+    color: $foreground;
     text-style: bold;
 }
 
@@ -1199,4 +1264,39 @@ AddProviderDialogScreen, EditProviderDialogScreen, AddManualModelDialogScreen, C
     width: 100%;
     height: 3;
     margin: 1 0 0 0;
+}
+
+#dialog-actions-row .secondary-action {
+    background: $surface;
+    border: none;
+    color: $foreground-muted;
+    text-style: none;
+}
+
+#dialog-actions-row .danger-action {
+    width: auto;
+    min-width: 22;
+    height: 3;
+    padding: 0 2;
+    margin: 0 1 0 0;
+    background: $surface;
+    border: round $line;
+    color: $error;
+    text-style: bold;
+}
+
+#dialog-actions-row .danger-action:hover,
+#dialog-actions-row .danger-action:focus {
+    background: $surface-raised;
+    border: round $line-strong;
+    color: $error;
+    text-style: bold;
+}
+
+#dialog-actions-row .secondary-action:hover,
+#dialog-actions-row .secondary-action:focus {
+    background: $surface-raised;
+    border: none;
+    color: $foreground;
+    text-style: none;
 }
