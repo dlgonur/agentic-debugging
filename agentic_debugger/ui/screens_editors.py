@@ -19,7 +19,7 @@ from typing import Any, Callable, Optional
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import Screen
 from textual.widgets import Button, Input, OptionList, Static, TextArea
 
@@ -625,6 +625,509 @@ class BugDescriptionEditorScreen(Screen):
         if getattr(event.button, "id", None) == "bug-save-button":
             self.action_save()
             event.stop()
+
+
+class ProjectEnvBuilderScreen(Screen):
+    """Inline multi-field ProjEnv builder (primary) + DSL advanced toggle.
+
+    One row per declaration: name Input + required toggle + secret toggle.
+    Every builder state serializes to the DSL string and passes through the
+    existing ``parse_project_env_declarations`` validator — no second
+    validation implementation, no spec change, names-only model unchanged
+    (no values entered, displayed, or persisted).
+
+    Keyboard contract:
+        Tab / Shift+Tab => move between name inputs and toggles
+        Enter on a toggle/delete/add/save button => activate it
+        (Enter inside a name Input moves focus forward, never saves)
+        Ctrl+Enter => save (even when a name Input is focused)
+        Esc => cancel (no mutation)
+    """
+
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel"),
+        Binding("ctrl+enter", "save", "Save", show=False),
+    ]
+
+    def __init__(
+        self,
+        *,
+        initial_text: str,
+        on_save: Callable[[Optional[str]], None],
+    ) -> None:
+        super().__init__()
+        from agentic_debugger.ui.session_config import dsl_to_projenv_entries
+
+        try:
+            initial = dsl_to_projenv_entries(initial_text or "")
+        except ValueError:
+            initial = ()
+        # Mutable working copy: list of {uid, name, required, secret}.
+        # Uids are stable widget identities so Add/Delete never reuse an
+        # id still pending removal (avoids duplicate-id races).
+        self._next_uid = 0
+        self._rows: list[dict[str, Any]] = []
+        for entry in initial:
+            self._rows.append(
+                {
+                    "uid": self._next_uid,
+                    "name": entry.name,
+                    "required": entry.required,
+                    "secret": entry.secret,
+                }
+            )
+            self._next_uid += 1
+        self._on_save = on_save
+        self._title_text = "Project environment"
+        try:
+            from agentic_debugger.ui.setup_display import PROJENV_BUILDER_CAPTION
+
+            self._caption_text = PROJENV_BUILDER_CAPTION
+        except Exception:
+            self._caption_text = (
+                "Declare variable NAMES to import — names only, values never stored."
+            )
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="projenv-dialog"):
+            yield Static(self._title_text, id="projenv-title")
+            yield Static(self._caption_text, id="projenv-caption")
+            with VerticalScroll(id="projenv-rows"):
+                pass
+            yield Static("", id="projenv-error")
+            yield Static("", id="projenv-count")
+            with Horizontal(id="projenv-actions"):
+                yield Button("Add row", id="projenv-add", classes="secondary-action")
+                yield Button("Edit as text", id="projenv-dsl", classes="secondary-action")
+                yield Button("Save", id="projenv-save", classes="primary-action")
+                yield Button("Cancel", id="projenv-cancel", classes="secondary-action")
+            yield Static(
+                "Tab move · Enter toggle · Ctrl+Enter save · Esc cancel",
+                id="projenv-hint",
+            )
+
+    def on_mount(self) -> None:
+        self._rebuild_rows_full()
+        self._refresh_status()
+        # Focus first name input, else Add.
+        try:
+            if self._rows:
+                self.query_one(f"#projenv-name-{self._rows[0]['uid']}", Input).focus()
+            else:
+                self.query_one("#projenv-add", Button).focus()
+        except Exception:
+            pass
+
+    # -- row model ------------------------------------------------------
+
+    def _sync_names_from_inputs(self) -> None:
+        """Copy typed Input values into ``self._rows`` (no widget churn)."""
+        for row in self._rows:
+            try:
+                inp = self.query_one(f"#projenv-name-{row['uid']}", Input)
+                row["name"] = inp.value
+            except Exception:
+                pass
+
+    def _current_entries(self) -> list[Any]:
+        """Read current UI state (Inputs + toggle flags) as entries."""
+        from agentic_debugger.ui.session_config import ProjEnvEntry
+
+        self._sync_names_from_inputs()
+        return [
+            ProjEnvEntry(
+                name=str(row.get("name", "")),
+                required=bool(row.get("required", True)),
+                secret=bool(row.get("secret", False)),
+            )
+            for row in self._rows
+        ]
+
+    def _mount_one_row(self, row: dict[str, Any], position: int) -> None:
+        """Mount a single row widget (incremental; no rebuild)."""
+        try:
+            container = self.query_one("#projenv-rows", VerticalScroll)
+        except Exception:
+            return
+        # Drop the empty-state hint once the first row arrives.
+        try:
+            empty = container.query_one("#projenv-empty", Static)
+            empty.remove()
+        except Exception:
+            pass
+        uid = row["uid"]
+        req_label = "required" if row.get("required", True) else "optional"
+        sec_label = "secret" if row.get("secret", False) else "inherit"
+        try:
+            container.mount(
+                Horizontal(
+                    Static(f"{position}.", id=f"projenv-num-{uid}"),
+                    Input(
+                        value=str(row.get("name", "")),
+                        placeholder="NAME (e.g. FOO)",
+                        id=f"projenv-name-{uid}",
+                    ),
+                    Button(req_label, id=f"projenv-req-{uid}"),
+                    Button(sec_label, id=f"projenv-sec-{uid}"),
+                    Button("Del", id=f"projenv-del-{uid}"),
+                    id=f"projenv-row-{uid}",
+                    classes="projenv-row",
+                )
+            )
+        except Exception:
+            pass
+
+    def _renumber_rows(self) -> None:
+        """Refresh 1-based position labels after Add/Delete (no rebuild)."""
+        for position, row in enumerate(self._rows, start=1):
+            try:
+                num = self.query_one(f"#projenv-num-{row['uid']}", Static)
+                num.update(f"{position}.")
+            except Exception:
+                pass
+
+    def _rebuild_rows_full(self) -> None:
+        """Recreate all row widgets (mount + DSL bulk load only)."""
+        try:
+            container = self.query_one("#projenv-rows", VerticalScroll)
+        except Exception:
+            return
+        try:
+            container.remove_children()
+        except Exception:
+            try:
+                for child in list(container.children):
+                    try:
+                        child.remove()
+                    except Exception:
+                        pass
+            except Exception:
+                return
+        if not self._rows:
+            try:
+                container.mount(
+                    Static(
+                        "No declarations (optional) — Add row or Edit as text.",
+                        id="projenv-empty",
+                    )
+                )
+            except Exception:
+                pass
+            return
+        for position, row in enumerate(self._rows, start=1):
+            uid = row["uid"]
+            req_label = "required" if row.get("required", True) else "optional"
+            sec_label = "secret" if row.get("secret", False) else "inherit"
+            try:
+                container.mount(
+                    Horizontal(
+                        Static(f"{position}.", id=f"projenv-num-{uid}"),
+                        Input(
+                            value=str(row.get("name", "")),
+                            placeholder="NAME (e.g. FOO)",
+                            id=f"projenv-name-{uid}",
+                        ),
+                        Button(req_label, id=f"projenv-req-{uid}"),
+                        Button(sec_label, id=f"projenv-sec-{uid}"),
+                        Button("Del", id=f"projenv-del-{uid}"),
+                        id=f"projenv-row-{uid}",
+                        classes="projenv-row",
+                    )
+                )
+            except Exception:
+                pass
+
+    # Backwards-compat for earlier drafts/tests: full rebuild entry point.
+    def _rebuild_rows(self) -> None:
+        self._sync_names_from_inputs()
+        self._rebuild_rows_full()
+
+    def _refresh_status(self) -> None:
+        """Update inline error + count lines from the single validator."""
+        try:
+            from agentic_debugger.ui.session_config import projenv_entries_error
+            from agentic_debugger.ui.setup_display import projenv_builder_count_label
+        except Exception:
+            return
+        try:
+            entries = self._current_entries()
+        except Exception:
+            return
+        try:
+            error = projenv_entries_error(entries)
+        except Exception as exc:
+            error = str(exc)
+        try:
+            count = projenv_builder_count_label(entries)
+        except Exception:
+            count = ""
+        try:
+            err_widget = self.query_one("#projenv-error", Static)
+            if error:
+                err_widget.update(f"[{ERROR}]{_markup_escape(error)}[/]")
+            else:
+                err_widget.update("")
+        except Exception:
+            pass
+        try:
+            self.query_one("#projenv-count", Static).update(
+                f"[{FAINT}]{_markup_escape(count)}[/]" if count else ""
+            )
+        except Exception:
+            pass
+
+    # -- events ---------------------------------------------------------
+
+    def on_input_changed(self, event: Any) -> None:
+        try:
+            control_id = getattr(getattr(event, "control", None), "id", "") or ""
+        except Exception:
+            control_id = ""
+        if control_id.startswith("projenv-name-"):
+            self._refresh_status()
+
+    def _row_by_uid(self, uid: int) -> Optional[dict[str, Any]]:
+        for row in self._rows:
+            if row.get("uid") == uid:
+                return row
+        return None
+
+    def _position_of_uid(self, uid: int) -> Optional[int]:
+        for position, row in enumerate(self._rows):
+            if row.get("uid") == uid:
+                return position
+        return None
+
+    def on_button_pressed(self, event: Any) -> None:
+        bid = getattr(event.button, "id", "") or ""
+        if bid.startswith("projenv-req-"):
+            try:
+                uid = int(bid.rsplit("-", 1)[-1])
+            except ValueError:
+                return
+            # Sync names so toggling never drops typed input.
+            self._sync_names_from_inputs()
+            row = self._row_by_uid(uid)
+            if row is None:
+                return
+            row["required"] = not row.get("required", True)
+            try:
+                event.button.label = "required" if row["required"] else "optional"
+            except Exception:
+                pass
+            self._refresh_status()
+            event.stop()
+            return
+        if bid.startswith("projenv-sec-"):
+            try:
+                uid = int(bid.rsplit("-", 1)[-1])
+            except ValueError:
+                return
+            self._sync_names_from_inputs()
+            row = self._row_by_uid(uid)
+            if row is None:
+                return
+            row["secret"] = not row.get("secret", False)
+            try:
+                event.button.label = "secret" if row["secret"] else "inherit"
+            except Exception:
+                pass
+            self._refresh_status()
+            event.stop()
+            return
+        if bid.startswith("projenv-del-"):
+            try:
+                uid = int(bid.rsplit("-", 1)[-1])
+            except ValueError:
+                return
+            self._sync_names_from_inputs()
+            position = self._position_of_uid(uid)
+            self._rows = [row for row in self._rows if row.get("uid") != uid]
+            # Remove only this row's widget (no full rebuild → no id races).
+            try:
+                self.query_one(f"#projenv-row-{uid}").remove()
+            except Exception:
+                pass
+            if not self._rows:
+                try:
+                    container = self.query_one("#projenv-rows", VerticalScroll)
+                    container.mount(
+                        Static(
+                            "No declarations (optional) — Add row or Edit as text.",
+                            id="projenv-empty",
+                        )
+                    )
+                except Exception:
+                    pass
+            else:
+                self._renumber_rows()
+            self._refresh_status()
+            try:
+                if self._rows:
+                    nxt = min(position if position is not None else 0, len(self._rows) - 1)
+                    self.query_one(
+                        f"#projenv-name-{self._rows[nxt]['uid']}", Input
+                    ).focus()
+                else:
+                    self.query_one("#projenv-add", Button).focus()
+            except Exception:
+                pass
+            event.stop()
+            return
+        if bid == "projenv-add":
+            self._sync_names_from_inputs()
+            row: dict[str, Any] = {
+                "uid": self._next_uid,
+                "name": "",
+                "required": True,
+                "secret": False,
+            }
+            self._next_uid += 1
+            self._rows.append(row)
+            self._mount_one_row(row, len(self._rows))
+            self._refresh_status()
+            try:
+                self.query_one(f"#projenv-name-{row['uid']}", Input).focus()
+            except Exception:
+                pass
+            event.stop()
+            return
+        if bid == "projenv-dsl":
+            self._open_dsl_editor()
+            event.stop()
+            return
+        if bid == "projenv-save":
+            self.action_save()
+            event.stop()
+            return
+        if bid == "projenv-cancel":
+            self.action_cancel()
+            event.stop()
+            return
+
+    def on_key(self, event: Any) -> None:
+        # Enter inside a name Input moves focus forward (never saves); toggle
+        # buttons keep native Enter-to-activate.  Ctrl+Enter is bound to save.
+        try:
+            if getattr(event, "key", None) == "enter":
+                focused = getattr(self, "focused", None)
+                fid = getattr(focused, "id", "") or ""
+                if fid.startswith("projenv-name-"):
+                    try:
+                        uid = int(fid.rsplit("-", 1)[-1])
+                        position = self._position_of_uid(uid)
+                        if position is not None and position + 1 < len(self._rows):
+                            nxt_uid = self._rows[position + 1]["uid"]
+                            self.query_one(f"#projenv-name-{nxt_uid}", Input).focus()
+                        else:
+                            self.query_one("#projenv-add", Button).focus()
+                    except Exception:
+                        pass
+                    event.prevent_default()
+                    event.stop()
+        except Exception:
+            pass
+
+    # -- DSL advanced toggle --------------------------------------------
+
+    def _open_dsl_editor(self) -> None:
+        from agentic_debugger.ui.session_config import projenv_entries_to_dsl
+
+        try:
+            entries = self._current_entries()
+            dsl = projenv_entries_to_dsl(entries)
+        except Exception:
+            dsl = ""
+        self.app.push_screen(
+            SingleLineFieldEditorScreen(
+                title="Project env names (DSL; e.g. FOO, BAR?, secret:DB_URL — names only)",
+                current=dsl,
+                on_save=self._on_dsl_saved,
+                placeholder="FOO, BAR?, secret:DB_URL",
+                caption="Advanced DSL — comma-separated NAMES. Builder ↔ text never loses or reorders.",
+            )
+        )
+
+    def _on_dsl_saved(self, value: Optional[str]) -> None:
+        if value is None:
+            # DSL cancelled: stay in the builder unchanged.
+            try:
+                if self._rows:
+                    self.query_one(
+                        f"#projenv-name-{self._rows[0]['uid']}", Input
+                    ).focus()
+            except Exception:
+                pass
+            return
+        from agentic_debugger.ui.session_config import dsl_to_projenv_entries
+
+        try:
+            parsed = dsl_to_projenv_entries(value.strip())
+        except ValueError:
+            parsed = ()
+        self._rows = []
+        for entry in parsed:
+            self._rows.append(
+                {
+                    "uid": self._next_uid,
+                    "name": entry.name,
+                    "required": entry.required,
+                    "secret": entry.secret,
+                }
+            )
+            self._next_uid += 1
+        self._rebuild_rows_full()
+        self._refresh_status()
+        try:
+            if self._rows:
+                self.query_one(
+                    f"#projenv-name-{self._rows[0]['uid']}", Input
+                ).focus()
+            else:
+                self.query_one("#projenv-add", Button).focus()
+        except Exception:
+            pass
+
+    # -- save / cancel ---------------------------------------------------
+
+    def action_save(self) -> None:
+        from agentic_debugger.ui.session_config import (
+            projenv_entries_error,
+            projenv_entries_to_dsl,
+        )
+
+        entries = self._current_entries()
+        error = None
+        try:
+            error = projenv_entries_error(entries)
+        except Exception as exc:
+            error = str(exc)
+        # Empty names are builder affordance errors: force fill-or-delete
+        # instead of persisting a phantom (the DSL validator skips empty
+        # tokens, so they could never block readiness honestly).
+        if error and "empty variable name" in error:
+            self._refresh_status()
+            try:
+                # Focus the first empty row for immediate repair.
+                for row in self._rows:
+                    if not str(row.get("name", "")).strip():
+                        self.query_one(f"#projenv-name-{row['uid']}", Input).focus()
+                        break
+            except Exception:
+                pass
+            return
+        # All other states (valid or invalid) serialize to the DSL string so
+        # the existing ValueError → Issue readiness path remains the gate.
+        try:
+            dsl = projenv_entries_to_dsl(entries)
+        except Exception:
+            dsl = ""
+        self.app.pop_screen()
+        self._on_save(dsl.strip())
+
+    def action_cancel(self) -> None:
+        self.app.pop_screen()
+        self._on_save(None)
 
 
 # Backwards-compat alias: the legacy tiny upper-left editor is removed.

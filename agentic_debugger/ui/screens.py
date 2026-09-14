@@ -34,6 +34,7 @@ from agentic_debugger.ui.screens_editors import (
     BugDescriptionEditorScreen,
     ChoiceOption,
     ChoicePickerScreen,
+    ProjectEnvBuilderScreen,
     SessionSettingRow,
     SingleLineEditorInput,
     SingleLineFieldEditorScreen,

@@ -43,6 +43,29 @@ APPLY_ELIGIBILITY_CAPTION = (
     "(needs 1/1 F2P + 1/1 P2P)."
 )
 
+# ProjEnv builder affordance (A2): builder is primary, single-line DSL is
+# the advanced toggle.  Names-only model, same validator, no values.
+PROJENV_BUILDER_CAPTION = (
+    "Declare variable NAMES to import (e.g. FOO, BAR?, secret:DB_URL) — "
+    "names only, values never stored or shown."
+)
+
+PROJENV_BUILDER_DSL_HINT = "Advanced: edit as text (DSL) — comma-separated NAMES."
+
+
+def projenv_builder_count_label(entries) -> str:
+    """One safe count line for builder rows (never values)."""
+    inherit = sum(1 for entry in entries or () if not entry.secret)
+    secrets = sum(1 for entry in entries or () if entry.secret)
+    if not inherit and not secrets:
+        return "No declarations (optional) · max 32/category"
+    parts = []
+    if inherit:
+        parts.append(f"{inherit} inherit")
+    if secrets:
+        parts.append(f"{secrets} secret")
+    return " · ".join(parts) + " (max 32/category)"
+
 
 def local_context_notes_text(screen) -> str:
     """One-line context notes replacing Task/Debugger rows when Local.

@@ -562,6 +562,149 @@ SingleLineFieldEditorScreen, _SingleLineEditorScreen {
     color: $error;
 }
 
+/* -- ProjEnv inline builder (A2: primary; DSL is the advanced toggle) ---- */
+
+ProjectEnvBuilderScreen {
+    align: center middle;
+    background: $background 90%;
+}
+
+#projenv-dialog {
+    width: 70;
+    max-width: 90%;
+    height: auto;
+    max-height: 90%;
+    padding: 1 2;
+    background: $surface;
+    border: round $line;
+}
+
+#projenv-title {
+    height: 1;
+    margin: 0 0 1 0;
+    color: $primary;
+    text-style: bold;
+}
+
+#projenv-caption {
+    height: auto;
+    color: $foreground-muted;
+    margin: 0 0 1 0;
+}
+
+#projenv-rows {
+    width: 1fr;
+    height: auto;
+    min-height: 1;
+    max-height: 10;
+    background: $surface;
+    scrollbar-size: 1 1;
+    scrollbar-color: $line-strong;
+    scrollbar-background: $surface;
+    margin: 0 0 1 0;
+}
+
+#projenv-empty {
+    height: 1;
+    color: $foreground-muted;
+}
+
+.projenv-row {
+    width: 1fr;
+    height: 1;
+    margin: 0 0 1 0;
+    layout: horizontal;
+}
+
+.projenv-row Static {
+    width: 3;
+    height: 1;
+    color: $foreground-muted;
+    padding: 0;
+}
+
+.projenv-row Input {
+    width: 1fr;
+    height: 1;
+    min-height: 1;
+    background: $background;
+    color: $foreground;
+    border: none;
+    padding: 0 1;
+}
+
+.projenv-row Input:focus {
+    border: none;
+    background: $selection;
+}
+
+.projenv-row Button {
+    width: auto;
+    min-width: 8;
+    height: 1;
+    min-height: 1;
+    margin: 0 0 0 1;
+    padding: 0 1;
+    background: $surface-raised;
+    border: none;
+    color: $foreground;
+}
+
+.projenv-row Button:hover {
+    background: $selection;
+    border: none;
+}
+
+.projenv-row Button:focus {
+    background: $selection;
+    border: none;
+    text-style: bold underline;
+}
+
+#projenv-error {
+    height: auto;
+    min-height: 1;
+    max-height: 3;
+    color: $error;
+    margin: 0 0 1 0;
+}
+
+#projenv-count {
+    height: 1;
+    color: $foreground-muted;
+    margin: 0 0 1 0;
+}
+
+#projenv-actions {
+    width: 1fr;
+    height: 1;
+    min-height: 1;
+    layout: horizontal;
+    margin: 0 0 1 0;
+}
+
+#projenv-actions Button {
+    width: auto;
+    min-width: 10;
+    height: 1;
+    min-height: 1;
+    margin: 0 1 0 0;
+    padding: 0 1;
+}
+
+#projenv-hint {
+    height: 1;
+    color: $foreground-muted;
+}
+
+/* Narrow terminals: builder rows stack toggles below the name so nothing
+   clips the right edge at 80 cols; the dialog keeps title + caption +
+   error + count + actions reachable without horizontal scroll. */
+#projenv-dialog.narrow .projenv-row {
+    height: auto;
+    layout: vertical;
+}
+
 /* -- workspace ----------------------------------------------------------- */
 
 #workspace-body {

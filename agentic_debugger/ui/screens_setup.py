@@ -35,6 +35,7 @@ from agentic_debugger.ui.screens_editors import (
     BugDescriptionEditorScreen,
     ChoiceOption,
     ChoicePickerScreen,
+    ProjectEnvBuilderScreen,
     SessionSettingRow,
     SingleLineFieldEditorScreen,
     TimeLimitEditorScreen,
@@ -456,11 +457,7 @@ class StartSessionScreen(Screen):
                 caption=APPLY_ELIGIBILITY_CAPTION,
             )
         elif row_key == ROW_PROJECT_ENV:
-            self._open_text_editor(
-                "Project env names (optional; e.g. FOO, BAR?, secret:DB_URL — names only, values never stored)",
-                self._config.project_env_text or "",
-                self._on_project_env_saved,
-            )
+            self._open_project_env_builder()
         elif row_key == ROW_MODEL:
             self._open_model_picker()
         elif row_key == ROW_DEBUGGER:
@@ -597,6 +594,21 @@ class StartSessionScreen(Screen):
         self._config = replace(self._config, project_env_text=value.strip())
         self.render_state()
         self._focus_row(ROW_PROJECT_ENV)
+
+    def _open_project_env_builder(self) -> None:
+        """ProjEnv opens the inline builder by default (A2).
+
+        The single-line DSL remains as the advanced toggle inside the
+        builder (Edit as text), with round-trip parity both ways.  Every
+        builder state serializes to the DSL string; the existing
+        ValueError → Issue readiness path stays the gate.
+        """
+        self.app.push_screen(
+            ProjectEnvBuilderScreen(
+                initial_text=self._config.project_env_text or "",
+                on_save=self._on_project_env_saved,
+            )
+        )
 
     def _open_text_editor(
         self,

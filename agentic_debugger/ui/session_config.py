@@ -392,6 +392,148 @@ def model_compatibility(
 # shown, journaled, or fingerprinted by Agentic Debugger.
 
 
+@dataclass(frozen=True)
+class ProjEnvEntry:
+    """One ProjEnv builder row: a declared variable NAME plus flags.
+
+    Names-only model: values are never entered, displayed, or persisted.
+    ``required`` False means the ``?`` optional suffix; ``secret`` True
+    means the ``secret:`` prefix.  This is presentation state only — every
+    builder state serializes via :func:`projenv_entries_to_dsl` and is
+    validated through :func:`parse_project_env_declarations` (the single
+    validator), never by a second implementation.
+    """
+
+    name: str
+    required: bool = True
+    secret: bool = False
+
+
+def projenv_entries_to_dsl(entries) -> str:
+    """Serialize builder rows to the single-line DSL string (order-preserving).
+
+    Each entry becomes ``[secret:]NAME[?]``; entries join with ``", "``.
+    Entries with an empty/whitespace-only name carry no declaration and are
+    skipped (the builder flags them inline as row errors instead of
+    persisting a phantom declaration).  The returned string always passes
+    through :func:`parse_project_env_declarations` for validation.
+    """
+    parts: list[str] = []
+    for entry in entries or ():
+        name = entry.name.strip() if isinstance(entry.name, str) else ""
+        if not name:
+            continue
+        prefix = "secret:" if entry.secret else ""
+        suffix = "" if entry.required else "?"
+        parts.append(f"{prefix}{name}{suffix}")
+    return ", ".join(parts)
+
+
+def dsl_to_projenv_entries(text: str) -> Tuple[ProjEnvEntry, ...]:
+    """Parse DSL text to ordered builder rows (syntactic split, no validation).
+
+    Preserves declaration order and ``secret:``/``?`` flags so builder ↔
+    DSL switching never loses or reorders declarations.  Empty tokens are
+    skipped (as in :func:`parse_project_env_declarations`); raw names are
+    kept verbatim (including ``=``/spaces) so invalid declarations survive
+    the switch and surface inline in the builder.  Semantic validity is
+    always decided later by :func:`parse_project_env_declarations`.
+    """
+    if not isinstance(text, str):
+        raise ValueError("project environment declarations must be text")
+    if not text.strip():
+        return ()
+    entries: list[ProjEnvEntry] = []
+    for raw_token in text.split(","):
+        token = raw_token.strip()
+        if not token:
+            continue
+        is_secret = False
+        if token.lower().startswith("secret:"):
+            is_secret = True
+            token = token[len("secret:"):].strip()
+        required = True
+        if token.endswith("?"):
+            required = False
+            token = token[:-1].strip()
+        entries.append(ProjEnvEntry(name=token, required=required, secret=is_secret))
+    return tuple(entries)
+
+
+def projenv_entries_error(entries) -> Optional[str]:
+    """Row-aware inline error for builder state, via the single validator.
+
+    Serializes ``entries`` with :func:`projenv_entries_to_dsl` and validates
+    with :func:`parse_project_env_declarations`.  Returns ``None`` when
+    valid, else a safe names-only message naming the exact row and rule
+    (e.g. ``row 2 ('FOO=bar'): ...``).  Empty names are a builder affordance
+    error (the DSL validator skips empty tokens, so they can never block
+    readiness — the builder must force fill-or-delete instead).
+    """
+    items = list(entries or ())
+    for index, entry in enumerate(items):
+        raw = entry.name.strip() if isinstance(entry.name, str) else ""
+        if not raw:
+            return (
+                f"row {index + 1} (''): empty variable name — "
+                "enter a NAME (e.g. FOO) or delete the row"
+            )
+    dsl = projenv_entries_to_dsl(items)
+    try:
+        parse_project_env_declarations(dsl)
+    except ValueError as whole_exc:
+        whole_msg = str(whole_exc)
+        # Attribute to the exact row by re-validating each single-entry
+        # fragment through the SAME validator (no second implementation).
+        for index, entry in enumerate(items):
+            fragment = projenv_entries_to_dsl([entry])
+            try:
+                parse_project_env_declarations(fragment)
+            except ValueError as single_exc:
+                return f"row {index + 1} ({fragment!r}): {single_exc}"
+        # All singles pass but the whole fails (duplicates / overflow /
+        # cross-row platform conflict): attribute to the last row so the
+        # message still names which row plus the rule.
+        last_fragment = projenv_entries_to_dsl([items[-1]]) if items else "''"
+        return f"row {len(items)} ({last_fragment!r}): {whole_msg}"
+    # Per-category overflow is already rejected by the validator above, but
+    # surface the same bound explicitly when the validator's total-count
+    # message would otherwise hide which category overflowed.  Counts here
+    # are display-only; the validator remains the gate.
+    inherit_count = sum(1 for entry in items if not entry.secret)
+    secret_count = sum(1 for entry in items if entry.secret)
+    if inherit_count > 32 or secret_count > 32:
+        return (
+            f"row {len(items)}: too many declarations "
+            f"({inherit_count} inherit · {secret_count} secret; max 32 per category)"
+        )
+    return None
+
+
+def explain_project_env_error(text: str) -> Optional[str]:
+    """Row-aware inline error for DSL text, via the single validator.
+
+    Returns ``None`` when ``text`` validates, else a message naming the
+    failing declaration and rule (1-based token order).  The row summary
+    (:func:`summarize_project_env_declarations`) still degrades gracefully
+    to ``Invalid — edit to fix``; this helper is for the builder/error line.
+    """
+    try:
+        parse_project_env_declarations(text or "")
+    except ValueError as exc:
+        raw_msg = str(exc)
+        try:
+            entries = dsl_to_projenv_entries(text or "")
+        except ValueError:
+            return raw_msg
+        attributed = projenv_entries_error(entries)
+        # projenv_entries_error returns None only when the DSL validates
+        # (contradiction) or when entries are empty (empty text validates).
+        # Fall back to the raw validator message in those cases.
+        return attributed or raw_msg
+    return None
+
+
 def parse_project_env_declarations(
     text: str,
 ) -> Tuple[Tuple[Tuple[str, bool], ...], Tuple[Tuple[str, bool], ...]]:
@@ -435,9 +577,20 @@ def parse_project_env_declarations(
         if token.endswith("?"):
             required = False
             token = token[:-1].strip()
-        if not token or "=" in token or " " in token or "\t" in token:
+        if not token:
             raise ValueError(
-                f"invalid project environment declaration: {token[:64]!r}"
+                f"invalid project environment declaration {raw_token.strip()[:64]!r}: "
+                "empty variable name — enter a NAME (e.g. FOO) or remove the entry"
+            )
+        if "=" in token:
+            raise ValueError(
+                f"invalid project environment declaration {token[:64]!r}: "
+                "names may not contain '=' — values are never stored, declare the NAME only"
+            )
+        if " " in token or "\t" in token:
+            raise ValueError(
+                f"invalid project environment declaration {token[:64]!r}: "
+                "names may not contain spaces — use one NAME per entry (e.g. FOO, BAR?)"
             )
         if is_secret:
             secrets.append((token, required))
@@ -819,8 +972,13 @@ __all__ = [
     "TARGET_LABELS",
     "TARGET_LADDER",
     "TARGET_LOCAL_PROJECT",
+    "ProjEnvEntry",
     "derive_readiness",
+    "dsl_to_projenv_entries",
+    "explain_project_env_error",
     "model_compatibility",
     "parse_project_env_declarations",
+    "projenv_entries_error",
+    "projenv_entries_to_dsl",
     "summarize_project_env_declarations",
 ]
