@@ -392,7 +392,8 @@ def test_E_model_picker_still_works(tmp_path):
     async def _inner():
         from agentic_debugger.application.local_project import reset_launch_cwd, set_launch_cwd_for_tests
         from agentic_debugger.ui.app import LocalApplicationV1
-        from agentic_debugger.ui.screens import StartSessionScreen, ChoicePickerScreen
+        from agentic_debugger.ui.model_browser import ModelBrowserScreen
+        from agentic_debugger.ui.screens import StartSessionScreen
         reset_launch_cwd()
         set_launch_cwd_for_tests(tmp_path)
         # The model roster now comes from the app-owned configured-profile
@@ -415,8 +416,10 @@ def test_E_model_picker_still_works(tmp_path):
             lp._activate_row("model")
             await pilot.pause()
             await asyncio.sleep(0.15)
-            assert isinstance(app.screen, ChoicePickerScreen)
-            assert app.screen.title == "Select model"
+            # A1 adjudication (same as start-action :295): the model picker
+            # is ModelBrowserScreen v2, not the legacy ChoicePickerScreen.
+            assert isinstance(app.screen, ModelBrowserScreen)
+            assert app.screen._title_text == "Select model"
             await pilot.press("escape")
             await pilot.pause()
             await asyncio.sleep(0.1)

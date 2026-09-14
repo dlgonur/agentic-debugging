@@ -56,8 +56,8 @@ _CLASSIFICATION_STYLE = {
 }
 
 # Canonical user-facing keyboard vocabulary shared by footers and help.
-START_FOOTER = "↑/↓ move   Enter edit   S run   P local project   C providers   H history   Esc back   Ctrl+C quit"
-START_FOOTER_COMPACT = "↑/↓ move   Enter edit   S run   P local   C providers   H history   Esc back"
+START_FOOTER = "↑/↓ move   Enter edit   S run   P local project   T mode   C providers   H history   Esc back   Ctrl+C quit"
+START_FOOTER_COMPACT = "↑/↓ move   Enter edit   S run   P local   T mode   C providers   H history   Esc back"
 WORKSPACE_FOOTER_ACTIVE = "left/right views   1-7 tabs   c cancel   h history   n new session   ctrl+c quit"
 WORKSPACE_FOOTER_ACTIVE_COMPACT = "left/right views   1-7 tabs   c cancel   h history   ctrl+c quit"
 WORKSPACE_FOOTER_IDLE = "left/right views   1-7 tabs   h history   n new session   w effort   r retry   ctrl+c quit"
@@ -305,6 +305,8 @@ class HelpModalScreen(Screen):
                 "  • Model — one picker: Offline · Ollama Cloud · OpenCode Go ·\n"
                 "             CommandCode GOAT · custom command profiles\n"
                 "  • Incompatible rows stay visible, dimmed with their reason\n"
+                "  • Local setup groups Where/What/How/Bounds; Task/Debugger\n"
+                "    are context notes; Target is the Mode switch (T)\n"
                 "\n"
                 f"[bold {PRIMARY}]Independent proof chain[/]\n"
                 "  FAILURE  →  PDB EVIDENCE  →  PATCH  →  VERIFIER VERDICT\n"
@@ -329,7 +331,7 @@ class HelpModalScreen(Screen):
                 f"[bold {PRIMARY}]Navigation[/]\n"
                 "  • Home — S start debugging · P local project · H session history · ? help\n"
                 "  • Setup — ↑/↓ move · Enter edit · S run · P local project ·\n"
-                "            H history · Esc back\n"
+                "            T mode switch · H history · Esc back\n"
                 "  • History — ↑/↓ move · Enter/O open replay · S new session ·\n"
                 "              P local project · R refresh · Esc home\n"
                 "  • Workspace — Left/Right switch views · 1–7 direct tabs\n"

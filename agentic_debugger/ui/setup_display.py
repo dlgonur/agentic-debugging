@@ -18,16 +18,78 @@ is_ladder_task,
 ladder_task_metadata,
 )
 from agentic_debugger.ui.session_config import (
+    GROUP_BOUNDS,
+    GROUP_HOW,
+    GROUP_WHAT,
+    GROUP_WHERE,
+    LOCAL_SETUP_GROUPS,
     POLICY_LABELS,
     POLICY_ON_UNCERTAINTY,
     POLICY_STATIC_BASELINE,
     PROVIDER_CONFIGURED,
     PROVIDER_LABELS,
+    SEVERITY_ERROR,
     TARGET_LADDER,
     TARGET_LOCAL_PROJECT,
     ModelChoice,
     ModelOption,
 )
+
+# One-line Apply-eligibility consequence for the Repro/Verify editors.
+# Empty commands silently narrow the verifier certificate to a state that
+# can never satisfy permits_apply (1/1 F2P + 1/1 P2P).
+APPLY_ELIGIBILITY_CAPTION = (
+    "Empty \u2192 this session can never become Apply-eligible "
+    "(needs 1/1 F2P + 1/1 P2P)."
+)
+
+
+def local_context_notes_text(screen) -> str:
+    """One-line context notes replacing Task/Debugger rows when Local.
+
+    Reuses the exact RowState vocabulary: the repository (not a fixture
+    task) plus the fixed-by-contract debugger.
+    """
+    debugger = debugger_display(screen)
+    return (
+        "Local Project uses your repository, not a fixture task "
+        f"\u00b7 Debugger fixed by contract ({debugger})"
+    )
+
+
+def repro_auto_tag(screen) -> str:
+    """Visible marker distinguishing auto-filled Repro from typed input."""
+    if getattr(screen, "_repro_is_auto", False) and screen._config.reproduction_command:
+        return "auto"
+    return ""
+
+
+def verify_auto_tag(screen) -> str:
+    """Visible marker distinguishing auto-filled Verify from typed input."""
+    if getattr(screen, "_verify_is_auto", False) and screen._config.verification_command:
+        return "auto"
+    return ""
+
+
+def local_group_error_counts(readiness) -> dict:
+    """Error counts per Local setup group from the single SessionReadiness."""
+    by_field: dict[str, int] = {}
+    for issue in readiness.issues:
+        if issue.severity == SEVERITY_ERROR:
+            by_field[issue.field] = by_field.get(issue.field, 0) + 1
+    counts: dict[str, int] = {}
+    for group_id, _title, fields in LOCAL_SETUP_GROUPS:
+        counts[group_id] = sum(by_field.get(field, 0) for field in fields)
+    return counts
+
+
+def local_group_status_label(group_id: str, error_count: int) -> str:
+    """Compact per-group status suffix (one short token, never a gate)."""
+    if error_count <= 0:
+        return "\u2713"
+    if error_count == 1:
+        return "! 1 to fix"
+    return f"! {error_count} to fix"
 
 def task_display_name(screen) -> str:
     task = screen._catalog.find_task(screen._config.task_id)

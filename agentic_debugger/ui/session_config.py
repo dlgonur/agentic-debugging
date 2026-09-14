@@ -130,6 +130,43 @@ ROW_ORDER = (
     ROW_AUTO_RETRY,
 )
 
+# Local Project setup information architecture (A1, presentation-only).
+#
+# The canonical derivation order stays ROW_ORDER; the Local setup surface
+# groups the focusable rows visually into four status groups.  Task and
+# Debugger are context notes for Local (never focusable rows); Target is
+# a mode switch (still focusable as "Mode" when Local, never a foreign
+# row).  These constants never change readiness derivation or gates.
+GROUP_WHERE = "where"
+GROUP_WHAT = "what"
+GROUP_HOW = "how"
+GROUP_BOUNDS = "bounds"
+
+LOCAL_SETUP_GROUPS = (
+    (GROUP_WHERE, "Where", (ROW_PROJECT,)),
+    (GROUP_WHAT, "What", (ROW_BUG, ROW_REPRO, ROW_VERIFY)),
+    (GROUP_HOW, "How", (ROW_PROJECT_ENV, ROW_MODEL)),
+    (GROUP_BOUNDS, "Bounds", (ROW_TIME_LIMIT, ROW_AUTO_RETRY)),
+)
+
+# Focusable rows for the Local setup surface: Target (as the Mode
+# switch) plus the eight grouped rows.  Task/Debugger are excluded by
+# design (context notes, never focusable when Local).
+LOCAL_SETUP_FOCUS_ORDER = (
+    ROW_TARGET,
+    ROW_PROJECT,
+    ROW_BUG,
+    ROW_REPRO,
+    ROW_VERIFY,
+    ROW_PROJECT_ENV,
+    ROW_MODEL,
+    ROW_TIME_LIMIT,
+    ROW_AUTO_RETRY,
+)
+
+# Rows that become context notes (not focusable rows) when Local.
+LOCAL_CONTEXT_NOTE_ROWS = (ROW_TASK, ROW_DEBUGGER)
+
 SEVERITY_ERROR = "error"
 SEVERITY_WARNING = "warning"
 
@@ -739,6 +776,13 @@ def derive_readiness(
 
 __all__ = [
     "AUTO_RETRY_MAX",
+    "GROUP_BOUNDS",
+    "GROUP_HOW",
+    "GROUP_WHAT",
+    "GROUP_WHERE",
+    "LOCAL_CONTEXT_NOTE_ROWS",
+    "LOCAL_SETUP_FOCUS_ORDER",
+    "LOCAL_SETUP_GROUPS",
     "ModelChoice",
     "ModelOption",
     "OFFLINE_CHOICE",

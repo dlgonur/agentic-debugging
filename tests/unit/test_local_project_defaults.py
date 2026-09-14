@@ -648,7 +648,8 @@ def test_15_model_picker_changes(tmp_path):
     async def _inner():
         from agentic_debugger.application.local_project import reset_launch_cwd, set_launch_cwd_for_tests
         from agentic_debugger.ui.app import LocalApplicationV1
-        from agentic_debugger.ui.screens import StartSessionScreen, ChoicePickerScreen
+        from agentic_debugger.ui.model_browser import ModelBrowserScreen
+        from agentic_debugger.ui.screens import StartSessionScreen
 
         reset_launch_cwd()
         repo = _make_repo(tmp_path, "p15", with_repro=False)
@@ -672,8 +673,9 @@ def test_15_model_picker_changes(tmp_path):
             lp._activate_row("model")
             await pilot.pause()
             await asyncio.sleep(0.2)
-            assert isinstance(app.screen, ChoicePickerScreen)
-            assert app.screen.title == "Select model"
+            # A1 adjudication (same as start-action :295): ModelBrowser v2.
+            assert isinstance(app.screen, ModelBrowserScreen)
+            assert app.screen._title_text == "Select model"
             # Choose second via down+enter
             await pilot.press("down")
             await pilot.pause()

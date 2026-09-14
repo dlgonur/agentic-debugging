@@ -47,6 +47,12 @@ from agentic_debugger.ui.screens_shared import (
 )
 from agentic_debugger.ui.session_config import (
     AUTO_RETRY_MAX,
+    GROUP_BOUNDS,
+    GROUP_HOW,
+    GROUP_WHAT,
+    GROUP_WHERE,
+    LOCAL_SETUP_FOCUS_ORDER,
+    LOCAL_SETUP_GROUPS,
     OFFLINE_CHOICE,
     POLICY_LABELS,
     POLICY_ON_UNCERTAINTY,
@@ -84,6 +90,7 @@ from agentic_debugger.ui.session_config import (
     summarize_project_env_declarations,
 )
 from agentic_debugger.ui.setup_display import (
+    APPLY_ELIGIBILITY_CAPTION,
     _clip_cells,
     _fit_row_cells,
     _provider_label,
@@ -91,8 +98,13 @@ from agentic_debugger.ui.setup_display import (
     bug_preview,
     debugger_display,
     ladder_presentation,
+    local_context_notes_text,
+    local_group_error_counts,
+    local_group_status_label,
     model_display,
+    repro_auto_tag,
     task_display_name,
+    verify_auto_tag,
 )
 from agentic_debugger.ui.setup_pickers import (
     gather_catalog,
@@ -109,6 +121,7 @@ from agentic_debugger.ui.theme import (
     FAINT,
     FOREGROUND,
     MUTED,
+    PRIMARY,
     SUCCESS,
     WARNING,
 )
@@ -121,8 +134,12 @@ class StartSessionScreen(Screen):
     Verify, Model, Debugger, Time limit, Auto-retry — serves curated
     tasks, Local Project debugging, and the scientific capability ladder
     alike.  Rows never disappear: an inapplicable row is disabled with
-    its reason.  One selection change never silently rewrites another.
-    Every readiness presentation (Run button, status line, hero chips,
+    its reason — except Local Project setup information architecture
+    (A1): when the target is Local, Task/Debugger become one-line
+    context notes (not focusable rows) and Target renders as the Mode
+    switch, with the eight remaining rows grouped into Where / What /
+    How / Bounds.  One selection change never silently rewrites another.
+    Every readiness presentation (Run button, status checklist,
     pre-flight rail) renders from the single ``SessionReadiness``
     object derived by :func:`derive_readiness`.
     """
@@ -132,6 +149,7 @@ class StartSessionScreen(Screen):
         Binding("down", "move_down", "Next setting", show=False, priority=True),
         Binding("s", "start", "Run"),
         Binding("p", "focus_local_project", "Local project"),
+        Binding("t", "switch_mode", "Mode"),
         Binding("c", "open_providers", "Providers"),
         Binding("h", "history", "History"),
         Binding("enter", "confirm", "Confirm", show=False),
@@ -204,18 +222,24 @@ class StartSessionScreen(Screen):
                 with VerticalScroll(id="start-config"):
                     yield Static("SESSION SETUP", id="start-section-label")
                     yield SessionSettingRow("Target", row_key=ROW_TARGET, id="target-row")
+                    yield Static("", id="local-context-notes")
+                    yield Static("", id="group-where")
                     yield SessionSettingRow("Task", row_key=ROW_TASK, id="task-row")
                     yield SessionSettingRow("Project", row_key=ROW_PROJECT, id="project-row")
+                    yield Static("", id="group-what")
                     yield SessionSettingRow("Bug", row_key=ROW_BUG, id="bug-row")
                     yield SessionSettingRow("Repro", row_key=ROW_REPRO, id="repro-row")
                     yield SessionSettingRow("Verify (P2P)", row_key=ROW_VERIFY, id="verify-row")
+                    yield Static("", id="group-how")
                     yield SessionSettingRow("ProjEnv", row_key=ROW_PROJECT_ENV, id="project-env-row")
                     yield SessionSettingRow("Model", row_key=ROW_MODEL, id="model-row")
                     yield SessionSettingRow("Debugger", row_key=ROW_DEBUGGER, id="debugger-row")
+                    yield Static("", id="group-bounds")
                     yield SessionSettingRow("Time limit", row_key=ROW_TIME_LIMIT, id="time-limit-row")
                     yield SessionSettingRow("Auto-retry", row_key=ROW_AUTO_RETRY, id="auto-retry-row")
                     yield Static("", id="start-status")
                     yield Static("", id="start-notes")
+                    yield Static("", id="start-context-summary")
                     with Horizontal(id="start-actions"):
                         yield Button(
                             "Run", id="start-session-button", classes="primary-action"
@@ -249,6 +273,12 @@ class StartSessionScreen(Screen):
 
     def _update_context_visibility(self, width: int) -> None:
         self.query_one("#start-context", VerticalScroll).display = width >= 100
+        # Narrow terminals collapse the pre-flight rail into the in-column
+        # summary line (rendered by render_state); wide keeps the rail.
+        try:
+            self.query_one("#start-context-summary", Static).display = width < 100
+        except Exception:
+            pass
 
     def _update_footer(self, width: int) -> None:
         footer = self.query_one("#start-footer", Static)
@@ -350,11 +380,23 @@ class StartSessionScreen(Screen):
 
     # -- navigation ------------------------------------------------------------
 
+    def _is_local_setup(self) -> bool:
+        return self._config.target == TARGET_LOCAL_PROJECT
+
     def _focusable_row_ids(self) -> list[str]:
-        # The stack is fixed: every row stays reachable for every target.
+        # Curated/Ladder keep the fixed ROW_ORDER stack.  Local setup
+        # groups eight rows plus the Mode switch; Task/Debugger are
+        # context notes and never focusable when Local.
+        if self._is_local_setup():
+            return list(LOCAL_SETUP_FOCUS_ORDER)
         return list(ROW_ORDER)
 
     def _focus_row(self, row_key: str) -> None:
+        # Hidden context-note rows can never take focus when Local;
+        # redirect them to the first focusable row instead of focusing
+        # a hidden widget.
+        if self._is_local_setup() and row_key in (ROW_TASK, ROW_DEBUGGER):
+            row_key = ROW_PROJECT
         try:
             self.query_one(f"#{row_key.replace('_', '-')}-row", SessionSettingRow).focus()
         except Exception:
@@ -376,6 +418,10 @@ class StartSessionScreen(Screen):
         )
 
     def _activate_row(self, row_key: str) -> None:
+        # Local setup never shows foreign-row toasts: Task/Debugger are
+        # context notes, not rows, so activating them is a no-op.
+        if self._is_local_setup() and row_key in (ROW_TASK, ROW_DEBUGGER):
+            return
         readiness = self._readiness
         if readiness is not None:
             state = readiness.rows.get(row_key)
@@ -400,12 +446,14 @@ class StartSessionScreen(Screen):
                 "Reproduction command (optional)",
                 self._config.reproduction_command or "",
                 self._on_repro_saved,
+                caption=APPLY_ELIGIBILITY_CAPTION,
             )
         elif row_key == ROW_VERIFY:
             self._open_text_editor(
                 "Regression check command (optional; must pass BEFORE and after the fix)",
                 self._config.verification_command or "",
                 self._on_verify_saved,
+                caption=APPLY_ELIGIBILITY_CAPTION,
             )
         elif row_key == ROW_PROJECT_ENV:
             self._open_text_editor(
@@ -551,7 +599,12 @@ class StartSessionScreen(Screen):
         self._focus_row(ROW_PROJECT_ENV)
 
     def _open_text_editor(
-        self, title: str, current: str, on_save: Any, multiline: bool = False
+        self,
+        title: str,
+        current: str,
+        on_save: Any,
+        multiline: bool = False,
+        caption: Optional[str] = None,
     ) -> None:
         self.app.push_screen(
             SingleLineFieldEditorScreen(
@@ -559,6 +612,7 @@ class StartSessionScreen(Screen):
                 current=current or "",
                 on_save=on_save,
                 placeholder=title,
+                caption=caption,
             )
         )
 
@@ -679,7 +733,16 @@ class StartSessionScreen(Screen):
             else:
                 row.set_enabled()
 
-        fitted(ROW_TARGET, TARGET_LABELS[config.target])
+        # -- Local IA: Target becomes the Mode switch ----------------------
+        try:
+            target_row = self._row(ROW_TARGET)
+            target_row.label = "Mode" if local else "Target"
+        except Exception:
+            pass
+        if local:
+            fitted(ROW_TARGET, TARGET_LABELS[config.target], "T to switch")
+        else:
+            fitted(ROW_TARGET, TARGET_LABELS[config.target])
         fitted(
             ROW_TASK,
             "" if local else self._task_display_name(),
@@ -687,14 +750,26 @@ class StartSessionScreen(Screen):
         )
         fitted(ROW_PROJECT, (config.project_path or "") if local else "")
         fitted(ROW_BUG, self._bug_preview() if local else "")
-        fitted(
-            ROW_REPRO,
-            (config.reproduction_command or "Not set (optional)") if local else "",
-        )
-        fitted(
-            ROW_VERIFY,
-            (config.verification_command or "Not set (optional)") if local else "",
-        )
+        if local:
+            fitted(
+                ROW_REPRO,
+                config.reproduction_command or "Not set (optional)",
+                repro_auto_tag(self),
+            )
+            fitted(
+                ROW_VERIFY,
+                config.verification_command or "Not set (optional)",
+                verify_auto_tag(self),
+            )
+        else:
+            fitted(
+                ROW_REPRO,
+                (config.reproduction_command or "Not set (optional)") if local else "",
+            )
+            fitted(
+                ROW_VERIFY,
+                (config.verification_command or "Not set (optional)") if local else "",
+            )
         fitted(
             ROW_PROJECT_ENV,
             (summarize_project_env_declarations(config.project_env_text or "") if local else ""),
@@ -713,13 +788,61 @@ class StartSessionScreen(Screen):
         else:
             fitted(ROW_AUTO_RETRY, f"{config.auto_retries} on retryable failure")
 
-        # -- blockers / status (concise actionable blocker when necessary) --
+        # -- Local IA visibility: groups + notes vs fixed stack ------------
+        try:
+            self.query_one("#task-row", SessionSettingRow).display = not local
+            self.query_one("#debugger-row", SessionSettingRow).display = not local
+        except Exception:
+            pass
+        group_counts = local_group_error_counts(readiness) if local else {}
+        try:
+            self.query_one("#local-context-notes", Static).display = local
+            self.query_one("#group-where", Static).display = local
+            self.query_one("#group-what", Static).display = local
+            self.query_one("#group-how", Static).display = local
+            self.query_one("#group-bounds", Static).display = local
+        except Exception:
+            pass
+        if local:
+            try:
+                self.query_one("#local-context-notes", Static).update(
+                    f"[{FAINT}]{_markup_escape(local_context_notes_text(self))}[/]"
+                )
+            except Exception:
+                pass
+            titles = {gid: title for gid, title, _fields in LOCAL_SETUP_GROUPS}
+            numbers = {
+                GROUP_WHERE: "1",
+                GROUP_WHAT: "2",
+                GROUP_HOW: "3",
+                GROUP_BOUNDS: "4",
+            }
+            for group_id in (GROUP_WHERE, GROUP_WHAT, GROUP_HOW, GROUP_BOUNDS):
+                try:
+                    count = group_counts.get(group_id, 0)
+                    label = local_group_status_label(group_id, count)
+                    if count <= 0:
+                        style = SUCCESS
+                    else:
+                        style = ERROR
+                    self.query_one(f"#group-{group_id}", Static).update(
+                        f"[bold {PRIMARY}]{numbers[group_id]} {titles[group_id]}[/]"
+                        f"  [{style}]{_markup_escape(label)}[/]"
+                    )
+                except Exception:
+                    pass
+
+        # -- blockers / status (every blocker as a checklist) --------------
         status = self.query_one("#start-status", Static)
         if self._start_error is not None:
             status.update(f"[{ERROR}]! Start failed — {_markup_escape(self._start_error)}[/]")
         elif not readiness.ready:
             errors = [item for item in readiness.issues if item.severity == SEVERITY_ERROR]
-            status.update("\n".join(f"[{ERROR}]! {_markup_escape(item.message)}[/]" for item in errors))
+            lines = [f"[bold {ERROR}]Blockers ({len(errors)}):[/]"]
+            lines.extend(
+                f"[{ERROR}]! {_markup_escape(item.message)}[/]" for item in errors
+            )
+            status.update("\n".join(lines))
         else:
             status.update("")
 
@@ -731,6 +854,49 @@ class StartSessionScreen(Screen):
             )
         else:
             notes.update("")
+
+        # -- narrow pre-flight summary (rail collapsed below 100 cols) -----
+        try:
+            summary = self.query_one("#start-context-summary", Static)
+            if local:
+                if readiness.ready:
+                    summary.update(
+                        f"[{SUCCESS}]Pre-flight: ready — "
+                        f"{_markup_escape(readiness.run_label.lower())}[/]"
+                    )
+                else:
+                    parts: list[str] = []
+                    for group_id, title, _fields in LOCAL_SETUP_GROUPS:
+                        count = group_counts.get(group_id, 0)
+                        mark = "\u2713" if count <= 0 else f"!{count}"
+                        parts.append(f"{title} {mark}")
+                    errors = [
+                        item for item in readiness.issues if item.severity == SEVERITY_ERROR
+                    ]
+                    summary.update(
+                        f"[{ERROR}]Pre-flight: {len(errors)} blocker(s)[/]"
+                        f"  [{FAINT}]{' · '.join(parts)}[/]"
+                    )
+            else:
+                if readiness.ready:
+                    summary.update(
+                        f"[{SUCCESS}]Pre-flight: ready — "
+                        f"{_markup_escape(readiness.run_label.lower())}[/]"
+                    )
+                else:
+                    errors = [
+                        item for item in readiness.issues if item.severity == SEVERITY_ERROR
+                    ]
+                    summary.update(
+                        f"[{ERROR}]Pre-flight: {len(errors)} blocker(s)[/]"
+                    )
+            # Visibility follows the rail: summary only when rail hidden.
+            try:
+                summary.display = self.size.width < 100
+            except Exception:
+                pass
+        except Exception:
+            pass
 
         # -- run button -----------------------------------------------------
         button = self.query_one("#start-session-button", Button)
@@ -822,6 +988,10 @@ class StartSessionScreen(Screen):
         if self._config.target != TARGET_LOCAL_PROJECT:
             self._choice_selected(ROW_TARGET, TARGET_LOCAL_PROJECT)
         self._focus_row(ROW_PROJECT)
+
+    def action_switch_mode(self) -> None:
+        """T: open the Target mode switch (same screen, all targets)."""
+        self._open_target_picker()
 
     def action_open_providers(self) -> None:
         """C: open the provider-connections management surface."""

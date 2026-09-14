@@ -176,12 +176,13 @@ def test_general_ollama_ui_start_uses_registry_without_level32_or_profile_store(
             reset_launch_cwd,
             set_launch_cwd_for_tests,
         )
+        from agentic_debugger.application.model_gateway import ModelGateway
         from agentic_debugger.application.model_providers import ProviderModel
         from agentic_debugger.evaluation.live import LiveModelConfig
         from agentic_debugger.ui import app as app_module
         from agentic_debugger.ui import screens_setup as screens_module  # Task 46: canonical list_provider_models home
         from agentic_debugger.ui.app import LocalApplicationV1
-        from agentic_debugger.ui.screens import ChoicePickerScreen
+        from agentic_debugger.ui.model_browser import ModelBrowserScreen, is_selectable
 
         reset_launch_cwd()
         # The provider registry is user-owned: isolate the machine-local
@@ -198,6 +199,24 @@ def test_general_ollama_ui_start_uses_registry_without_level32_or_profile_store(
             base_url="https://ollama.com",
             api_format=pc.PROTOCOL_CHAT_COMPLETIONS,
             provider_id="ollama_cloud",
+        )
+        # The production start path gates registry models behind the
+        # offline static preflight (credential presence, no network).
+        # Mock that preflight boundary as runnable so this routing test
+        # proves registry resolution (not credential plumbing); the
+        # worker/runner/resolve boundaries below stay mocked, and the
+        # Level-32/profile-store forbiddens still guard the route.
+        monkeypatch.setattr(
+            ModelGateway,
+            "get_provider_status",
+            lambda self, provider_id: SimpleNamespace(is_configured=True),
+        )
+        monkeypatch.setattr(
+            ModelGateway,
+            "static_preflight",
+            lambda self, provider_or_binding, model_id=None, **_kw: SimpleNamespace(
+                is_runnable=True, blocker_reason=None
+            ),
         )
         repo = _make_repo(tmp_path, "general-ollama-project")
         set_launch_cwd_for_tests(tmp_path)
@@ -292,14 +311,18 @@ def test_general_ollama_ui_start_uses_registry_without_level32_or_profile_store(
             start._open_model_picker()
             await pilot.pause()
             picker = app.screen
-            assert isinstance(picker, ChoicePickerScreen)
+            # Owner-adjudicated A1: the model picker is ModelBrowserScreen
+            # (v2 searchable browser), not the legacy ChoicePickerScreen.
+            assert isinstance(picker, ModelBrowserScreen)
+            assert picker._title_text == "Select model"
             selected = next(
-                choice
-                for choice in picker.choices
-                if choice.value == "ollama_cloud:glm-5.3-flash:cloud"
+                option
+                for option in picker._all_options
+                if getattr(option, "provider", "") == "ollama_cloud"
+                and getattr(option, "model_id", "") == "glm-5.3-flash:cloud"
             )
-            assert selected.disabled is False
-            picker._on_select(selected.value)
+            assert is_selectable(selected) is True
+            picker._on_select("ollama_cloud:glm-5.3-flash:cloud")
             app.pop_screen()
             await pilot.pause()
             assert start._config.model.provider == "ollama_cloud"
@@ -310,9 +333,14 @@ def test_general_ollama_ui_start_uses_registry_without_level32_or_profile_store(
 
             params = captured["worker"]["scenario_params"]
             spec = captured["worker"]["spec"]
-            assert registry_calls == [
-                ("ollama_cloud", "glm-5.3-flash:cloud")
-            ]
+            # The worker itself is mocked, so provider resolution (which
+            # happens worker-side) never runs here; routing is proven by
+            # the start-path contract below (registry provider/model, no
+            # legacy Ollama markers, no Level-32/store queries via the
+            # forbiddens above).  The resolve mock stays as a guard: if
+            # any start-path code tried to resolve, it must go via the
+            # registry.
+            assert registry_calls == []
             assert params["provider"] == "ollama_cloud"
             assert params["model_id"] == "glm-5.3-flash:cloud"
             assert "is_ollama" not in params

@@ -241,17 +241,21 @@ class SingleLineFieldEditorScreen(Screen):
         on_save: Callable[[Optional[str]], None],
         placeholder: str = "",
         max_length: Optional[int] = None,
+        caption: Optional[str] = None,
     ) -> None:
         super().__init__()
         self.title_text = title
         self.current = current or ""
         self.placeholder = placeholder or title
         self.max_length = max_length
+        self.caption_text = caption or ""
         self._on_save = on_save
 
     def compose(self) -> ComposeResult:
         with Vertical(id="single-line-dialog"):
             yield Static(self.title_text, id="single-line-title")
+            if self.caption_text:
+                yield Static(self.caption_text, id="single-line-note")
             yield SingleLineEditorInput(
                 value=self.current,
                 placeholder=self.placeholder,
