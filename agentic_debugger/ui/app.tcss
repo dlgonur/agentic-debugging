@@ -494,7 +494,7 @@ SingleLineFieldEditorScreen, _SingleLineEditorScreen {
 }
 
 #single-line-title {
-    height: 1;
+    height: auto;
     margin: 0 0 1 0;
     color: $primary;
     text-style: bold;
@@ -697,13 +697,11 @@ ProjectEnvBuilderScreen {
     color: $foreground-muted;
 }
 
-/* Narrow terminals: builder rows stack toggles below the name so nothing
-   clips the right edge at 80 cols; the dialog keeps title + caption +
-   error + count + actions reachable without horizontal scroll. */
-#projenv-dialog.narrow .projenv-row {
-    height: auto;
-    layout: vertical;
-}
+/* Narrow terminals: the builder keeps horizontal rows (name + toggles fit
+   80 cols: number 3 + flexible name + fixed toggles/Del stay in-bounds) and
+   the rows list scrolls internally (max 10), so title + caption + error +
+   count + actions stay reachable without horizontal scroll. No stacked-row
+   variant exists; rows never reflow below the name. */
 
 /* -- workspace ----------------------------------------------------------- */
 

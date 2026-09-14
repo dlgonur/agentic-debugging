@@ -57,7 +57,10 @@ _CLASSIFICATION_STYLE = {
 
 # Canonical user-facing keyboard vocabulary shared by footers and help.
 START_FOOTER = "↑/↓ move   Enter edit   S run   P local project   T mode   C providers   H history   Esc back   Ctrl+C quit"
-START_FOOTER_COMPACT = "↑/↓ move   Enter edit   S run   P local   T mode   C providers   H history   Esc back"
+# Compact variant: same vocabulary, single-space separators so the full
+# line fits the 80-col minimum (71 cells; the footer keeps 2 cells of
+# padding per side, leaving 76).
+START_FOOTER_COMPACT = "↑/↓ move Enter edit S run P local T mode C providers H history Esc back"
 WORKSPACE_FOOTER_ACTIVE = "left/right views   1-7 tabs   c cancel   h history   n new session   ctrl+c quit"
 WORKSPACE_FOOTER_ACTIVE_COMPACT = "left/right views   1-7 tabs   c cancel   h history   ctrl+c quit"
 WORKSPACE_FOOTER_IDLE = "left/right views   1-7 tabs   h history   n new session   w effort   r retry   ctrl+c quit"

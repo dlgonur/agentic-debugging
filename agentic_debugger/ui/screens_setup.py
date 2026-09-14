@@ -282,8 +282,14 @@ class StartSessionScreen(Screen):
             pass
 
     def _update_footer(self, width: int) -> None:
+        # The variant follows what fits, not the width alone: the 36-cell
+        # pre-flight rail steals width at >= 100 cols and the footer keeps
+        # 2 cells of padding per side, so the full vocabulary only fits on
+        # very wide terminals. Below 100 cols this always selects compact.
         footer = self.query_one("#start-footer", Static)
-        footer.update(START_FOOTER_COMPACT if width < 100 else START_FOOTER)
+        rail = 36 if width >= 100 else 0
+        content = width - rail - 4
+        footer.update(START_FOOTER if content >= len(START_FOOTER) else START_FOOTER_COMPACT)
 
     # -- catalog -------------------------------------------------------------
 
