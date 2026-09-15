@@ -238,11 +238,40 @@ HomeActionRow:focus {
     text-style: bold;
 }
 
+#group-what-row {
+    width: 1fr;
+    height: 1;
+    padding: 0;
+    margin: 0;
+    layout: horizontal;
+}
+
+#group-what-row #group-what {
+    width: 1fr;
+    height: 1;
+}
+
+#group-what-row #discovery-button {
+    width: auto;
+    min-width: 16;
+    height: 1;
+    padding: 0 1;
+    margin: 0 0 0 1;
+}
+
 #start-context-summary {
     width: 1fr;
     height: auto;
     padding: 0;
     margin: 0;
+    color: $foreground-muted;
+}
+
+#discovery-card {
+    width: 1fr;
+    height: auto;
+    padding: 0;
+    margin: 0 0 1 0;
     color: $foreground-muted;
 }
 

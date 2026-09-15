@@ -98,16 +98,21 @@ from agentic_debugger.ui.setup_display import (
     _fit_row_cells,
     _provider_label,
     _short_unavailable_reason,
+    bug_display_tag,
     bug_preview,
     debugger_display,
+    discovery_bar_text,
+    discovery_card_text,
     ladder_presentation,
     local_context_notes_text,
     local_group_error_counts,
     local_group_status_label,
     model_display,
     repro_auto_tag,
+    repro_display_tag,
     task_display_name,
     verify_auto_tag,
+    verify_display_tag,
 )
 from agentic_debugger.ui.setup_pickers import (
     gather_catalog,
@@ -154,6 +159,10 @@ class StartSessionScreen(Screen):
         Binding("t", "switch_mode", "Mode"),
         Binding("c", "open_providers", "Providers"),
         Binding("h", "history", "History"),
+        Binding("d", "discover", "Discover", show=False),
+        Binding("a", "accept_proposal", "Accept", show=False),
+        Binding("e", "edit_proposal", "Edit", show=False),
+        Binding("r", "rerun_discovery", "Re-run", show=False),
         Binding("enter", "confirm", "Confirm", show=False),
         Binding("escape", "cancel", "Back"),
     ]
@@ -190,6 +199,21 @@ class StartSessionScreen(Screen):
         self._verify_user_edited = False
         self._repro_is_auto = False
         self._verify_is_auto = False
+        # D2 discovery confirm UX (proposal §2): screen-memory-only state.
+        # Only the three ACCEPTED strings ever cross into SessionConfig;
+        # confidence/evidence/not-determined/recon summary are never
+        # persisted, hashed, or journaled (no such code path exists).
+        self._bug_user_edited = False
+        self._bug_is_proposed = False
+        self._repro_is_proposed = False
+        self._verify_is_proposed = False
+        self._discovery_proposal = None
+        self._discovery_running = False
+        self._discovery_generation = 0
+        self._discovery_visible_reruns = 0
+        self._discovery_consecutive_low = 0
+        self._discovery_manual_only = False
+        self._discovery_error: Optional[str] = None
         # Launch-cwd capture for project resolution (never a cwd change).
         try:
             from agentic_debugger.application.local_project import (
@@ -236,7 +260,12 @@ class StartSessionScreen(Screen):
                         yield Static("", id="group-where")
                         yield SessionSettingRow("Task", row_key=ROW_TASK, id="task-row")
                         yield SessionSettingRow("Project", row_key=ROW_PROJECT, id="project-row")
-                        yield Static("", id="group-what")
+                        with Horizontal(id="group-what-row"):
+                            yield Static("", id="group-what")
+                            yield Button(
+                                "Discover (d)", id="discovery-button", classes="secondary-action"
+                            )
+                        yield Static("", id="discovery-card")
                         yield SessionSettingRow("Bug", row_key=ROW_BUG, id="bug-row")
                         yield SessionSettingRow("Repro", row_key=ROW_REPRO, id="repro-row")
                         yield SessionSettingRow("Verify (P2P)", row_key=ROW_VERIFY, id="verify-row")
@@ -405,6 +434,339 @@ class StartSessionScreen(Screen):
                 self._config = replace(self._config, verification_command=None)
                 self._verify_is_auto = False
 
+    # -- local-project discovery confirm UX (D2, proposal §2) -------------------
+    #
+    # D1 `discover_local_project` is called unchanged (no allowlist/cap/rubric
+    # edits). Recon runs in a worker thread (read-only, bounded ≤60 s); the UI
+    # stays responsive with progress + Esc-cancel (zero mutation on cancel).
+    # Proposal metadata lives in screen memory only (`_discovery_proposal`);
+    # only the three ACCEPTED strings ever cross into SessionConfig.
+
+    _DISCOVERY_MAX_VISIBLE_RERUNS = 2
+
+    def _clear_discovery_for_new_project(self) -> None:
+        """Drop stale recon when Where changes (manual values survive)."""
+        try:
+            self._discovery_generation += 1
+        except Exception:
+            pass
+        self._discovery_running = False
+        self._discovery_proposal = None
+        self._discovery_error = None
+        self._discovery_visible_reruns = 0
+        self._discovery_consecutive_low = 0
+        self._discovery_manual_only = False
+        try:
+            if getattr(self, "_bug_is_proposed", False) and not getattr(self, "_bug_user_edited", False):
+                self._config = replace(self._config, bug_description="")
+            self._bug_is_proposed = False
+            if getattr(self, "_repro_is_proposed", False) and not getattr(self, "_repro_user_edited", False):
+                self._config = replace(self._config, reproduction_command=None)
+            self._repro_is_proposed = False
+            if getattr(self, "_verify_is_proposed", False) and not getattr(self, "_verify_user_edited", False):
+                self._config = replace(self._config, verification_command=None)
+            self._verify_is_proposed = False
+        except Exception:
+            pass
+
+    def _discovery_gate(self) -> tuple[bool, str]:
+        """Whether Discover may run (Where-clean + Model-live, same inputs)."""
+        if not self._is_local_setup():
+            return False, "Local Project setup only"
+        if getattr(self, "_discovery_running", False):
+            return False, "Discovery already running"
+        if getattr(self, "_discovery_manual_only", False):
+            return False, "Manual form is the path"
+        readiness = getattr(self, "_readiness", None)
+        if readiness is not None:
+            for issue in getattr(readiness, "issues", ()):
+                if getattr(issue, "severity", "") == SEVERITY_ERROR and getattr(issue, "field", "") in (ROW_PROJECT, ROW_MODEL):
+                    return False, getattr(issue, "message", "Where-clean + live model required")
+        if not (self._project_status.ok and self._project_status.state == "clean"):
+            message = self._project_status.message or "Choose a clean Git repository to debug."
+            return False, message
+        if self._config.model.is_offline:
+            return False, "Select a live model."
+        return True, ""
+
+    def _discovery_proposal_visible(self) -> bool:
+        """Whether a/e/r have a proposal to act on (scoped keys)."""
+        if not self._is_local_setup():
+            return False
+        if getattr(self, "_discovery_running", False):
+            return False
+        if getattr(self, "_discovery_proposal", None) is None:
+            return False
+        return bool(
+            getattr(self, "_bug_is_proposed", False)
+            or getattr(self, "_repro_is_proposed", False)
+            or getattr(self, "_verify_is_proposed", False)
+        )
+
+    def action_discover(self) -> None:
+        """D Discover (explicit affordance, no auto-run)."""
+        if not self._is_local_setup():
+            return
+        # Pressing Discover with an existing proposal counts toward the
+        # visible budget (prevents bypassing `r` via `d`).
+        is_rerun = self._discovery_proposal is not None or self._discovery_visible_reruns > 0
+        self._discovery_start(is_rerun=is_rerun)
+
+    def action_rerun_discovery(self) -> None:
+        """R Re-run discovery (bounded: 2 visible, then manual-only)."""
+        if not self._is_local_setup():
+            return
+        self._discovery_start(is_rerun=True)
+
+    def action_accept_proposal(self) -> None:
+        """A Accept proposal (sets user_edited, clears transients)."""
+        if not self._discovery_proposal_visible():
+            return
+        if getattr(self, "_bug_is_proposed", False):
+            self._bug_user_edited = True
+            self._bug_is_proposed = False
+        if getattr(self, "_repro_is_proposed", False):
+            self._repro_user_edited = True
+            self._repro_is_proposed = False
+            self._repro_is_auto = False
+        if getattr(self, "_verify_is_proposed", False):
+            self._verify_user_edited = True
+            self._verify_is_proposed = False
+            self._verify_is_auto = False
+        self.render_state()
+
+    def action_edit_proposal(self) -> None:
+        """E Edit proposal (opens existing editors prefilled)."""
+        if not self._is_local_setup():
+            return
+        if getattr(self, "_discovery_running", False):
+            return
+        if getattr(self, "_discovery_proposal", None) is None and getattr(self, "_discovery_error", None) is None:
+            return
+        focused = self._focused_row_key()
+        if focused in (ROW_BUG, ROW_REPRO, ROW_VERIFY):
+            self._activate_row(focused)
+        else:
+            self._activate_row(ROW_BUG)
+
+    def _discovery_start(self, *, is_rerun: bool) -> None:
+        if not self._is_local_setup():
+            return
+        if getattr(self, "_discovery_running", False):
+            try:
+                self.notify("Discovery already running — Esc cancels", severity="information", timeout=3.0)
+            except Exception:
+                pass
+            return
+        if getattr(self, "_discovery_manual_only", False):
+            try:
+                self.notify(
+                    "Manual form is the path — discovery is the default, not the only one",
+                    severity="information",
+                    timeout=4.0,
+                )
+            except Exception:
+                pass
+            self.render_state()
+            return
+        if is_rerun:
+            if self._discovery_proposal is None and self._discovery_error is None and self._discovery_visible_reruns <= 0:
+                try:
+                    self.notify("Nothing to re-run — press d to Discover first", severity="information", timeout=3.0)
+                except Exception:
+                    pass
+                return
+            if self._discovery_visible_reruns >= self._DISCOVERY_MAX_VISIBLE_RERUNS:
+                self._discovery_manual_only = True
+                try:
+                    self.notify(
+                        "Manual form is the path — discovery is the default, not the only one",
+                        severity="information",
+                        timeout=4.0,
+                    )
+                except Exception:
+                    pass
+                self.render_state()
+                return
+        allowed, reason = self._discovery_gate()
+        if not allowed:
+            try:
+                self.notify(f"Discover unavailable — {reason}", severity="information", timeout=4.0)
+            except Exception:
+                pass
+            self.render_state()
+            return
+        self._discovery_running = True
+        self._discovery_error = None
+        self._discovery_generation += 1
+        generation = self._discovery_generation
+        try:
+            project_path = self._config.project_path
+            launch_cwd = self._launch_cwd
+        except Exception:
+            project_path = self._config.project_path
+            launch_cwd = None
+        self.render_state()
+        try:
+            from functools import partial
+
+            self.run_worker(
+                partial(
+                    self._discovery_worker,
+                    generation,
+                    str(project_path),
+                    str(launch_cwd) if launch_cwd is not None else None,
+                    bool(is_rerun),
+                ),
+                name=f"discovery-{generation}",
+                exclusive=False,
+                thread=True,
+            )
+        except Exception:
+            # Worker spawn failed: fail closed to the manual form, zero mutation.
+            if generation == self._discovery_generation:
+                self._discovery_running = False
+                self._discovery_error = "Discovery worker failed to start"
+                self.render_state()
+
+    def _discovery_worker(self, generation: int, project_path: str, launch_cwd: Optional[str], is_rerun: bool) -> None:
+        """Read-only recon off the UI thread (D1 unchanged, 1 internal retry)."""
+        proposal = None
+        error: Optional[str] = None
+        try:
+            from agentic_debugger.application.local_project_discovery import (
+                DiscoveryRefusalError,
+                discover_local_project,
+            )
+        except Exception as exc:
+            error = f"Discovery unavailable ({str(exc)[:120]})"
+            try:
+                self.app.call_from_thread(self._discovery_finished, generation, None, error, is_rerun)
+            except Exception:
+                pass
+            return
+        try:
+            proposal = discover_local_project(project_path, launch_cwd)
+            # 1 internal retry: a budget-stop Low gets one second chance
+            # (deterministic recon rarely changes, but the retry is bounded).
+            try:
+                could = " ".join(list(getattr(proposal, "could_not_determine", ()) or []))
+                if getattr(proposal, "confidence_overall", "") == "low" and "budget exceeded" in could:
+                    proposal = discover_local_project(project_path, launch_cwd)
+            except Exception:
+                pass
+        except Exception as exc:
+            # DiscoveryRefusalError and any unexpected failure stay fail-closed:
+            # zero mutation, manual form is the path. Message is safe (existing
+            # validation copy, never paths beyond the message itself).
+            try:
+                message = str(exc)[:220] or "Discovery refused"
+            except Exception:
+                message = "Discovery refused"
+            error = message
+            proposal = None
+        try:
+            self.app.call_from_thread(self._discovery_finished, generation, proposal, error, is_rerun)
+        except Exception:
+            pass
+
+    def _discovery_finished(self, generation: int, proposal: Any, error: Optional[str], is_rerun: bool) -> None:
+        """Apply recon on the UI thread (zero mutation on cancel/stale)."""
+        if generation != getattr(self, "_discovery_generation", -1):
+            return
+        if not getattr(self, "_discovery_running", False):
+            return
+        self._discovery_running = False
+        if error is not None or proposal is None:
+            message = (error or "Discovery refused")[:220]
+            self._discovery_error = message
+            self._discovery_proposal = None
+            if bool(is_rerun):
+                self._discovery_visible_reruns += 1
+            self._discovery_consecutive_low += 1
+            # Q8 budget: 1 internal + 2 visible, then manual-only. Consecutive
+            # Low alone does not exhaust the visible budget (that would allow
+            # only 1 re-run, contradicting Q8); manual-only needs 2 visibles.
+            if self._discovery_visible_reruns >= self._DISCOVERY_MAX_VISIBLE_RERUNS:
+                self._discovery_manual_only = True
+            self.render_state()
+            try:
+                self._focus_row(ROW_BUG)
+            except Exception:
+                pass
+            return
+        self._discovery_error = None
+        self._discovery_proposal = proposal
+        if bool(is_rerun):
+            self._discovery_visible_reruns += 1
+        confidence = getattr(proposal, "confidence_overall", "low")
+        if confidence == "low":
+            self._discovery_consecutive_low += 1
+        else:
+            self._discovery_consecutive_low = 0
+        if self._discovery_visible_reruns >= self._DISCOVERY_MAX_VISIBLE_RERUNS:
+            # Budget spent with no confident bug → manual-only message.
+            # A confident proposal always stays actionable even at budget.
+            if confidence == "low":
+                self._discovery_manual_only = True
+        self._apply_discovery_proposal(proposal)
+        self.render_state()
+        if confidence == "low":
+            try:
+                self._focus_row(ROW_BUG)
+            except Exception:
+                pass
+
+    def _apply_discovery_proposal(self, proposal: Any) -> None:
+        """Land proposals as `proposed`-tagged values (never overwrite manual)."""
+        try:
+            hypotheses = list(getattr(proposal, "hypotheses", ()) or [])
+            repro_candidate = getattr(proposal, "repro_candidate", None)
+            verify_candidate = getattr(proposal, "verify_candidate", None)
+        except Exception:
+            return
+        # Bug: Medium/High prefill with `proposed` tag (Q6); Low stays empty.
+        try:
+            if hypotheses and not getattr(self, "_bug_user_edited", False):
+                statement = str(getattr(hypotheses[0], "statement", "") or "")
+                if statement.strip():
+                    self._config = replace(self._config, bug_description=statement)
+                    self._bug_is_proposed = True
+                else:
+                    if getattr(self, "_bug_is_proposed", False):
+                        self._config = replace(self._config, bug_description="")
+                    self._bug_is_proposed = False
+            else:
+                if not getattr(self, "_bug_user_edited", False) and getattr(self, "_bug_is_proposed", False) and not hypotheses:
+                    # Stale proposed bug with no replacement → clear (never a guess).
+                    self._config = replace(self._config, bug_description="")
+                    self._bug_is_proposed = False
+        except Exception:
+            pass
+        # Repro/Verify: deterministic candidates still propose on Low.
+        try:
+            if not getattr(self, "_repro_user_edited", False):
+                if isinstance(repro_candidate, str) and repro_candidate:
+                    self._config = replace(self._config, reproduction_command=repro_candidate)
+                    self._repro_is_proposed = True
+                    self._repro_is_auto = False
+                elif getattr(self, "_repro_is_proposed", False):
+                    self._config = replace(self._config, reproduction_command=None)
+                    self._repro_is_proposed = False
+        except Exception:
+            pass
+        try:
+            if not getattr(self, "_verify_user_edited", False):
+                if isinstance(verify_candidate, str) and verify_candidate:
+                    self._config = replace(self._config, verification_command=verify_candidate)
+                    self._verify_is_proposed = True
+                    self._verify_is_auto = False
+                elif getattr(self, "_verify_is_proposed", False):
+                    self._config = replace(self._config, verification_command=None)
+                    self._verify_is_proposed = False
+        except Exception:
+            pass
+
     # -- navigation ------------------------------------------------------------
 
     def _is_local_setup(self) -> bool:
@@ -551,6 +913,9 @@ class StartSessionScreen(Screen):
         except Exception:
             resolved = path
         self._config = replace(self._config, project_path=resolved)
+        # A new Where invalidates any recon: the proposal pointed at a
+        # different repo. Manual values survive; proposed transients clear.
+        self._clear_discovery_for_new_project()
         try:
             self._apply_tracked_repro_defaults()
         except Exception:
@@ -580,6 +945,9 @@ class StartSessionScreen(Screen):
 
     def _on_bug_saved(self, value: Optional[str]) -> None:
         if value is not None:
+            # Manual typing supersedes any proposed value (manual > proposed).
+            self._bug_user_edited = True
+            self._bug_is_proposed = False
             self._config = replace(self._config, bug_description=value)
         self.render_state()
         self._focus_row(ROW_BUG)
@@ -591,6 +959,7 @@ class StartSessionScreen(Screen):
             return
         self._repro_user_edited = True
         self._repro_is_auto = False
+        self._repro_is_proposed = False
         self._config = replace(
             self._config,
             reproduction_command=value.strip() if value.strip() else None,
@@ -605,6 +974,7 @@ class StartSessionScreen(Screen):
             return
         self._verify_user_edited = True
         self._verify_is_auto = False
+        self._verify_is_proposed = False
         self._config = replace(
             self._config,
             verification_command=value.strip() if value.strip() else None,
@@ -674,6 +1044,11 @@ class StartSessionScreen(Screen):
         self._start_error = None
         if row_key == ROW_TARGET:
             self._config = self._config.with_target(value)
+            # Mode switch invalidates recon (different surface); manual survives.
+            try:
+                self._clear_discovery_for_new_project()
+            except Exception:
+                pass
             if value == TARGET_LOCAL_PROJECT:
                 self._validate_project()
                 try:
@@ -787,17 +1162,17 @@ class StartSessionScreen(Screen):
             "" if local else (config.task_id or ""),
         )
         fitted(ROW_PROJECT, (config.project_path or "") if local else "")
-        fitted(ROW_BUG, self._bug_preview() if local else "")
+        fitted(ROW_BUG, self._bug_preview() if local else "", bug_display_tag(self) if local else "")
         if local:
             fitted(
                 ROW_REPRO,
                 config.reproduction_command or "Not set (optional)",
-                repro_auto_tag(self),
+                repro_display_tag(self),
             )
             fitted(
                 ROW_VERIFY,
                 config.verification_command or "Not set (optional)",
-                verify_auto_tag(self),
+                verify_display_tag(self),
             )
         else:
             fitted(
@@ -837,6 +1212,7 @@ class StartSessionScreen(Screen):
             self.query_one("#local-context-notes", Static).display = local
             self.query_one("#group-where", Static).display = local
             self.query_one("#group-what", Static).display = local
+            self.query_one("#group-what-row", Horizontal).display = local
             self.query_one("#group-how", Static).display = local
             self.query_one("#group-bounds", Static).display = local
         except Exception:
@@ -869,6 +1245,77 @@ class StartSessionScreen(Screen):
                     )
                 except Exception:
                     pass
+            # -- D2 Discover affordance + proposal/fallback card (What group) --
+            # The What header and Discover button share one Horizontal row
+            # (still 1 line total, preserving the A3 80x24 fit); the card below
+            # shows only for active states (progress/proposal/fallback/manual).
+            try:
+                self.query_one("#group-what-row", Horizontal).display = True
+            except Exception:
+                pass
+            try:
+                button = self.query_one("#discovery-button", Button)
+                button.display = True
+                allowed, _reason = self._discovery_gate()
+                # Enabled iff Where-clean + Model-live (same readiness inputs);
+                # running and manual-only also disable (stop rule, no new gate).
+                button.disabled = (not allowed) or bool(getattr(self, "_discovery_running", False))
+                try:
+                    button.label = (
+                        "Discovering…" if getattr(self, "_discovery_running", False)
+                        else "Discover (d)"
+                    )
+                except Exception:
+                    pass
+            except Exception:
+                pass
+            try:
+                card = self.query_one("#discovery-card", Static)
+                # Idle (no recon yet, no error, not running, not manual-only)
+                # hides the card to preserve the A3 80x24 fit (Run stays in
+                # the initial viewport, clickable without scroll). The button
+                # label alone carries the affordance; blockers already explain
+                # gate reasons. Active states show the card (progress, proposal,
+                # fallback, manual-only).
+                show_card = bool(
+                    getattr(self, "_discovery_running", False)
+                    or getattr(self, "_discovery_proposal", None) is not None
+                    or getattr(self, "_discovery_error", None)
+                    or getattr(self, "_discovery_manual_only", False)
+                )
+                card.display = show_card
+                if show_card:
+                    bar = discovery_bar_text(self, readiness)
+                    body = discovery_card_text(self)
+                    if body and body != bar:
+                        card.update(
+                            f"[{FAINT}]{_markup_escape(bar)}[/]\n"
+                            f"[{MUTED}]{_markup_escape(body)}[/]"
+                        )
+                    elif bar:
+                        card.update(f"[{FAINT}]{_markup_escape(bar)}[/]")
+                    else:
+                        card.update("")
+                else:
+                    try:
+                        card.update("")
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+        else:
+            try:
+                self.query_one("#group-what-row", Horizontal).display = False
+            except Exception:
+                pass
+            try:
+                self.query_one("#discovery-button", Button).display = False
+            except Exception:
+                pass
+            try:
+                self.query_one("#discovery-card", Static).display = False
+            except Exception:
+                pass
 
         # -- blockers / status (every blocker as a checklist) --------------
         status = self.query_one("#start-status", Static)
@@ -1016,6 +1463,20 @@ class StartSessionScreen(Screen):
         self.action_edit()
 
     def action_cancel(self) -> None:
+        # D2: Esc during recon cancels discovery with zero mutation (stays on
+        # the form); otherwise Esc is Back. The worker thread is read-only and
+        # bounded — its late result is ignored via the generation guard.
+        if getattr(self, "_discovery_running", False):
+            try:
+                self._discovery_generation += 1
+            except Exception:
+                pass
+            self._discovery_running = False
+            try:
+                self.render_state()
+            except Exception:
+                pass
+            return
         self.app.pop_screen()
 
     def action_history(self) -> None:
@@ -1177,4 +1638,7 @@ class StartSessionScreen(Screen):
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "start-session-button":
             self._start()
+            event.stop()
+        elif event.button.id == "discovery-button":
+            self.action_discover()
             event.stop()

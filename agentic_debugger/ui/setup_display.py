@@ -94,6 +94,155 @@ def verify_auto_tag(screen) -> str:
     return ""
 
 
+def bug_proposed_tag(screen) -> str:
+    """Visible marker for a D2 discovery-proposed Bug (sibling to auto)."""
+    if getattr(screen, "_bug_is_proposed", False) and (screen._config.bug_description or "").strip():
+        return "proposed"
+    return ""
+
+
+def repro_proposed_tag(screen) -> str:
+    """Visible marker for a D2 discovery-proposed Repro (sibling to auto)."""
+    if getattr(screen, "_repro_is_proposed", False) and screen._config.reproduction_command:
+        return "proposed"
+    return ""
+
+
+def verify_proposed_tag(screen) -> str:
+    """Visible marker for a D2 discovery-proposed Verify (sibling to auto)."""
+    if getattr(screen, "_verify_is_proposed", False) and screen._config.verification_command:
+        return "proposed"
+    return ""
+
+
+def bug_display_tag(screen) -> str:
+    """Bug row tag with manual > proposed precedence (manual shows no tag)."""
+    if getattr(screen, "_bug_user_edited", False):
+        return ""
+    return bug_proposed_tag(screen)
+
+
+def repro_display_tag(screen) -> str:
+    """Repro row tag with manual > proposed > auto precedence."""
+    if getattr(screen, "_repro_user_edited", False):
+        return ""
+    proposed = repro_proposed_tag(screen)
+    if proposed:
+        return proposed
+    return repro_auto_tag(screen)
+
+
+def verify_display_tag(screen) -> str:
+    """Verify row tag with manual > proposed > auto precedence."""
+    if getattr(screen, "_verify_user_edited", False):
+        return ""
+    proposed = verify_proposed_tag(screen)
+    if proposed:
+        return proposed
+    return verify_auto_tag(screen)
+
+
+# -- Local Project discovery confirm UX (D2, EN-only) ---------------------------
+#
+# Copy lives here (pure, Textual-free) so the screen renders it without a
+# second readiness derivation. Proposal metadata itself stays screen-memory
+# only: only the three ACCEPTED strings ever cross into SessionConfig.
+
+DISCOVERY_PROGRESS_TEXT = "Discovering… read-only recon · no execution (Esc cancels)"
+
+DISCOVERY_MANUAL_ONLY_TEXT = (
+    "Manual form is the path — discovery is the default, not the only one. "
+    "Describe the bug in your own words."
+)
+
+DISCOVERY_MAX_VISIBLE_RERUNS = 2
+
+
+def discovery_bar_text(screen, readiness) -> str:
+    """One-line What-group Discover affordance (never a value)."""
+    from agentic_debugger.ui.session_config import ROW_MODEL, ROW_PROJECT, SEVERITY_ERROR
+
+    if getattr(screen, "_discovery_running", False):
+        return DISCOVERY_PROGRESS_TEXT
+    if getattr(screen, "_discovery_manual_only", False):
+        return DISCOVERY_MANUAL_ONLY_TEXT
+    if readiness is not None:
+        for issue in getattr(readiness, "issues", ()):
+            if getattr(issue, "severity", "") == SEVERITY_ERROR and getattr(issue, "field", "") in (ROW_PROJECT, ROW_MODEL):
+                return f"Discover unavailable — {issue.message} (d)"
+    proposal = getattr(screen, "_discovery_proposal", None)
+    if proposal is not None:
+        confidence = getattr(proposal, "confidence_overall", "low")
+        if confidence in ("high", "medium"):
+            return (
+                f"Proposed {confidence} (unverified — verifier decides) · "
+                "a Accept · e Edit · r Re-run · d Re-discover"
+            )
+        return "No confident bug — manual form is the path · e Edit Bug · r Re-run"
+    error = getattr(screen, "_discovery_error", None)
+    if error:
+        return f"{error} · d Retry · e Edit Bug"
+    return "Discover (d) — read-only propose, default (Where-clean + live model)"
+
+
+def _truncate_cell(text: str, limit: int) -> str:
+    clean = " ".join(str(text or "").split())
+    if len(clean) <= limit:
+        return clean
+    return clean[: max(1, limit - 1)].rstrip() + "…"
+
+
+def discovery_card_text(screen) -> str:
+    """Fallback/proposal card above the What rows (never placeholder-as-value)."""
+    if getattr(screen, "_discovery_running", False):
+        return DISCOVERY_PROGRESS_TEXT
+    if getattr(screen, "_discovery_manual_only", False):
+        return DISCOVERY_MANUAL_ONLY_TEXT
+    proposal = getattr(screen, "_discovery_proposal", None)
+    error = getattr(screen, "_discovery_error", None)
+    if proposal is None:
+        if error:
+            return f"Discovery refused: {_truncate_cell(error, 220)} — manual form is the path."
+        return ""
+    summary = getattr(proposal, "recon_summary", None)
+    py_files = getattr(summary, "py_files", 0) if summary is not None else 0
+    test_files = getattr(summary, "test_files", 0) if summary is not None else 0
+    log_scanned = getattr(summary, "log_scanned", 0) if summary is not None else 0
+    could = list(getattr(proposal, "could_not_determine", ()) or ())
+    could_preview = "; ".join(_truncate_cell(item, 90) for item in could[:2])
+    if len(could) > 2:
+        could_preview += f"; +{len(could) - 2} more"
+    repro = getattr(proposal, "repro_candidate", None)
+    verify = getattr(proposal, "verify_candidate", None)
+    repro_preview = _truncate_cell(repro, 48) if repro else "—"
+    verify_preview = _truncate_cell(verify, 48) if verify else "—"
+    confidence = getattr(proposal, "confidence_overall", "low")
+    if confidence in ("high", "medium"):
+        hypotheses = list(getattr(proposal, "hypotheses", ()) or ())
+        statement = _truncate_cell(getattr(hypotheses[0], "statement", "") if hypotheses else "", 140)
+        evidence = ""
+        if hypotheses:
+            evidence = ", ".join(_truncate_cell(item, 40) for item in list(getattr(hypotheses[0], "evidence", ()))[:3])
+        return (
+            f"Proposed {confidence} (unverified — verifier decides): {statement} "
+            f"| Repro: {repro_preview} | Verify: {verify_preview} "
+            f"| Evidence: {evidence or '—'} "
+            f"| Could not determine: {could_preview or '—'} "
+            "· a Accept · e Edit · r Re-run"
+        )
+    return (
+        "Discovery couldn't determine a bug with confidence. "
+        f"Checked: {py_files} Python files, {test_files} test files, "
+        f"last {log_scanned} commits, repro.py {'present' if repro == 'python repro.py' else 'absent'}. "
+        f"Could NOT determine: {could_preview or '—'}. "
+        "To proceed, describe the bug in your own words + optionally give the failing command — "
+        "or pick a file/symbol. "
+        f"Repro: {repro_preview} · Verify: {verify_preview}. "
+        "Leaving Repro/Verify empty keeps the session diagnosable but NEVER Apply-eligible "
+        "(needs 1/1 F2P + 1/1 P2P)."
+    )
+
+
 def local_group_error_counts(readiness) -> dict:
     """Error counts per Local setup group from the single SessionReadiness."""
     by_field: dict[str, int] = {}
