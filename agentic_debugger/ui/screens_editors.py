@@ -205,6 +205,78 @@ class TimeLimitEditorScreen(Screen):
         self._on_cancel()
 
 
+class VerifierTimeoutEditorScreen(Screen):
+    """Small flat modal for editing the bounded verifier test-execution bound.
+
+    The bound REMAINS a bound: required, 1–600 s, no unlimited option.
+    Fail-closed on expiry with cleanup verified (the verifier owns that).
+    """
+
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel"),
+        Binding("enter", "save", "Save", show=False),
+    ]
+
+    def __init__(
+        self,
+        *,
+        current: int,
+        on_save: Callable[[Optional[int]], None],
+        on_cancel: Callable[[], None],
+    ) -> None:
+        super().__init__()
+        self.current = current
+        self._on_save = on_save
+        self._on_cancel = on_cancel
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="verifier-timeout-dialog"):
+            yield Static("Set verifier timeout", id="verifier-timeout-title")
+            yield Static("Seconds (1-600)", id="verifier-timeout-label")
+            yield TimeLimitEditorInput(
+                value=str(self.current),
+                type="integer",
+                id="verifier-timeout-editor",
+            )
+            yield Static(
+                "Required bound; default 120. Applies to each test command.",
+                id="verifier-timeout-help",
+            )
+            yield Static("enter save   esc cancel", id="verifier-timeout-hint")
+            yield Static("", id="verifier-timeout-error")
+
+    def on_mount(self) -> None:
+        self.query_one("#verifier-timeout-editor", Input).focus()
+
+    def action_save(self) -> None:
+        from agentic_debugger.ui.session_config import validate_verifier_timeout_seconds
+
+        raw = self.query_one("#verifier-timeout-editor", Input).value.strip()
+        error = self.query_one("#verifier-timeout-error", Static)
+        if not raw:
+            error.update("verifier timeout is required (1-600 seconds)")
+            return
+        try:
+            value = int(raw)
+        except ValueError:
+            error.update("verifier timeout must be a whole number of seconds")
+            return
+        try:
+            validate_verifier_timeout_seconds(value)
+        except ValueError as exc:
+            error.update(str(exc))
+            return
+        self._close(value)
+
+    def _close(self, value: Optional[int]) -> None:
+        self.app.pop_screen()
+        self._on_save(value)
+
+    def action_cancel(self) -> None:
+        self.app.pop_screen()
+        self._on_cancel()
+
+
 class SingleLineEditorInput(Input):
     """Single-line input with reliable Enter -> save for focused editor."""
 

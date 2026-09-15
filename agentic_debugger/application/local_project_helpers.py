@@ -34,10 +34,15 @@ from agentic_debugger.demo.policies import DemoPolicy
 from agentic_debugger.evaluation.task_schema import Constraints
 
 LOCAL_PROJECT_SOURCE_NAME = "local_project"
-_KNOWN_PARAMS = frozenset({"project_repo_path","project_head","isolated_workspace","bug_description","reproduction_command","verification_command","config_root","profile_id","expected_fingerprint","parent_tmpdir","policy","is_ollama","ollama_alias","provider","model_id","project_runtime_spec"})
+_KNOWN_PARAMS = frozenset({"project_repo_path","project_head","isolated_workspace","bug_description","reproduction_command","verification_command","config_root","profile_id","expected_fingerprint","parent_tmpdir","policy","is_ollama","ollama_alias","provider","model_id","project_runtime_spec","verifier_timeout_seconds"})
 _PROVIDER_KINDS = frozenset({"ollama_cloud","opencode_go","commandcode_goat","configured"})
 _MAX_CMD_CHARS=2048
 _MAX_BUG_CHARS=4096
+#: Verifier test-execution bound: right-sized default 120 s (trial
+#: same-suite 40–58 s; 30 s too tight), hard cap 600 s (verifier max).
+#: Controller/tool 30 s bounds stay UNTOUCHED in this slice.
+DEFAULT_VERIFIER_TIMEOUT_SECONDS = 120.0
+MAX_VERIFIER_TIMEOUT_SECONDS = 600.0
 #: Task 44: historical finite defaults retained as provenance constants
 #: only.  Generic Local Project execution is unbounded (None/0) and
 #: never consults these values.
@@ -119,10 +124,78 @@ def _validate_params(params: Mapping[str, Any]) -> dict[str, Any]:
         project_runtime_spec = spec_from_param(params.get("project_runtime_spec"))
     except Exception as exc:
         raise ScenarioInputError(f"project runtime spec is invalid: {exc}") from exc
-    return {"project_repo_path":params["project_repo_path"],"project_head":params["project_head"],"isolated_workspace":params["isolated_workspace"],"bug_description":params["bug_description"],"reproduction_command":repro,"verification_command":verify,"config_root":config_root,"profile_id":profile_id,"expected_fingerprint":params.get("expected_fingerprint"),"parent_tmpdir":params.get("parent_tmpdir"),"policy":policy_str,"is_ollama":is_ollama,"ollama_alias":ollama_alias,"provider":provider,"model_id":model_id,"project_runtime_spec":project_runtime_spec}
+    # Verifier test-execution bound (session setting, Bounds group).
+    # Absent means the right-sized default (120 s).  The bound REMAINS a
+    # bound: positive, capped at 600 s, fail-closed on expiry.  No
+    # unlimited option.  Repro/verify semantics, permits_apply, gates,
+    # derivation, and contracts are untouched — only the per-command
+    # timeout value travels here.
+    raw_timeout = params.get("verifier_timeout_seconds", DEFAULT_VERIFIER_TIMEOUT_SECONDS)
+    if raw_timeout is None:
+        verifier_timeout = DEFAULT_VERIFIER_TIMEOUT_SECONDS
+    else:
+        if type(raw_timeout) is bool or type(raw_timeout) not in (int, float):
+            raise ScenarioInputError("verifier_timeout_seconds must be a number")
+        try:
+            import math as _math
+            if not _math.isfinite(float(raw_timeout)):
+                raise ScenarioInputError("verifier_timeout_seconds must be finite")
+        except ScenarioInputError:
+            raise
+        except Exception:
+            raise ScenarioInputError("verifier_timeout_seconds must be a number") from None
+        verifier_timeout = float(raw_timeout)
+        if not (0 < verifier_timeout <= MAX_VERIFIER_TIMEOUT_SECONDS):
+            raise ScenarioInputError("verifier_timeout_seconds must be positive and at most 600 seconds")
+    return {"project_repo_path":params["project_repo_path"],"project_head":params["project_head"],"isolated_workspace":params["isolated_workspace"],"bug_description":params["bug_description"],"reproduction_command":repro,"verification_command":verify,"config_root":config_root,"profile_id":profile_id,"expected_fingerprint":params.get("expected_fingerprint"),"parent_tmpdir":params.get("parent_tmpdir"),"policy":policy_str,"is_ollama":is_ollama,"ollama_alias":ollama_alias,"provider":provider,"model_id":model_id,"project_runtime_spec":project_runtime_spec,"verifier_timeout_seconds":verifier_timeout}
 
 def _bounded(output: str, limit: int=4000) -> str:
     return output[:limit-3]+"..." if len(output)>limit else output
+
+
+def _format_timeout_seconds(value: float) -> str:
+    """Render one bound for human copy (``120`` not ``120.0``, facts only)."""
+    try:
+        number = float(value)
+    except Exception:
+        return str(value)
+    if number.is_integer():
+        return str(int(number))
+    return f"{number:g}"
+
+
+def format_tool_timeout_text(*, what: str, timeout_seconds: float, exit_code: int = 124) -> str:
+    """Human timeout copy for exit-124-style tool/command timeouts.
+
+    Facts only (what timed out, after how long, raw exit preserved); never
+    reclassifies the timeout as a pass/fail verdict.  The next step is
+    always: narrow the command or raise the bound.
+    """
+    secs = _format_timeout_seconds(timeout_seconds)
+    return (
+        f"{what} timed out after {secs}s (exit {exit_code}) "
+        "— not a failure verdict. "
+        "Narrow the command or raise the bound "
+        "(Bounds → Verifier timeout, 1–600s)."
+    )
+
+
+def format_verifier_timeout_text(
+    *, timeout_seconds: float, status: str, stop_reason: str
+) -> str:
+    """Human timeout copy for verifier TEST_TIMEOUT results.
+
+    Facts only (bound, raw status/stop_reason preserved); never a
+    pass/fail claim about the repair.  Next step: narrow the command or
+    raise the bound.
+    """
+    secs = _format_timeout_seconds(timeout_seconds)
+    return (
+        f"verifier timed out after {secs}s ({status}, {stop_reason}) "
+        "— not a failure verdict. "
+        "Narrow the command or raise the bound "
+        "(Bounds → Verifier timeout, 1–600s)."
+    )
 
 def _split_command(cmd: str) -> list[str]:
     """Split one single-line command into argv using Windows-compatible rules.

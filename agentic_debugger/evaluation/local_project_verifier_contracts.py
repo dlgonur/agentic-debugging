@@ -39,6 +39,9 @@ from agentic_debugger.evaluation.runner import (
 _HEAD_PATTERN = re.compile(r"[0-9a-f]{40}")
 _MAX_PATCH_CHARS = 100_000
 _MAX_TIMEOUT_SECONDS = 600.0
+#: Right-sized default per trial evidence (same-suite 40–58 s;
+#: 30 s provably too tight, unbounded provably unsafe).
+DEFAULT_TIMEOUT_SECONDS = 120.0
 
 @dataclass(frozen=True)
 class LocalProjectEvaluationPlan:
@@ -57,7 +60,7 @@ class LocalProjectEvaluationPlan:
     regression_argv: Optional[Tuple[str, ...]]
     allowed_paths: Tuple[str, ...]
     denied_paths: Tuple[str, ...]
-    timeout_seconds: float = 30.0
+    timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS
     workspace_parent: Optional[str] = None
 
     def __post_init__(self) -> None:

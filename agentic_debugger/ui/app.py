@@ -653,6 +653,7 @@ class LocalApplicationV1(App):
         retry_of_session_id: Optional[str] = None,
         auto_retries: int = 0,
         project_env_text: str = "",
+        verifier_timeout_seconds: int = 120,
     ) -> None:
         """Start one Local Project Debug session.
 
@@ -661,6 +662,17 @@ class LocalApplicationV1(App):
         workspace is pushed first so the presentation model is ready for
         first events.
         """
+        from agentic_debugger.ui.session_config import (
+            DEFAULT_VERIFIER_TIMEOUT_SECONDS,
+            validate_verifier_timeout_seconds,
+        )
+
+        try:
+            verifier_timeout_seconds = validate_verifier_timeout_seconds(
+                int(verifier_timeout_seconds)
+            )
+        except Exception as exc:
+            raise RuntimeError(f"Invalid verifier timeout: {exc}") from exc
         from agentic_debugger.application.local_project import (
             LocalProjectTaskSpec,
             cleanup_parent_tmpdir,
@@ -812,6 +824,7 @@ class LocalApplicationV1(App):
                 "parent_tmpdir": str(parent_tmpdir),
                 "policy": "pdb-on-uncertainty",
                 "project_runtime_spec": project_runtime_param,
+                "verifier_timeout_seconds": verifier_timeout_seconds,
             }
             # Mark the selected provider for the worker.  New registry-backed
             # Ollama selections use the same provider/model contract as the
@@ -875,6 +888,7 @@ class LocalApplicationV1(App):
                     retry_of_session_id=retry_of,
                     auto_retries=remaining,
                     project_env_text=project_env_text,
+                    verifier_timeout_seconds=verifier_timeout_seconds,
                 ),
             }
             self._live_auto_retry_budget = chain_budget

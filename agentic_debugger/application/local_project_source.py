@@ -214,8 +214,11 @@ def run_local_project_session(ctx: ScenarioContext, params: Mapping[str, Any]) -
     if repro_cmd:
         # Baseline reproduction runs through the session Executor seam
         # (fixed PROJECT_COMMAND role environment, capability-gated).
+        # Controller/tool 30 s bound stays UNTOUCHED in this slice.
+        from agentic_debugger.application.local_project_helpers import format_tool_timeout_text
         from agentic_debugger.runtime.exceptions import CommandExecutionError as _InitialCommandError
         _start = time.monotonic()
+        _initial_timed_out = False
         try:
             _initial_argv = _split_command(repro_cmd)
         except ValueError as exc:
@@ -240,11 +243,21 @@ def run_local_project_session(ctx: ScenarioContext, params: Mapping[str, Any]) -
                         exit_code = 127
                     out, err = _initial_result.stdout or "", _initial_result.stderr or ""
                     if _initial_result.timed_out:
+                        _initial_timed_out = True
                         err = (err + " timed out 30.0s").strip()
                     out, err = _bounded(out), _bounded(err)
         repro_output=_bounded(out+err, 2000)
         try:
-            observability.diagnosis_recorded(text=f"reproduction result exit {exit_code}: {repro_output[:500]}", file_path=None, symbol=None, confidence="observed")
+            if _initial_timed_out:
+                _timeout_copy = format_tool_timeout_text(
+                    what="reproduction", timeout_seconds=30.0, exit_code=exit_code
+                )
+                observability.diagnosis_recorded(
+                    text=f"{_timeout_copy} Output: {repro_output[:400]}",
+                    file_path=None, symbol=None, confidence="observed",
+                )
+            else:
+                observability.diagnosis_recorded(text=f"reproduction result exit {exit_code}: {repro_output[:500]}", file_path=None, symbol=None, confidence="observed")
         except: pass
         initial_state=ControllerState.REPRODUCE
     else:
@@ -369,7 +382,7 @@ def run_local_project_session(ctx: ScenarioContext, params: Mapping[str, Any]) -
             regression_argv=(tuple(_split_command(verify_cmd)) if verify_cmd else None),
             allowed_paths=tuple(tracked),
             denied_paths=("tests", "task.json"),
-            timeout_seconds=30.0,
+            timeout_seconds=float(validated["verifier_timeout_seconds"]),
             workspace_parent=validated.get("parent_tmpdir"),
         )
         # V2-02 verifier environment seam (single fixed authority): the
@@ -391,6 +404,33 @@ def run_local_project_session(ctx: ScenarioContext, params: Mapping[str, Any]) -
         verification_result=independent_verifier.evaluate(verification_plan)
         verifier_events.completed(verification_result)
         verified_fixed=verification_result.resolved
+        # Timeout UX: a TEST_TIMEOUT stays fail-closed (no verdict change,
+        # cleanup still verified by the verifier), but activity evidence
+        # must explain itself instead of showing a raw status alone.
+        try:
+            from agentic_debugger.application.local_project_helpers import (
+                format_verifier_timeout_text,
+            )
+            from agentic_debugger.evaluation.runner import EvaluationStatus as _EvalStatus
+
+            if getattr(verification_result, "status", None) is _EvalStatus.TEST_TIMEOUT:
+                _v_timeout = float(validated["verifier_timeout_seconds"])
+                _v_copy = format_verifier_timeout_text(
+                    timeout_seconds=_v_timeout,
+                    status=str(verification_result.status.value),
+                    stop_reason=str(verification_result.stop_reason),
+                )
+                try:
+                    observability.diagnosis_recorded(
+                        text=_v_copy,
+                        file_path=None,
+                        symbol=None,
+                        confidence="observed",
+                    )
+                except Exception:
+                    pass
+        except Exception:
+            pass
     elif has_active_candidate and patch_text is not None and not verifier_granted:
         ctx.emitter.emit(
             SessionEventKind.DIAGNOSIS_RECORDED,

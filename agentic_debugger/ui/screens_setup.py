@@ -39,6 +39,7 @@ from agentic_debugger.ui.screens_editors import (
     SessionSettingRow,
     SingleLineFieldEditorScreen,
     TimeLimitEditorScreen,
+    VerifierTimeoutEditorScreen,
 )
 from agentic_debugger.ui.screens_providers import ProviderConnectionsScreen
 from agentic_debugger.ui.screens_shared import (
@@ -50,6 +51,7 @@ from agentic_debugger.ui.screens_shared import (
 )
 from agentic_debugger.ui.session_config import (
     AUTO_RETRY_MAX,
+    DEFAULT_VERIFIER_TIMEOUT_SECONDS,
     GROUP_BOUNDS,
     GROUP_HOW,
     GROUP_WHAT,
@@ -75,6 +77,7 @@ from agentic_debugger.ui.session_config import (
     ROW_TARGET,
     ROW_TASK,
     ROW_TIME_LIMIT,
+    ROW_VERIFIER_TIMEOUT,
     ROW_VERIFY,
     SEVERITY_ERROR,
     ModelChoice,
@@ -275,6 +278,7 @@ class StartSessionScreen(Screen):
                         yield SessionSettingRow("Debugger", row_key=ROW_DEBUGGER, id="debugger-row")
                         yield Static("", id="group-bounds")
                         yield SessionSettingRow("Time limit", row_key=ROW_TIME_LIMIT, id="time-limit-row")
+                        yield SessionSettingRow("Verifier timeout", row_key=ROW_VERIFIER_TIMEOUT, id="verifier-timeout-row")
                         yield SessionSettingRow("Auto-retry", row_key=ROW_AUTO_RETRY, id="auto-retry-row")
                         yield Static("", id="start-status")
                         yield Static("", id="start-notes")
@@ -852,6 +856,8 @@ class StartSessionScreen(Screen):
             self._open_debugger_picker()
         elif row_key == ROW_TIME_LIMIT:
             self._open_time_limit_editor()
+        elif row_key == ROW_VERIFIER_TIMEOUT:
+            self._open_verifier_timeout_editor()
         elif row_key == ROW_AUTO_RETRY:
             self._open_auto_retry_picker()
 
@@ -1038,6 +1044,34 @@ class StartSessionScreen(Screen):
         self.render_state()
         self._focus_row(ROW_TIME_LIMIT)
 
+    def _open_verifier_timeout_editor(self) -> None:
+        self.app.push_screen(
+            VerifierTimeoutEditorScreen(
+                current=self._config.verifier_timeout_seconds,
+                on_save=self._verifier_timeout_saved,
+                on_cancel=lambda: self._focus_row(ROW_VERIFIER_TIMEOUT),
+            )
+        )
+
+    def _verifier_timeout_saved(self, value: Optional[int]) -> None:
+        # The editor never returns None (required bound); a None arrival
+        # (e.g. cancelled via a foreign path) preserves the current value.
+        if value is None:
+            self.render_state()
+            self._focus_row(ROW_VERIFIER_TIMEOUT)
+            return
+        from agentic_debugger.ui.session_config import validate_verifier_timeout_seconds
+
+        try:
+            validated = validate_verifier_timeout_seconds(int(value))
+        except Exception:
+            # Fail closed on invalid programmatic input: keep the current
+            # bound rather than persisting an out-of-range value.
+            validated = self._config.verifier_timeout_seconds
+        self._config = replace(self._config, verifier_timeout_seconds=validated)
+        self.render_state()
+        self._focus_row(ROW_VERIFIER_TIMEOUT)
+
     # -- selection change (the single mutation entry point) ---------------------
 
     def _choice_selected(self, row_key: str, value: str) -> None:
@@ -1195,6 +1229,10 @@ class StartSessionScreen(Screen):
             "No limit"
             if config.time_limit_seconds is None
             else str(config.time_limit_seconds),
+        )
+        fitted(
+            ROW_VERIFIER_TIMEOUT,
+            f"{config.verifier_timeout_seconds}s" if local else "",
         )
         if config.target == TARGET_LADDER:
             fitted(ROW_AUTO_RETRY, "0 automatic retries")
@@ -1416,6 +1454,8 @@ class StartSessionScreen(Screen):
         kv("Provider", model_secondary)
         kv("Debugger", self._debugger_display())
         kv("Time limit", "No limit" if config.time_limit_seconds is None else str(config.time_limit_seconds))
+        if config.target == TARGET_LOCAL_PROJECT:
+            kv("Verifier timeout", f"{config.verifier_timeout_seconds}s")
         if config.target == TARGET_LADDER:
             _, treatment, evaluation = self._ladder_presentation()
             kv("Treatment", treatment)
@@ -1600,6 +1640,7 @@ class StartSessionScreen(Screen):
                     max_elapsed_seconds=config.time_limit_seconds,
                     auto_retries=config.auto_retries,
                     project_env_text=config.project_env_text or "",
+                    verifier_timeout_seconds=config.verifier_timeout_seconds,
                 )
                 return
             # Curated target: the model selection routes the source.

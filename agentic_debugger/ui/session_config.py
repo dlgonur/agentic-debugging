@@ -103,6 +103,22 @@ POLICY_LABELS = {
 
 AUTO_RETRY_MAX = 3
 
+# Verifier test-execution bound (local-project-timeout-ux slice).
+#
+# The independent verifier executes each of reproduction/regression argv
+# bounded by ``LocalProjectEvaluationPlan.timeout_seconds``.  Trial evidence
+# (same-suite 40-58 s in `_ai-review/local-project-trial-s0`, `-p1-timeout`;
+# 30 s provably too tight, unbounded provably unsafe) right-sizes the
+# default to 120 s.  The bound REMAINS a bound: positive, hard-capped at
+# 600 s (the verifier's own `_MAX_TIMEOUT_SECONDS`), fail-closed on expiry
+# with cleanup verified.  No "unlimited" option exists.  Controller/tool
+# 30 s bounds (`local_project_tools.py`, `local_project_source.py` initial
+# repro) stay UNTOUCHED in this slice — tool/PDB hangs have no suite-shape
+# evidence for a new default.
+DEFAULT_VERIFIER_TIMEOUT_SECONDS = 120
+MIN_VERIFIER_TIMEOUT_SECONDS = 1
+MAX_VERIFIER_TIMEOUT_SECONDS = 600
+
 # Row keys: the fixed control order of the session-setup surface.
 ROW_TARGET = "target"
 ROW_TASK = "task"
@@ -114,6 +130,7 @@ ROW_PROJECT_ENV = "project_env"
 ROW_MODEL = "model"
 ROW_DEBUGGER = "debugger"
 ROW_TIME_LIMIT = "time_limit"
+ROW_VERIFIER_TIMEOUT = "verifier_timeout"
 ROW_AUTO_RETRY = "auto_retry"
 
 ROW_ORDER = (
@@ -127,6 +144,7 @@ ROW_ORDER = (
     ROW_MODEL,
     ROW_DEBUGGER,
     ROW_TIME_LIMIT,
+    ROW_VERIFIER_TIMEOUT,
     ROW_AUTO_RETRY,
 )
 
@@ -146,7 +164,7 @@ LOCAL_SETUP_GROUPS = (
     (GROUP_WHERE, "Where", (ROW_PROJECT,)),
     (GROUP_WHAT, "What", (ROW_BUG, ROW_REPRO, ROW_VERIFY)),
     (GROUP_HOW, "How", (ROW_PROJECT_ENV, ROW_MODEL)),
-    (GROUP_BOUNDS, "Bounds", (ROW_TIME_LIMIT, ROW_AUTO_RETRY)),
+    (GROUP_BOUNDS, "Bounds", (ROW_TIME_LIMIT, ROW_VERIFIER_TIMEOUT, ROW_AUTO_RETRY)),
 )
 
 # Focusable rows for the Local setup surface: Target (as the Mode
@@ -161,6 +179,7 @@ LOCAL_SETUP_FOCUS_ORDER = (
     ROW_PROJECT_ENV,
     ROW_MODEL,
     ROW_TIME_LIMIT,
+    ROW_VERIFIER_TIMEOUT,
     ROW_AUTO_RETRY,
 )
 
@@ -309,6 +328,7 @@ class SessionConfig:
     model: ModelChoice = OFFLINE_CHOICE
     debugger_policy: str = POLICY_ON_UNCERTAINTY
     time_limit_seconds: Optional[int] = None
+    verifier_timeout_seconds: int = DEFAULT_VERIFIER_TIMEOUT_SECONDS
     auto_retries: int = 1
 
     def with_target(self, target: str) -> "SessionConfig":
@@ -316,6 +336,23 @@ class SessionConfig:
         if target not in TARGET_LABELS:
             raise ValueError(f"unknown target: {target!r}")
         return replace(self, target=target)
+
+
+def validate_verifier_timeout_seconds(value: object) -> int:
+    """Validate one verifier-bound value (fail-closed, 1–600, no unlimited).
+
+    Returns the validated int.  Raises ValueError on any non-conforming
+    input (wrong type, bool, non-finite, out of range).  The editor is the
+    primary gate; the worker re-validates before execution.
+    """
+    if type(value) is not int or isinstance(value, bool):
+        raise ValueError("verifier timeout must be a whole number of seconds")
+    if not (MIN_VERIFIER_TIMEOUT_SECONDS <= value <= MAX_VERIFIER_TIMEOUT_SECONDS):
+        raise ValueError(
+            "verifier timeout must be 1–600 seconds "
+            f"(got {value!r}; default {DEFAULT_VERIFIER_TIMEOUT_SECONDS})"
+        )
+    return value
 
 
 @dataclass(frozen=True)
@@ -652,6 +689,7 @@ def _row_states(target: str) -> dict:
         ROW_TIME_LIMIT: RowState(
             not ladder, "Frozen operator budget" if ladder else ""
         ),
+        ROW_VERIFIER_TIMEOUT: RowState(local, "Local Project sessions only"),
         ROW_AUTO_RETRY: RowState(
             not (ladder or target == TARGET_CURATED),
             "Frozen by the ladder contract"
@@ -929,6 +967,7 @@ def derive_readiness(
 
 __all__ = [
     "AUTO_RETRY_MAX",
+    "DEFAULT_VERIFIER_TIMEOUT_SECONDS",
     "GROUP_BOUNDS",
     "GROUP_HOW",
     "GROUP_WHAT",
@@ -936,6 +975,8 @@ __all__ = [
     "LOCAL_CONTEXT_NOTE_ROWS",
     "LOCAL_SETUP_FOCUS_ORDER",
     "LOCAL_SETUP_GROUPS",
+    "MAX_VERIFIER_TIMEOUT_SECONDS",
+    "MIN_VERIFIER_TIMEOUT_SECONDS",
     "ModelChoice",
     "ModelOption",
     "OFFLINE_CHOICE",
@@ -960,6 +1001,7 @@ __all__ = [
     "ROW_TARGET",
     "ROW_TASK",
     "ROW_TIME_LIMIT",
+    "ROW_VERIFIER_TIMEOUT",
     "ROW_VERIFY",
     "ReadinessIssue",
     "RowState",
@@ -981,4 +1023,5 @@ __all__ = [
     "projenv_entries_error",
     "projenv_entries_to_dsl",
     "summarize_project_env_declarations",
+    "validate_verifier_timeout_seconds",
 ]

@@ -364,7 +364,7 @@ def _build_local_registry(context: _LocalToolContext, *, pdb_policy: Any = None,
             raise ToolExecutionError("no reproduction command configured for this project")
         # Execute the honest reproduction command in the isolated workspace
         # through the session Executor seam (fixed role environment,
-        # capability-gated).
+        # capability-gated).  Controller/tool 30 s bound stays UNTOUCHED.
         exit_code, out, err, elapsed = context.run_project_command(context.task.reproduction_command, Path(context.workspace.root), timeout=30.0)
         passed = (exit_code == 0)
         # Baseline truth comes from the command itself: a non-zero exit is
@@ -372,6 +372,25 @@ def _build_local_registry(context: _LocalToolContext, *, pdb_policy: Any = None,
         # reproduce and must not satisfy any downstream gate (the user's
         # bug report is not reproduction proof).  Post-patch records
         # ``passed`` (exit==0) and reports no failure reproduction.
+        # Timeout copy states facts only and never reclassifies: exit 124
+        # stays non-zero (fail-closed), but activity evidence explains it
+        # as "timed out — not a failure verdict" with the next step.
+        if exit_code == 124:
+            try:
+                from agentic_debugger.application.local_project_helpers import (
+                    format_tool_timeout_text,
+                )
+
+                _copy = format_tool_timeout_text(
+                    what="reproduction", timeout_seconds=30.0, exit_code=124
+                )
+                context.observe(
+                    lambda: context.observability.diagnosis_recorded(
+                        text=_copy, file_path=None, symbol=None, confidence="observed"
+                    )
+                )
+            except Exception:
+                pass
         baseline_reproduced = not passed
         failure_output = _bounded((out or "") + (err or ""), 4000)
         # Keep payload honest: failure_reproduced reflects the observed
@@ -400,6 +419,22 @@ def _build_local_registry(context: _LocalToolContext, *, pdb_policy: Any = None,
             return _ok({"exit_code": 0, "all_passed": True, "note": "no verification command"}, "no verification command; regression considered passed for controller")
         exit_code, out, err, elapsed = context.run_project_command(context.task.verification_command, Path(context.workspace.root), timeout=30.0)
         all_passed = (exit_code == 0)
+        if exit_code == 124:
+            try:
+                from agentic_debugger.application.local_project_helpers import (
+                    format_tool_timeout_text,
+                )
+
+                _copy = format_tool_timeout_text(
+                    what="regression check", timeout_seconds=30.0, exit_code=124
+                )
+                context.observe(
+                    lambda: context.observability.diagnosis_recorded(
+                        text=_copy, file_path=None, symbol=None, confidence="observed"
+                    )
+                )
+            except Exception:
+                pass
         context.regression_passed = all_passed
         return _ok({"exit_code": exit_code, "all_passed": all_passed}, "verification command executed")
 

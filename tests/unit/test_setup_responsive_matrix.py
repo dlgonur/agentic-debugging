@@ -232,6 +232,14 @@ def test_a2_run_reachable_and_clickable(tmp_path, size):
             await pilot.pause()
             button = lp.query_one("#start-session-button", Button)
             assert button.disabled is False, f"Run should be enabled at {width}x{height}"
+            # Timeout-UX: the new Bounds row keeps Run within 80x24 but at
+            # the bottom edge the click needs an explicit scroll into view
+            # (D2-established scroll-reachable pattern).
+            try:
+                button.scroll_visible(animate=False)
+            except Exception:
+                pass
+            await pilot.pause()
             region = button.region
             assert region.x >= 0 and region.y >= 0, f"Run region {region}"
             assert region.x + region.width <= width, f"Run clips at {width}"

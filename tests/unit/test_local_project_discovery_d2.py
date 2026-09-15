@@ -521,6 +521,7 @@ def test_d2_manual_supersedes_and_metadata_memory_only(tmp_path):
                 "project_path", "bug_description", "reproduction_command",
                 "verification_command", "profile_id", "model_provider",
                 "max_elapsed_seconds", "auto_retries", "project_env_text",
+                "verifier_timeout_seconds",
             }
             # Recon is read-only: the source repo stays clean.
             r = subprocess.run(

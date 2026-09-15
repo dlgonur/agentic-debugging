@@ -376,7 +376,7 @@ class TestRowStability:
         )
         expected = {
             "target", "task", "project", "bug", "repro", "verify",
-            "project_env", "model", "debugger", "time_limit", "auto_retry",
+            "project_env", "model", "debugger", "time_limit", "verifier_timeout", "auto_retry",
         }
         assert set(readiness.rows.keys()) == expected
 

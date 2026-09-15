@@ -456,9 +456,16 @@ def test_8_button_click_same_as_s(tmp_path):
             await pilot.pause()
             await asyncio.sleep(0.15)
             assert len(s_calls) == 1
-            # Now click button
+            # Now click button (scroll into view: new Bounds row keeps Run
+            # at the bottom edge at 80x24).
             b_calls: list[dict] = []
             app.start_local_project_session = lambda **kw: b_calls.append(dict(kw))  # type: ignore
+            try:
+                b_calls_btn = lp.query_one("#start-session-button")
+                b_calls_btn.scroll_visible(animate=False)
+            except Exception:
+                pass
+            await pilot.pause()
             await pilot.click("#start-session-button")
             await pilot.pause()
             await asyncio.sleep(0.15)
