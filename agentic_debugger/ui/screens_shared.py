@@ -68,6 +68,46 @@ WORKSPACE_FOOTER_IDLE_COMPACT = "left/right views   1-7 tabs   h history   n new
 REPLAY_FOOTER = "left/right views   1-7 tabs   events   phases   h history   n new session   ctrl+c quit"
 REPLAY_FOOTER_COMPACT = "left/right views   1-7 tabs   events   h history   ctrl+c quit"
 
+# Shared Manager/Picker visual language (R1/R2) reused by the Local
+# Project setup restyle.  R1 is the Model Provider Manager (bordered
+# dialog panel, title row with right-aligned subtitle, muted UPPERCASE
+# section labels, two-zone layout, single-line footer vocabulary); R2
+# is the model picker (search field, grouped rows with right-aligned
+# secondary labels, ``Enter select / Esc cancel`` footer).  These
+# constants extract the shared tokens so Local setup speaks the same
+# dialect instead of forking a second one.  Values mirror the approved
+# references; only Local setup imports them (R1/R2 keep their literals).
+#
+# Signal discipline (DESIGN.md) still holds: MUTED/FAINT carry structure,
+# PRIMARY stays live interaction, SUCCESS/ERROR stay readiness status,
+# EVIDENCE stays verifier authority — never decoration.  All three hints
+# below use the R1/R2 three-space item separator (never middle dots).
+LOCAL_SETUP_SUBTITLE = "Bounded session · PDB evidence · Verifier decides"
+PROJENV_FOOTER_HINT = (
+    "Tab move   Enter toggle   Ctrl+Enter save   Esc cancel"
+)
+SINGLE_LINE_FOOTER_HINT = "Enter save   Esc cancel"
+
+
+def manager_group_header(
+    number: str, title: str, status_label: str, *, ok: bool
+) -> str:
+    """One R1-style section label: muted UPPERCASE base + status suffix.
+
+    ``number``/``title`` are structure (muted, never signal colors); the
+    ``status_label`` suffix keeps the readiness color (SUCCESS when the
+    group is clean, ERROR when it needs a fix).  Same information as the
+    previous ``N Title`` rendering — new consistency, not a new gate.
+    """
+    from agentic_debugger.ui.theme import ERROR, MUTED, SUCCESS
+
+    style = SUCCESS if ok else ERROR
+    return (
+        f"[bold {MUTED}]{_markup_escape(number)} "
+        f"{_markup_escape(title.upper())}[/]"
+        f"  [{style}]{_markup_escape(status_label)}[/]"
+    )
+
 
 def _markup_escape(value: Any) -> str:
     return str(value).replace("[", "\\[").replace("]", "\\]")

@@ -23,7 +23,11 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import Screen
 from textual.widgets import Button, Input, OptionList, Static, TextArea
 
-from agentic_debugger.ui.screens_shared import _markup_escape
+from agentic_debugger.ui.screens_shared import (
+    PROJENV_FOOTER_HINT,
+    SINGLE_LINE_FOOTER_HINT,
+    _markup_escape,
+)
 from agentic_debugger.ui.theme import ERROR, FAINT, FOREGROUND, MUTED, PRIMARY, SUCCESS
 
 
@@ -220,7 +224,7 @@ class SingleLineFieldEditorScreen(Screen):
     """Reusable centered single-line editor in the same family as Bug picker.
 
     Visual: centered semantic dialog, dark input with a rounded focus border,
-    primary Save action, and footer "Enter save    Esc cancel".
+    primary Save action, and footer "Enter save   Esc cancel".
 
     Keyboard contract (single-line):
         Enter => save
@@ -263,7 +267,7 @@ class SingleLineFieldEditorScreen(Screen):
             )
             with Horizontal(id="single-line-actions"):
                 yield Button("Save", id="single-line-save-button", classes="primary-action")
-            yield Static("Enter save    Esc cancel", id="single-line-hint")
+            yield Static(SINGLE_LINE_FOOTER_HINT, id="single-line-hint")
             yield Static("", id="single-line-error")
 
     def on_mount(self) -> None:
@@ -678,7 +682,7 @@ class ProjectEnvBuilderScreen(Screen):
             )
             self._next_uid += 1
         self._on_save = on_save
-        self._title_text = "Project environment"
+        self._title_text = "PROJECT ENVIRONMENT"
         try:
             from agentic_debugger.ui.setup_display import PROJENV_BUILDER_CAPTION
 
@@ -702,7 +706,7 @@ class ProjectEnvBuilderScreen(Screen):
                 yield Button("Save", id="projenv-save", classes="primary-action")
                 yield Button("Cancel", id="projenv-cancel", classes="secondary-action")
             yield Static(
-                "Tab move · Enter toggle · Ctrl+Enter save · Esc cancel",
+                PROJENV_FOOTER_HINT,
                 id="projenv-hint",
             )
 

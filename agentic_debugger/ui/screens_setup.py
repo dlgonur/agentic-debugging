@@ -42,9 +42,11 @@ from agentic_debugger.ui.screens_editors import (
 )
 from agentic_debugger.ui.screens_providers import ProviderConnectionsScreen
 from agentic_debugger.ui.screens_shared import (
+    LOCAL_SETUP_SUBTITLE,
     START_FOOTER,
     START_FOOTER_COMPACT,
     _markup_escape,
+    manager_group_header,
 )
 from agentic_debugger.ui.session_config import (
     AUTO_RETRY_MAX,
@@ -122,7 +124,6 @@ from agentic_debugger.ui.theme import (
     FAINT,
     FOREGROUND,
     MUTED,
-    PRIMARY,
     SUCCESS,
     WARNING,
 )
@@ -220,31 +221,39 @@ class StartSessionScreen(Screen):
     def compose(self) -> ComposeResult:
         with Horizontal(id="start-workspace"):
             with Vertical(id="start-main"):
-                with VerticalScroll(id="start-config"):
-                    yield Static("SESSION SETUP", id="start-section-label")
-                    yield SessionSettingRow("Target", row_key=ROW_TARGET, id="target-row")
-                    yield Static("", id="local-context-notes")
-                    yield Static("", id="group-where")
-                    yield SessionSettingRow("Task", row_key=ROW_TASK, id="task-row")
-                    yield SessionSettingRow("Project", row_key=ROW_PROJECT, id="project-row")
-                    yield Static("", id="group-what")
-                    yield SessionSettingRow("Bug", row_key=ROW_BUG, id="bug-row")
-                    yield SessionSettingRow("Repro", row_key=ROW_REPRO, id="repro-row")
-                    yield SessionSettingRow("Verify (P2P)", row_key=ROW_VERIFY, id="verify-row")
-                    yield Static("", id="group-how")
-                    yield SessionSettingRow("ProjEnv", row_key=ROW_PROJECT_ENV, id="project-env-row")
-                    yield SessionSettingRow("Model", row_key=ROW_MODEL, id="model-row")
-                    yield SessionSettingRow("Debugger", row_key=ROW_DEBUGGER, id="debugger-row")
-                    yield Static("", id="group-bounds")
-                    yield SessionSettingRow("Time limit", row_key=ROW_TIME_LIMIT, id="time-limit-row")
-                    yield SessionSettingRow("Auto-retry", row_key=ROW_AUTO_RETRY, id="auto-retry-row")
-                    yield Static("", id="start-status")
-                    yield Static("", id="start-notes")
-                    yield Static("", id="start-context-summary")
-                    with Horizontal(id="start-actions"):
-                        yield Button(
-                            "Run", id="start-session-button", classes="primary-action"
-                        )
+                # R1 panel language: the form lives in a bordered card with
+                # a fixed title row (title left + faint subtitle right)
+                # above the scroll.  The footer stays outside the card on
+                # the last row so the single-line vocabulary always paints
+                # in full (A3 contract).
+                with Vertical(id="start-card"):
+                    with Horizontal(id="start-header"):
+                        yield Static("SESSION SETUP", id="start-section-label")
+                        yield Static(LOCAL_SETUP_SUBTITLE, id="start-subtitle")
+                    with VerticalScroll(id="start-config"):
+                        yield SessionSettingRow("Target", row_key=ROW_TARGET, id="target-row")
+                        yield Static("", id="local-context-notes")
+                        yield Static("", id="group-where")
+                        yield SessionSettingRow("Task", row_key=ROW_TASK, id="task-row")
+                        yield SessionSettingRow("Project", row_key=ROW_PROJECT, id="project-row")
+                        yield Static("", id="group-what")
+                        yield SessionSettingRow("Bug", row_key=ROW_BUG, id="bug-row")
+                        yield SessionSettingRow("Repro", row_key=ROW_REPRO, id="repro-row")
+                        yield SessionSettingRow("Verify (P2P)", row_key=ROW_VERIFY, id="verify-row")
+                        yield Static("", id="group-how")
+                        yield SessionSettingRow("ProjEnv", row_key=ROW_PROJECT_ENV, id="project-env-row")
+                        yield SessionSettingRow("Model", row_key=ROW_MODEL, id="model-row")
+                        yield SessionSettingRow("Debugger", row_key=ROW_DEBUGGER, id="debugger-row")
+                        yield Static("", id="group-bounds")
+                        yield SessionSettingRow("Time limit", row_key=ROW_TIME_LIMIT, id="time-limit-row")
+                        yield SessionSettingRow("Auto-retry", row_key=ROW_AUTO_RETRY, id="auto-retry-row")
+                        yield Static("", id="start-status")
+                        yield Static("", id="start-notes")
+                        yield Static("", id="start-context-summary")
+                        with Horizontal(id="start-actions"):
+                            yield Button(
+                                "Run", id="start-session-button", classes="primary-action"
+                            )
                 yield Static(START_FOOTER, id="start-footer")
             with VerticalScroll(id="start-context"):
                 yield Static("[bold $primary]PRE-FLIGHT[/]", id="context-title")
@@ -290,6 +299,17 @@ class StartSessionScreen(Screen):
         rail = 36 if width >= 100 else 0
         content = width - rail - 4
         footer.update(START_FOOTER if content >= len(START_FOOTER) else START_FOOTER_COMPACT)
+        # R1 compact contract: below 100 cols the card tightens (the header
+        # rule drops) so the whole form keeps fitting 80x24; wide keeps the
+        # ruled header. Same gates, same rows — density only.
+        try:
+            card = self.query_one("#start-card")
+            if width and width < 100:
+                card.add_class("compact")
+            else:
+                card.remove_class("compact")
+        except Exception:
+            pass
 
     # -- catalog -------------------------------------------------------------
 
@@ -839,13 +859,13 @@ class StartSessionScreen(Screen):
                 try:
                     count = group_counts.get(group_id, 0)
                     label = local_group_status_label(group_id, count)
-                    if count <= 0:
-                        style = SUCCESS
-                    else:
-                        style = ERROR
                     self.query_one(f"#group-{group_id}", Static).update(
-                        f"[bold {PRIMARY}]{numbers[group_id]} {titles[group_id]}[/]"
-                        f"  [{style}]{_markup_escape(label)}[/]"
+                        manager_group_header(
+                            numbers[group_id],
+                            titles[group_id],
+                            label,
+                            ok=(count <= 0),
+                        )
                     )
                 except Exception:
                     pass

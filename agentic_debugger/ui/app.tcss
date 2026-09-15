@@ -153,6 +153,16 @@ HomeActionRow:focus {
 
 /* -- new-session workspace --------------------------------------------- */
 
+/* Shared Manager/Picker visual language (R1/R2): the setup form is a
+   bordered dialog panel like the Model Provider Manager card and the
+   model-picker/catalog dialogs — round line border, surface fill,
+   title row with right-aligned faint subtitle (ruled off from the body
+   at full width; rule drops under the 100-col compact contract so the
+   whole form keeps fitting 80x24), muted UPPERCASE section labels,
+   single-line footer vocabulary on the last row outside the card.
+   Signal discipline holds: structure is muted/faint, PRIMARY stays
+   live interaction, SUCCESS/ERROR stay readiness status. */
+
 #start-workspace {
     height: 1fr;
     width: 1fr;
@@ -164,10 +174,34 @@ HomeActionRow:focus {
     height: 1fr;
 }
 
+#start-card {
+    width: 1fr;
+    height: 1fr;
+    border: round $line;
+    background: $surface;
+    padding: 1 2;
+}
+
+#start-card.compact {
+    padding: 0 1;
+}
+
+#start-header {
+    width: 1fr;
+    height: auto;
+    margin: 0;
+    border-bottom: solid $line;
+    padding: 0;
+}
+
+#start-card.compact #start-header {
+    border-bottom: none;
+}
+
 #start-config {
     width: 1fr;
     height: 1fr;
-    padding: 0 3 0 3;
+    padding: 0;
     scrollbar-size: 1 1;
 }
 
@@ -175,8 +209,16 @@ HomeActionRow:focus {
     width: 1fr;
     height: 1;
     margin: 0;
-    color: $primary;
+    color: $foreground;
     text-style: bold;
+}
+
+#start-subtitle {
+    width: auto;
+    height: 1;
+    margin: 0;
+    color: $text-faint;
+    text-align: right;
 }
 
 #local-context-notes {
@@ -192,7 +234,7 @@ HomeActionRow:focus {
     height: 1;
     padding: 0;
     margin: 0;
-    color: $primary;
+    color: $foreground-muted;
     text-style: bold;
 }
 
@@ -265,6 +307,8 @@ SessionSettingRow:focus {
     padding: 0 2;
     color: $text-faint;
     background: $surface;
+    text-wrap: nowrap;
+    overflow: hidden;
 }
 
 #start-context {
@@ -502,8 +546,7 @@ SingleLineFieldEditorScreen, _SingleLineEditorScreen {
 
 #single-line-editor {
     width: 1fr;
-    height: 1;
-    min-height: 1;
+    height: 3;
     background: $background;
     color: $foreground;
     border: round $line;
@@ -511,13 +554,13 @@ SingleLineFieldEditorScreen, _SingleLineEditorScreen {
 }
 
 #single-line-editor:focus {
-    border: round $focus-ring;
+    border: round $line-strong;
 }
 
 #single-line-actions {
     width: 1fr;
     height: auto;
-    align: right middle;
+    align: left middle;
     margin: 1 0 0 0;
 }
 
@@ -554,7 +597,7 @@ SingleLineFieldEditorScreen, _SingleLineEditorScreen {
 #single-line-note {
     height: auto;
     color: $foreground-muted;
-    margin: 1 0 0 0;
+    margin: 0 0 1 0;
 }
 
 #single-line-error {
@@ -582,7 +625,7 @@ ProjectEnvBuilderScreen {
 #projenv-title {
     height: 1;
     margin: 0 0 1 0;
-    color: $primary;
+    color: $foreground;
     text-style: bold;
 }
 
@@ -673,6 +716,7 @@ ProjectEnvBuilderScreen {
     height: 1;
     color: $foreground-muted;
     margin: 0 0 1 0;
+    text-align: right;
 }
 
 #projenv-actions {
@@ -695,6 +739,8 @@ ProjectEnvBuilderScreen {
 #projenv-hint {
     height: 1;
     color: $foreground-muted;
+    text-wrap: nowrap;
+    overflow: hidden;
 }
 
 /* Narrow terminals: the builder keeps horizontal rows (name + toggles fit
