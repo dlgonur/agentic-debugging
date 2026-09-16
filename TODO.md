@@ -171,16 +171,20 @@ ACCEPT WITH FOLLOW-UP (stale `:1359` picker test repaired to the
 post-decomposition seam in this candidate; no gate weakening).
 No V3 or new architecture campaign has been opened.
 
+Headless Local Project CLI (`scripts/local_project_headless.py`) is complete
+in the current candidate: TUI-equivalent production path without the UI.
+
 ## Product backlog
 
 - [ ] OpenCode Go end-to-end Local Project session — BLOCKED 2026-09-16
   (presence-only probe: `opencode-go` executable absent; no subscription
   entitlement established; frozen `PAIRED_PILOT_V4` contract untouched;
   no live calls made).
-- [ ] Headless Local Project CLI (history `--list-sessions` /
-  `--export-session` exists headlessly; worker-path smoke exists only in
-  tests via `make_local_worker`; no tracked operator CLI starts a Local
-  Project session headlessly yet).
+- [ ] Headless Local Project CLI — DONE in this candidate
+  (`scripts/local_project_headless.py`: same production path as the TUI —
+  validation, clean-tree gate, isolated worktree, configured-profile /
+  Ollama-roster resolution, worker supervision, verified cleanup, history
+  registration; 8 tests; README documents the entry point).
 - [x] Deterministic regeneration of the README welcome screenshot —
   DONE `270e0d4` (`scripts/render_welcome_screenshot.py` + contract test;
   `--check` fresh 2026-09-16, sha256 `f21c55c5...`).

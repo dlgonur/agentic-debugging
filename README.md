@@ -41,6 +41,7 @@ Launch with `agenticdebugger`.
 - Try it with no provider: curated demo tasks can run offline without contacting a model provider.
 - Configure a model: press `m` (Model Providers) from Home or Session Setup. No model provider is configured by default.
 - Debug your own code: press `p` (Debug Local Project), pick a clean Git repository, describe the bug, and select a live model. Local Project sessions require a live model.
+- Headless alternative: `python scripts/local_project_headless.py --project DIR --bug "..." --profile ID` starts the same Local Project session without the UI (same validation, isolated worktree, verified cleanup, history registration). Finished headless sessions appear in TUI history.
 
 ## How a repair works
 

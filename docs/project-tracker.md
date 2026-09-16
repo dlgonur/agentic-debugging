@@ -29,9 +29,9 @@
   is provider-owned repo-wide: no Agentic-Debugger-owned request-size ceiling may
   reject, truncate, or alter a model request before the provider; provider-originated
   size/context rejections surface truthfully as provider failures.
-- Next implementation priority: Headless Local Project CLI remains open
-  (history headless commands exist; no tracked operator CLI starts a Local
-  Project session headlessly). OpenCode Go end-to-end session is BLOCKED
+- Next implementation priority: none selected (Headless Local Project CLI
+  completes the last open backlog item). OpenCode Go end-to-end session
+  stays BLOCKED
   (2026-09-16 presence-only probe: `opencode-go` absent, no entitlement;
   no live calls). No V3 or
   new architecture campaign opened.
@@ -128,6 +128,12 @@
 - [x] **README welcome screenshot regeneration (2026-09-14, `270e0d4`):**
   Deterministic offline `scripts/render_welcome_screenshot.py` + contract
   test; PNG refreshed with the Model Providers row; `--check` fresh.
+- [x] **Headless Local Project CLI (this candidate):**
+  Tracked `scripts/local_project_headless.py` driving the production TUI
+  start path headlessly (validation, clean-tree gate, isolated worktree,
+  configured-profile / Ollama-roster resolution, worker supervision,
+  verified cleanup, history registration); registry providers stay
+  TUI-only (fail-closed); README documents the entry point.
 
 ## 2026-08-29 goal-mode UI work
 
