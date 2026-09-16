@@ -553,7 +553,7 @@ class PdbSession:
         """Run a Python script to completion and capture post-mortem evidence
         if it terminates with an unhandled exception.
 
-        This is the offline-capable post-mortem entry point (TODO 6.1.3): it
+        This is the offline-capable post-mortem entry point: it
         reuses the existing PDB protocol/worker channel, requires the same
         READY state and one-execution-per-session invariant as
         :meth:`run_to_breakpoint`, and never enters an interactive paused

@@ -182,7 +182,7 @@ in the current candidate: TUI-equivalent production path without the UI.
   static preflight
   runnable. Owner preference if ever run: `muse-spark-1.3-contributor`, 600 s
   worker bound. No live calls made; nothing is blocked for normal use).
-- [ ] Headless Local Project CLI — DONE in this candidate
+- [x] Headless Local Project CLI — DONE `8920179`
   (`scripts/local_project_headless.py`: same production path as the TUI —
   validation, clean-tree gate, isolated worktree, configured-profile /
   Ollama-roster resolution, worker supervision, verified cleanup, history
