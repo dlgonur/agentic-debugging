@@ -32,7 +32,8 @@
 - Next implementation priority: none selected (Headless Local Project CLI
   completes the last open backlog item). OpenCode Go product session on the
   subscription is optional/unscheduled
-  (provider ready in-app, models runnable; owner prefers `deepseek-v4.1-flash`
+  (provider ready in-app, models runnable; owner prefers
+  `muse-spark-1.3-contributor`
   with a 600 s bound if ever run). No V3 or
   new architecture campaign opened.
 - Provider-platform integrity convergence: COMPLETE (2026-09-03).

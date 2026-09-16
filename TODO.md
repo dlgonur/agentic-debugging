@@ -178,8 +178,9 @@ in the current candidate: TUI-equivalent production path without the UI.
 
 - [ ] OpenCode Go product session on the subscription — OPTIONAL, UNSCHEDULED
   (2026-09-16 verified: `opencode_go` provider ready in-app, ~20 models
-  available incl. `deepseek-v4-flash`/`v4.1`/`glm-5.2`, static preflight
-  runnable. Owner preference if ever run: `deepseek-v4.1-flash`, 600 s
+  available incl. `deepseek-v4-flash`/`v4.1`/`glm-5.2`/`muse-spark-1.3-contributor`,
+  static preflight
+  runnable. Owner preference if ever run: `muse-spark-1.3-contributor`, 600 s
   worker bound. No live calls made; nothing is blocked for normal use).
 - [ ] Headless Local Project CLI — DONE in this candidate
   (`scripts/local_project_headless.py`: same production path as the TUI —
