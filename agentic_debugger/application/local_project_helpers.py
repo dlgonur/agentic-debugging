@@ -169,14 +169,16 @@ def format_tool_timeout_text(*, what: str, timeout_seconds: float, exit_code: in
 
     Facts only (what timed out, after how long, raw exit preserved); never
     reclassifies the timeout as a pass/fail verdict.  The next step is
-    always: narrow the command or raise the bound.
+    always: narrow the command.  The tool bound is fixed (no UI knob), so
+    the copy must never point at Bounds → Verifier timeout — that setting
+    governs independent verification runs only.
     """
     secs = _format_timeout_seconds(timeout_seconds)
     return (
         f"{what} timed out after {secs}s (exit {exit_code}) "
         "— not a failure verdict. "
-        "Narrow the command or raise the bound "
-        "(Bounds → Verifier timeout, 1–600s)."
+        f"Narrow the command (the tool bound is fixed at {secs}s; "
+        "Bounds → Verifier timeout governs verification runs only, 1–600s)."
     )
 
 

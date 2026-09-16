@@ -347,7 +347,11 @@ def test_timeout_copy_states_facts_and_next_step() -> None:
     assert "timed out after 30s" in tool
     assert "exit 124" in tool
     assert "not a failure verdict" in tool
-    assert "Narrow the command or raise the bound" in tool
+    assert "Narrow the command" in tool
+    assert "tool bound is fixed at 30s" in tool
+    # The tool bound has no UI knob: the copy must not send the user to
+    # Bounds → Verifier timeout (that setting governs verification runs).
+    assert "raise the bound" not in tool
     lowered = tool.lower()
     assert " passed" not in lowered and " failed" not in lowered.replace("failure verdict", "")
 
@@ -449,7 +453,8 @@ def test_tool_timeout_records_explanation_preserving_exit_124(tmp_path: Path) ->
     assert any("timed out after 30s" in t for t in texts), texts
     assert any("exit 124" in t for t in texts), texts
     assert any("not a failure verdict" in t for t in texts), texts
-    assert any("Narrow the command or raise the bound" in t for t in texts), texts
+    assert any("tool bound is fixed at 30s" in t for t in texts), texts
+    assert all("raise the bound" not in t for t in texts), texts
 
 
 def test_timeout_copy_in_activity_timeline() -> None:
@@ -490,6 +495,7 @@ def test_timeout_copy_in_activity_timeline() -> None:
     assert any("timed out after 30s" in s for s in summaries)
     assert any("exit 124" in s for s in summaries)
     assert any("not a failure verdict" in s for s in summaries)
+    assert any("tool bound is fixed at 30s" in s for s in summaries)
 
 
 def test_controller_tool_30s_bounds_intact() -> None:
