@@ -176,12 +176,11 @@ in the current candidate: TUI-equivalent production path without the UI.
 
 ## Product backlog
 
-- [ ] OpenCode Go end-to-end Local Project session — PRECONDITION UNMET
-  (2026-09-16 correction: no separate `opencode-go` binary exists; the route
-  is the `opencode-go/` provider prefix inside the installed `opencode`
-  v2.0.2 catalog. Unmet: catalog offering the route + subscription
-  entitlement evidence + explicit live authorization. Optional item only —
-  not required for product or scientific closeout; no live calls made).
+- [ ] OpenCode Go product session on the subscription — OPTIONAL, UNSCHEDULED
+  (2026-09-16 verified: `opencode_go` provider ready in-app, ~20 models
+  available incl. `deepseek-v4-flash`/`v4.1`/`glm-5.2`, static preflight
+  runnable. Owner preference if ever run: `deepseek-v4.1-flash`, 600 s
+  worker bound. No live calls made; nothing is blocked for normal use).
 - [ ] Headless Local Project CLI — DONE in this candidate
   (`scripts/local_project_headless.py`: same production path as the TUI —
   validation, clean-tree gate, isolated worktree, configured-profile /
