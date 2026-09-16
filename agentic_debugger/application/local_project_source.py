@@ -409,6 +409,8 @@ def run_local_project_session(ctx: ScenarioContext, params: Mapping[str, Any]) -
         # must explain itself instead of showing a raw status alone.
         try:
             from agentic_debugger.application.local_project_helpers import (
+                baseline_hang_note_applies,
+                format_baseline_hang_text,
                 format_verifier_timeout_text,
             )
             from agentic_debugger.evaluation.runner import EvaluationStatus as _EvalStatus
@@ -423,6 +425,27 @@ def run_local_project_session(ctx: ScenarioContext, params: Mapping[str, Any]) -
                 try:
                     observability.diagnosis_recorded(
                         text=_v_copy,
+                        file_path=None,
+                        symbol=None,
+                        confidence="observed",
+                    )
+                except Exception:
+                    pass
+            # Baseline-hang guidance: the verifier closed the baseline gate
+            # as not-a-genuine-failure while the session's own baseline
+            # reproduction hung.  Copy only — no verdict, gate, or bound
+            # changes; the predicate reads already-recorded facts.
+            if baseline_hang_note_applies(
+                status_value=str(getattr(getattr(verification_result, "status", None), "value", "")),
+                stop_reason=str(getattr(verification_result, "stop_reason", "")),
+                initial_repro_timed_out=_initial_timed_out,
+            ):
+                try:
+                    observability.diagnosis_recorded(
+                        text=format_baseline_hang_text(
+                            status=str(verification_result.status.value),
+                            stop_reason=str(verification_result.stop_reason),
+                        ),
                         file_path=None,
                         symbol=None,
                         confidence="observed",

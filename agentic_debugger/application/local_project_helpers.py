@@ -199,6 +199,41 @@ def format_verifier_timeout_text(
         "(Bounds → Verifier timeout, 1–600s)."
     )
 
+
+def baseline_hang_note_applies(
+    *, status_value: str, stop_reason: str, initial_repro_timed_out: bool
+) -> bool:
+    """Whether the baseline-hang guidance note applies.
+
+    Pure predicate over already-recorded facts: the verifier closed the
+    baseline gate as not-a-genuine-failure while the session's own
+    baseline reproduction hung.  No verdict is derived here.
+    """
+    return (
+        status_value == "BASELINE_INVALID"
+        and stop_reason == "baseline_reproduction_not_genuine_failure"
+        and bool(initial_repro_timed_out)
+    )
+
+
+def format_baseline_hang_text(*, status: str, stop_reason: str) -> str:
+    """Human copy for BASELINE_INVALID after the session baseline hung.
+
+    Facts only (verifier status/stop_reason plus the recorded session
+    hang); never a pass/fail claim about the repair.  Next step: narrow
+    the repro to one fast failing case — a hanging suite-wide command
+    cannot prove the bug, so no patch can be verified from it.
+    """
+    return (
+        "verifier could not establish a genuine baseline failure "
+        f"({status}, {stop_reason}); the session's own baseline "
+        "reproduction hung (tool timeout after 30s — not a failure "
+        "verdict). Narrow the repro to one fast failing case: a hanging "
+        "suite-wide command cannot prove the bug, and Bounds → Verifier "
+        "timeout only governs verification runs (1–600s), not the fixed "
+        "30s tool bound."
+    )
+
 def _split_command(cmd: str) -> list[str]:
     """Split one single-line command into argv using Windows-compatible rules.
 

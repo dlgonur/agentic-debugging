@@ -562,3 +562,58 @@ def test_setup_row_and_editor_and_start_plumbing(tmp_path) -> None:
         reset_launch_cwd()
 
     asyncio.run(_inner())
+
+
+# ---------------------------------------------------------------------------
+# 4. Baseline-hang guidance: BASELINE_INVALID after the session baseline hung
+# ---------------------------------------------------------------------------
+
+def test_baseline_hang_copy_states_facts_and_next_step() -> None:
+    from agentic_debugger.application.local_project_helpers import (
+        baseline_hang_note_applies,
+        format_baseline_hang_text,
+    )
+
+    copy = format_baseline_hang_text(
+        status="BASELINE_INVALID",
+        stop_reason="baseline_reproduction_not_genuine_failure",
+    )
+    assert "BASELINE_INVALID" in copy
+    assert "baseline_reproduction_not_genuine_failure" in copy
+    assert "hung" in copy
+    assert "not a failure verdict" in copy
+    assert "Narrow the repro to one fast failing case" in copy
+    lowered = copy.lower().replace("failure verdict", "").replace("baseline failure", "")
+    assert " passed" not in lowered and " failed" not in lowered
+    assert baseline_hang_note_applies(
+        status_value="BASELINE_INVALID",
+        stop_reason="baseline_reproduction_not_genuine_failure",
+        initial_repro_timed_out=True,
+    ) is True
+
+
+def test_baseline_hang_predicate_only_on_recorded_hang() -> None:
+    from agentic_debugger.application.local_project_helpers import (
+        baseline_hang_note_applies,
+    )
+
+    assert baseline_hang_note_applies(
+        status_value="TEST_TIMEOUT",
+        stop_reason="baseline_reproduction_timeout",
+        initial_repro_timed_out=True,
+    ) is False
+    assert baseline_hang_note_applies(
+        status_value="BASELINE_INVALID",
+        stop_reason="baseline_regression_not_passing",
+        initial_repro_timed_out=True,
+    ) is False
+    assert baseline_hang_note_applies(
+        status_value="BASELINE_INVALID",
+        stop_reason="baseline_reproduction_not_genuine_failure",
+        initial_repro_timed_out=False,
+    ) is False
+    assert baseline_hang_note_applies(
+        status_value="COMPLETED",
+        stop_reason="",
+        initial_repro_timed_out=True,
+    ) is False
