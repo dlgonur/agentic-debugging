@@ -45,6 +45,31 @@ from agentic_debugger.application.source_snapshots import (
 from agentic_debugger.cancellation import CancellationError
 from agentic_debugger.runtime.exceptions import PatchRevertError
 
+#: Bounded restored-base window per file in revert OK payloads (chars).
+_BASE_RESTORED_WINDOW_CHARS = 1800
+
+
+def _restored_base_evidence(workspace_root: object, paths: object) -> tuple:
+    """Bounded restored-base evidence for revert OK payloads.
+
+    Maps each reverted path to its post-revert full-file sha256 plus a
+    bounded source window, so the next diff is rebuilt against the
+    restored base instead of remembered patched text.  Fail-closed per
+    file: a path that cannot be snapshotted is omitted, never fabricated.
+    """
+    sha_map: dict = {}
+    window_map: dict = {}
+    for path in list(paths or ()):
+        try:
+            snapshot = capture_source_snapshot(
+                workspace_root, path, SourceSnapshotStage.REVERTED
+            )
+        except Exception:
+            continue
+        sha_map[path] = snapshot.sha256
+        window_map[path] = snapshot.text[:_BASE_RESTORED_WINDOW_CHARS]
+    return sha_map, window_map
+
 # ---------------------------------------------------------------------------
 # Honest local tool context (no DebugTask fabrications)
 # ---------------------------------------------------------------------------
@@ -490,6 +515,8 @@ def _build_local_registry(context: _LocalToolContext, *, pdb_policy: Any = None,
         import hashlib as _hashlib
         patch_sha256 = _hashlib.sha256(diff.encode("utf-8")).hexdigest()
         reverted_previous = False
+        prev_base_sha256: dict = {}
+        prev_base_windows: dict = {}
         if context.patch_manager.has_active_patch:
             try:
                 context.patch_manager.revert_patch()
@@ -514,6 +541,9 @@ def _build_local_registry(context: _LocalToolContext, *, pdb_policy: Any = None,
             reverted_previous = True
             context.observe(lambda: context.observability.patch_reverted(attempt_index - 1))
             context._capture_changed_source(SourceSnapshotStage.REVERTED)
+            prev_base_sha256, prev_base_windows = _restored_base_evidence(
+                context.workspace.root, tuple(sorted(context.patch_changed_files))
+            )
         context.observe(lambda: context.observability.patch_proposed(attempt_index, patch_sha256, patch_text=diff))
         try:
             result = context.patch_manager.apply_patch(diff)
@@ -574,6 +604,10 @@ def _build_local_registry(context: _LocalToolContext, *, pdb_policy: Any = None,
             "hunk_adjustments": [list(item) for item in result.hunk_adjustments],
             "reverted_previous": reverted_previous,
         }
+        if reverted_previous:
+            payload["base_restored"] = True
+            payload["base_sha256"] = prev_base_sha256
+            payload["base_source_window"] = prev_base_windows
         return _ok(_json_safe(payload, "apply_patch"), "candidate patch applied to the disposable workspace")
 
     def handle_revert_patch(action, arguments):  # type: ignore[no-untyped-def]
@@ -608,18 +642,32 @@ def _build_local_registry(context: _LocalToolContext, *, pdb_policy: Any = None,
         changed_files = tuple(sorted(item.path for item in result.changed_files))
         reverted_index = max(0, context.patch_attempt_index - 1)
         context.observe(lambda: context.observability.patch_reverted(reverted_index))
+        base_sha256: dict = {}
+        base_windows: dict = {}
         for path in changed_files:
             try:
                 snapshot = capture_source_snapshot(context.workspace.root, path, SourceSnapshotStage.REVERTED)
             except Exception:
                 continue
             context.observe(lambda captured=snapshot: context.observability.source_snapshot(captured))
+            base_sha256[path] = snapshot.sha256
+            base_windows[path] = snapshot.text[:_BASE_RESTORED_WINDOW_CHARS]
         context.candidate_patch = ""
         context.patch_applied = False
         context.patch_changed_files = ()
         context.syntax_passed = None
         context.clear_validation_evidence()
-        return _ok({"reverted": True, "changed_files": list(changed_files)}, "accepted candidate patch reverted from the disposable workspace")
+        return _ok(
+            {
+                "reverted": True,
+                "changed_files": list(changed_files),
+                "base_restored": True,
+                "base_sha256": base_sha256,
+                "base_source_window": base_windows,
+            },
+            "accepted candidate patch reverted from the disposable workspace; "
+            "workspace restored to original baseline — rebuild the next diff against this base",
+        )
 
     def handle_syntax_check(action, arguments):  # type: ignore[no-untyped-def]
         from agentic_debugger.application.session_runtime import SessionCapability
