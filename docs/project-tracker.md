@@ -8,6 +8,9 @@
 **POST-V2 GLOBAL CLI LAUNCH ALIAS V1 (TASK 41) — COMPLETE (2026-09-09).**
 **POST-V2 UNIVERSAL MODEL EXECUTION ELIGIBILITY V1 (TASK 42) — COMPLETE (2026-09-09).**
 **POST-V2 PROVIDER-OWNED MODEL REQUEST SIZE V1 (TASK 43) — COMPLETE (2026-09-10).**
+**POST-V2 UNBOUNDED SESSION PROGRESS V1 (TASK 44) — COMPLETE (2026-09-10).**
+**LOCAL PROJECT SETUP CAMPAIGN (A1/A2/A3 + MANAGER-LOOK + D1/D2 + TIMEOUT-UX) — COMPLETE (2026-09-15, `main@9ad95a0`).**
+**README WELCOME SCREENSHOT REGENERATION — COMPLETE (2026-09-14, `270e0d4`; `--check` fresh 2026-09-16).**
 
 - V2 implementation baseline: `e86ac2d25beb5114e9a3c805f6bc468f77905deb`.
 - V2 architecture campaign (Candidates 06–30): logical control/execution plane
@@ -26,7 +29,11 @@
   is provider-owned repo-wide: no Agentic-Debugger-owned request-size ceiling may
   reject, truncate, or alter a model request before the provider; provider-originated
   size/context rejections surface truthfully as provider failures.
-- Next implementation priority: None selected after completion of Task 43. No V3 or
+- Next implementation priority: Headless Local Project CLI remains open
+  (history headless commands exist; no tracked operator CLI starts a Local
+  Project session headlessly). OpenCode Go end-to-end session is BLOCKED
+  (2026-09-16 presence-only probe: `opencode-go` absent, no entitlement;
+  no live calls). No V3 or
   new architecture campaign opened.
 - Provider-platform integrity convergence: COMPLETE (2026-09-03).
 - Goal-Mode Cycle 3 (shared visual language, welcome redesign, terminal UI polish): COMPLETE (2026-08-29).
@@ -114,6 +121,13 @@
   per-action tool, time, response, security, and frozen-scientific bounds with
   the Level-32 treatment envelope (40) isolated to official runs. STEP UI
   renders `STEP N` with no false remaining budget.
+- [x] **Local Project setup campaign (2026-09-14/15, `main@9ad95a0`):**
+  Setup IA A1, ProjEnv builder A2, responsive A3, Provider-Manager visual
+  language, discovery recon D1, discovery confirm D2, configurable verifier
+  bound (default 120 s) + timeout UX. Timeouts stay fail-closed and bounded.
+- [x] **README welcome screenshot regeneration (2026-09-14, `270e0d4`):**
+  Deterministic offline `scripts/render_welcome_screenshot.py` + contract
+  test; PNG refreshed with the Model Providers row; `--check` fresh.
 
 ## 2026-08-29 goal-mode UI work
 

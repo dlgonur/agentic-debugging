@@ -1348,17 +1348,26 @@ def test_local_project_ollama_start_config_path_provider_free(tmp_path):
     finally:
         cleanup_parent_tmpdir(wt.parent_tmpdir, repo)
 
-def test_ollama_model_picker_shows_qualified():
+def test_ollama_model_picker_shows_qualified(tmp_path):
     """Local Project model picker shows Ollama Cloud qualified models."""
     from agentic_debugger.application.level32 import level32_model_profiles
     profiles = level32_model_profiles()
     assert len(profiles) > 0
-    # The unified model picker loads the qualified Ollama roster as one
-    # group of the single provider platform surface.
-    text = Path("agentic_debugger/ui/screens_setup.py").read_text(encoding="utf-8")
-    assert "ollama_cloud_model_profiles" in text
-    assert "OLLAMA CLOUD" in text
-    assert "list_provider_models" in text
+    # Post-decomposition seam (c5b1c23): catalog gathering lives in
+    # setup_pickers, labels in session_config; screens_setup keeps only
+    # the list_provider_models delegate. Assert current locations, not stale ones.
+    pickers_text = Path("agentic_debugger/ui/setup_pickers.py").read_text(encoding="utf-8")
+    assert "ollama_cloud_model_profiles" in pickers_text
+    assert "include_ollama" in pickers_text
+    setup_text = Path("agentic_debugger/ui/screens_setup.py").read_text(encoding="utf-8")
+    assert "list_provider_models" in setup_text
+    from agentic_debugger.ui.session_config import PROVIDER_LABELS, PROVIDER_OLLAMA
+    assert PROVIDER_LABELS[PROVIDER_OLLAMA] == "Ollama Cloud"
+    # Functional: the app seam still serves the qualified roster.
+    from agentic_debugger.ui.app import LocalApplicationV1
+    app = LocalApplicationV1(history_root=tmp_path / "hist-picker")
+    served = app.ollama_cloud_model_profiles()
+    assert {m.alias for m in served} == {p.alias for p in profiles}
 
 def test_cleanup_verifies_git_registration(tmp_path):
     """Cleanup verified means Git worktree registration pruned."""

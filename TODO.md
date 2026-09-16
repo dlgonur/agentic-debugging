@@ -162,19 +162,28 @@ failure visibility, and retry.
 
 ## Active work
 
-After Task 44, no subsequent implementation priority is selected.
+Local Project setup campaign complete through `main@9ad95a0` (2026-09-15):
+setup IA A1 (`81b29a0`), ProjEnv builder A2 (`2926bd6`), responsive A3
+(`6e88c22`), Provider-Manager visual language (`ff3ef73`), discovery recon
+D1 (`8ed4d0f`), discovery confirm D2 (`69d5148`), configurable verifier
+bound + timeout UX (`9ad95a0`). Yaver verdict on the timeout slice:
+ACCEPT WITH FOLLOW-UP (stale `:1359` picker test repaired to the
+post-decomposition seam in this candidate; no gate weakening).
 No V3 or new architecture campaign has been opened.
 
 ## Product backlog
 
-- [ ] OpenCode Go end-to-end Local Project session (adapters proven at
-  the transport level and by unit tests; a full product session on the
-  subscription remains to be run and recorded).
-- [ ] Headless Local Project CLI (the smoke script demonstrates the
-  worker path; a tracked operator CLI would make it a first-class entry).
-- [ ] Deterministic regeneration of the README welcome screenshot (the
-  current PNG predates the Model Providers home action; no tracked
-  regeneration script exists yet).
+- [ ] OpenCode Go end-to-end Local Project session — BLOCKED 2026-09-16
+  (presence-only probe: `opencode-go` executable absent; no subscription
+  entitlement established; frozen `PAIRED_PILOT_V4` contract untouched;
+  no live calls made).
+- [ ] Headless Local Project CLI (history `--list-sessions` /
+  `--export-session` exists headlessly; worker-path smoke exists only in
+  tests via `make_local_worker`; no tracked operator CLI starts a Local
+  Project session headlessly yet).
+- [x] Deterministic regeneration of the README welcome screenshot —
+  DONE `270e0d4` (`scripts/render_welcome_screenshot.py` + contract test;
+  `--check` fresh 2026-09-16, sha256 `f21c55c5...`).
 
 ## Future / trigger-gated architecture (not unfinished V2 debt)
 
