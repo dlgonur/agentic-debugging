@@ -176,10 +176,12 @@ in the current candidate: TUI-equivalent production path without the UI.
 
 ## Product backlog
 
-- [ ] OpenCode Go end-to-end Local Project session — BLOCKED 2026-09-16
-  (presence-only probe: `opencode-go` executable absent; no subscription
-  entitlement established; frozen `PAIRED_PILOT_V4` contract untouched;
-  no live calls made).
+- [ ] OpenCode Go end-to-end Local Project session — PRECONDITION UNMET
+  (2026-09-16 correction: no separate `opencode-go` binary exists; the route
+  is the `opencode-go/` provider prefix inside the installed `opencode`
+  v2.0.2 catalog. Unmet: catalog offering the route + subscription
+  entitlement evidence + explicit live authorization. Optional item only —
+  not required for product or scientific closeout; no live calls made).
 - [ ] Headless Local Project CLI — DONE in this candidate
   (`scripts/local_project_headless.py`: same production path as the TUI —
   validation, clean-tree gate, isolated worktree, configured-profile /

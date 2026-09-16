@@ -31,9 +31,10 @@
   size/context rejections surface truthfully as provider failures.
 - Next implementation priority: none selected (Headless Local Project CLI
   completes the last open backlog item). OpenCode Go end-to-end session
-  stays BLOCKED
-  (2026-09-16 presence-only probe: `opencode-go` absent, no entitlement;
-  no live calls). No V3 or
+  stays PRECONDITION-UNMET
+  (no separate binary exists; the route is the `opencode-go/` catalog prefix
+  in `opencode` v2.0.2 — needs route availability + entitlement + explicit
+  live authorization; optional, not required). No V3 or
   new architecture campaign opened.
 - Provider-platform integrity convergence: COMPLETE (2026-09-03).
 - Goal-Mode Cycle 3 (shared visual language, welcome redesign, terminal UI polish): COMPLETE (2026-08-29).
