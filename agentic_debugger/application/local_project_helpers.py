@@ -216,6 +216,82 @@ def baseline_hang_note_applies(
     )
 
 
+#: Targets a model revision may replace.
+_REVISE_TARGETS = ("repro", "verify")
+
+
+def validate_revised_test_command(
+    command: object,
+    *,
+    current: Optional[str],
+    tracked_files: object,
+    workspace_root: object,
+) -> str:
+    """Fail-closed validation for a model-revised repro/verify command.
+
+    The model owns the narrowing judgment; this validator owns safety.
+    Accepted shapes only (mirroring discovery synthesis): ``python
+    repro.py``, bare ``python -m pytest -q``, or single-file ``python -m
+    pytest <exact-tracked-.py> -q``.  The file must be an exact tracked
+    match inside the workspace and exist on disk — invented paths stay
+    impossible.  The revision must differ from the current command.
+    Returns the stripped command.  Raises :class:`ValueError` otherwise.
+    """
+    if type(command) is not str or not command.strip():
+        raise ValueError("revised command must be a non-empty string")
+    text = command.strip()
+    if "\n" in text or "\r" in text:
+        raise ValueError("revised command must be a single line")
+    if len(text.encode("utf-8")) > _MAX_CMD_CHARS:
+        raise ValueError("revised command exceeds the 2 KiB bound")
+    if contains_credential_shape(text):
+        raise ValueError("revised command contains credential shape")
+    if current is not None and text == current.strip():
+        raise ValueError("revised command is identical to the current command")
+    try:
+        argv = _split_command(text)
+    except ValueError as exc:
+        raise ValueError(f"revised command cannot be parsed: {exc}") from None
+    if not argv or argv[0] not in ("python", "python3"):
+        raise ValueError(
+            "unsupported command shape (python repro.py, suite pytest, "
+            "or single-file pytest only)"
+        )
+    rest = list(argv[1:])
+    if rest == ["repro.py"]:
+        if "repro.py" not in set(tracked_files or ()):
+            raise ValueError("repro.py is not a tracked file")
+        return text
+    if rest == ["-m", "pytest", "-q"]:
+        return text
+    if (
+        len(rest) == 4
+        and rest[0] == "-m"
+        and rest[1] == "pytest"
+        and rest[3] == "-q"
+    ):
+        target = rest[2]
+        if not target.endswith(".py"):
+            raise ValueError("revised pytest target must be a .py file")
+        if target not in set(tracked_files or ()):
+            raise ValueError("revised pytest target is not a tracked file")
+        try:
+            assert_path_inside_workspace(workspace_root, target)
+        except Exception as exc:
+            raise ValueError(f"revised pytest target escapes the workspace: {exc}") from None
+        try:
+            exists = (Path(workspace_root) / target.replace("/", os.sep)).is_file()
+        except Exception:
+            exists = False
+        if not exists:
+            raise ValueError("revised pytest target does not exist in the workspace")
+        return text
+    raise ValueError(
+        "unsupported command shape (python repro.py, suite pytest, "
+        "or single-file pytest only)"
+    )
+
+
 def format_baseline_hang_text(*, status: str, stop_reason: str) -> str:
     """Human copy for BASELINE_INVALID after the session baseline hung.
 

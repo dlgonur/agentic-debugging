@@ -374,12 +374,18 @@ def run_local_project_session(ctx: ScenarioContext, params: Mapping[str, Any]) -
             emitter=ctx.emitter,
         )
         verifier_events.started()
+        # The verifier binds the model-revised commands when the agent
+        # narrowed them mid-session (journal carries the revision lineage);
+        # otherwise the configured commands.  The starting contract is
+        # unchanged: revisions only ever exist after session start.
+        effective_repro_cmd = demo_context.revised_reproduction_command or repro_cmd
+        effective_verify_cmd = demo_context.revised_regression_command or verify_cmd
         verification_plan=LocalProjectEvaluationPlan(
             source_repo_path=str(repo_root),
             source_head_commit=validated["project_head"],
             candidate_patch=patch_text,
-            reproduction_argv=(tuple(_split_command(repro_cmd)) if repro_cmd else None),
-            regression_argv=(tuple(_split_command(verify_cmd)) if verify_cmd else None),
+            reproduction_argv=(tuple(_split_command(effective_repro_cmd)) if effective_repro_cmd else None),
+            regression_argv=(tuple(_split_command(effective_verify_cmd)) if effective_verify_cmd else None),
             allowed_paths=tuple(tracked),
             denied_paths=("tests", "task.json"),
             timeout_seconds=float(validated["verifier_timeout_seconds"]),

@@ -51,6 +51,7 @@ class ActionName(str, Enum):
     APPLY_PATCH = "apply_patch"
     SYNTAX_CHECK = "syntax_check"
     REVERT_PATCH = "revert_patch"
+    REVISE_TEST_COMMAND = "revise_test_command"
 
     RUN_REGRESSION_TESTS = "run_regression_tests"
     CLASSIFY_OUTCOME = "classify_outcome"
@@ -166,6 +167,7 @@ _ALLOWED_ACTIONS_BY_STATE: Final = MappingProxyType(
                 ActionName.RUN_TESTS,
                 ActionName.RUN_REPRODUCTION,
                 ActionName.GET_FAILURE_TRACE,
+                ActionName.REVISE_TEST_COMMAND,
             }
         ),
         ControllerState.UNDERSTAND: frozenset(
@@ -209,6 +211,7 @@ _ALLOWED_ACTIONS_BY_STATE: Final = MappingProxyType(
                 ActionName.RUN_REGRESSION_TESTS,
                 ActionName.CLASSIFY_OUTCOME,
                 ActionName.REVERT_PATCH,
+                ActionName.REVISE_TEST_COMMAND,
             }
         ),
         ControllerState.DONE: frozenset(),

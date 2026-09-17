@@ -29,11 +29,11 @@ EXPECTED_ACTIONS = {
     "get_stack_summary", "get_frame", "get_frame_locals", "safe_eval_expression",
     "inspect_caller_frame", "continue_pdb_session", "step_pdb_session",
     "next_pdb_session", "discard_hypothesis", "stop_pdb_session", "apply_patch",
-    "syntax_check", "revert_patch", "run_regression_tests", "classify_outcome",
+    "syntax_check", "revert_patch", "revise_test_command", "run_regression_tests", "classify_outcome",
 }
 
 EXPECTED_ALLOWLISTS = {
-    ControllerState.REPRODUCE: {"run_tests", "run_reproduction", "get_failure_trace"},
+    ControllerState.REPRODUCE: {"run_tests", "run_reproduction", "get_failure_trace", "revise_test_command"},
     ControllerState.UNDERSTAND: {
         "search_code", "find_function", "find_class", "get_source_window",
         "extract_failing_test", "express_root_cause_hypothesis", "request_more_evidence",
@@ -47,6 +47,7 @@ EXPECTED_ALLOWLISTS = {
     ControllerState.PATCH: {"apply_patch", "syntax_check", "revert_patch"},
     ControllerState.VALIDATE: {
         "run_reproduction", "run_regression_tests", "classify_outcome", "revert_patch",
+        "revise_test_command",
     },
     ControllerState.DONE: set(),
     ControllerState.FAILED: set(),

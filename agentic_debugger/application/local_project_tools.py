@@ -48,6 +48,9 @@ from agentic_debugger.runtime.exceptions import PatchRevertError
 #: Bounded restored-base window per file in revert OK payloads (chars).
 _BASE_RESTORED_WINDOW_CHARS = 1800
 
+#: Model command revisions per command per session (REVISE_TEST_COMMAND).
+_MAX_COMMAND_REVISIONS = 2
+
 
 def _restored_base_evidence(workspace_root: object, paths: object) -> tuple:
     """Bounded restored-base evidence for revert OK payloads.
@@ -117,6 +120,15 @@ class _LocalToolContext:
         self.post_patch_f2p_passed: Optional[bool] = None
         self.regression_passed: Optional[bool] = None
         self.syntax_passed: Optional[bool] = None
+        # Model-revised test commands (REVISE_TEST_COMMAND): the agent may
+        # narrow a hanging or suite-wide repro/verify command mid-session.
+        # Readers prefer these over the configured commands; the journal
+        # carries the revision lineage and the verifier binds the revised
+        # commands.  Bounded: _MAX_COMMAND_REVISIONS per command.
+        self.revised_reproduction_command: Optional[str] = None
+        self.revised_regression_command: Optional[str] = None
+        self.repro_revisions: int = 0
+        self.verify_revisions: int = 0
         self.declared_localization: Optional[dict[str, str]] = None
         self.controller_outcome: Optional[str] = None
         self.pdb_session: Optional[Any] = None
@@ -385,12 +397,13 @@ def _build_local_registry(context: _LocalToolContext, *, pdb_policy: Any = None,
         phase = arguments["phase"]
         if phase not in legal_reproduction_phases(action.state):
             raise ToolRejectedError("phase must be baseline or post_patch")
-        if context.task.reproduction_command is None:
+        repro_command = context.revised_reproduction_command or context.task.reproduction_command
+        if repro_command is None:
             raise ToolExecutionError("no reproduction command configured for this project")
         # Execute the honest reproduction command in the isolated workspace
         # through the session Executor seam (fixed role environment,
         # capability-gated).  Controller/tool 30 s bound stays UNTOUCHED.
-        exit_code, out, err, elapsed = context.run_project_command(context.task.reproduction_command, Path(context.workspace.root), timeout=30.0)
+        exit_code, out, err, elapsed = context.run_project_command(repro_command, Path(context.workspace.root), timeout=30.0)
         passed = (exit_code == 0)
         # Baseline truth comes from the command itself: a non-zero exit is
         # the observed failure; a zero exit means the reported bug did NOT
@@ -437,12 +450,13 @@ def _build_local_registry(context: _LocalToolContext, *, pdb_policy: Any = None,
 
     def handle_run_regression_tests(action, arguments):  # type: ignore[no-untyped-def]
         # Honest verification: run verification_command if present, else no regression
-        if context.task.verification_command is None:
+        verify_command = context.revised_regression_command or context.task.verification_command
+        if verify_command is None:
             # No verification configured -> conservatively mark regression as passed for controller flow;
             # external verifier will still mark UNRESOLVED.
             context.regression_passed = True
             return _ok({"exit_code": 0, "all_passed": True, "note": "no verification command"}, "no verification command; regression considered passed for controller")
-        exit_code, out, err, elapsed = context.run_project_command(context.task.verification_command, Path(context.workspace.root), timeout=30.0)
+        exit_code, out, err, elapsed = context.run_project_command(verify_command, Path(context.workspace.root), timeout=30.0)
         all_passed = (exit_code == 0)
         if exit_code == 124:
             try:
@@ -462,6 +476,74 @@ def _build_local_registry(context: _LocalToolContext, *, pdb_policy: Any = None,
                 pass
         context.regression_passed = all_passed
         return _ok({"exit_code": exit_code, "all_passed": all_passed}, "verification command executed")
+
+    def handle_revise_test_command(action, arguments):  # type: ignore[no-untyped-def]
+        from agentic_debugger.application.local_project_helpers import (
+            validate_revised_test_command,
+        )
+
+        which = arguments["which"]
+        if which == "repro":
+            current = context.revised_reproduction_command or context.task.reproduction_command
+            used = context.repro_revisions
+        elif which == "verify":
+            current = context.revised_regression_command or context.task.verification_command
+            used = context.verify_revisions
+        else:
+            raise ToolRejectedError("which must be repro or verify")
+        if used >= _MAX_COMMAND_REVISIONS:
+            raise ToolRejectedError(
+                "revision budget spent (2 per command); proceed with the current command",
+                recoverable=True,
+                payload_data={"which": which, "revision_budget_spent": True},
+            )
+        try:
+            revised = validate_revised_test_command(
+                arguments["command"],
+                current=current,
+                tracked_files=context.task.tracked_files,
+                workspace_root=context.workspace.root,
+            )
+        except ValueError as exc:
+            raise ToolRejectedError(
+                str(exc)[:400], recoverable=True, payload_data={"which": which}
+            ) from None
+        if which == "repro":
+            context.revised_reproduction_command = revised
+            context.repro_revisions = used + 1
+            context.baseline_failure_reproduced = None
+        else:
+            context.revised_regression_command = revised
+            context.verify_revisions = used + 1
+        context.clear_validation_evidence()
+        # Lineage: the revision is journal truth (existing event kind, no
+        # schema change) so history-reopen shows what actually ran; the
+        # starting contract in local_project_task.json stays as configured.
+        try:
+            context.observe(
+                lambda: context.observability.diagnosis_recorded(
+                    text=(
+                        f"{which} command revised "
+                        f"({current or 'unset'} → {revised}); "
+                        "validation evidence will be re-collected"
+                    ),
+                    file_path=None,
+                    symbol=None,
+                    confidence="observed",
+                )
+            )
+        except Exception:
+            pass
+        payload = {
+            "which": which,
+            "previous": current,
+            "command": revised,
+            "revision": used + 1,
+        }
+        return _ok(
+            _json_safe(payload, "revise_test_command"),
+            f"{which} command revised: {revised}",
+        )
 
     def handle_classify_outcome(action, arguments):  # type: ignore[no-untyped-def]
         if not context.validation_evidence_ready():
@@ -835,6 +917,7 @@ def _build_local_registry(context: _LocalToolContext, *, pdb_policy: Any = None,
     tool_specs = [
         spec(ActionName.RUN_REPRODUCTION, _validator({"phase": str}), handle_run_reproduction),
         spec(ActionName.RUN_REGRESSION_TESTS, _validator({}), handle_run_regression_tests),
+        spec(ActionName.REVISE_TEST_COMMAND, _validator({"which": str, "command": str}, enums={"which": ("repro", "verify")}), handle_revise_test_command),
         spec(ActionName.CLASSIFY_OUTCOME, _validator({}), handle_classify_outcome),
         spec(ActionName.FIND_FUNCTION, _validator({"name": str, "path": str}), handle_find_function),
         spec(ActionName.GET_SOURCE_WINDOW, _validator({"path": str, "line": int}, minimums={"line": 1}), handle_get_source_window),
