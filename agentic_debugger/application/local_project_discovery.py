@@ -254,6 +254,30 @@ def _is_test_path(relative_posix: str) -> bool:
     return False
 
 
+def _marker_matched_test_file(markers: list, test_files: list) -> Optional[str]:
+    """One test file for a multi-file suite, or None (fall back to suite).
+
+    When static markers point at a source file whose module stem matches a
+    tracked test file (the same same-module rule S6 uses for evidence),
+    propose that single test file so zero-config sessions start with a
+    minimal fast command instead of the whole suite.  Returns the
+    deterministic first match, else None.  Callers still run the result
+    through the exact-match sandbox, so invented paths stay impossible.
+    """
+    if not markers or not test_files:
+        return None
+    try:
+        stem = Path(markers[0][0]).stem
+    except Exception:
+        return None
+    if not stem:
+        return None
+    same = sorted(
+        t for t in test_files if stem in Path(t).stem or Path(t).stem in stem
+    )
+    return same[0] if same else None
+
+
 def _first_def_symbol(bounded_text: str) -> str:
     """First top-level ``def`` name in bounded text, else ``""`` (never invented).
 
@@ -602,8 +626,13 @@ def discover_local_project(
         verify_raw = repro_raw
         null_hint = None
     elif len(test_files) > 1:
-        repro_raw = "python -m pytest -q"
-        verify_raw = repro_raw
+        single = _marker_matched_test_file(markers, test_files)
+        if single is not None:
+            repro_raw = f"python -m pytest {single} -q"
+            verify_raw = repro_raw
+        else:
+            repro_raw = "python -m pytest -q"
+            verify_raw = repro_raw
         null_hint = None
     else:
         repro_raw = None

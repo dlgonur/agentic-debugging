@@ -495,3 +495,41 @@ def test_curated_fixture_recon(tmp_path: Path, fixture_id: str) -> None:
     mapping["recon_summary"].pop("ms_elapsed")
     second["recon_summary"].pop("ms_elapsed")
     assert mapping == second
+
+
+# -- S5: multi-file suite prefers the marker-matched single test file --------
+
+def test_multi_file_marker_match_proposes_single_file(tmp_path: Path) -> None:
+    repo = _make_repo(tmp_path, "marked", {
+        "mymod.py": "def run():\n    return 1  # TODO fix\n",
+        "tests/test_mymod.py": "def test_placeholder():\n    assert True\n",
+        "tests/test_other.py": "def test_placeholder():\n    assert True\n",
+    })
+    proposal = discover_local_project(str(repo), str(tmp_path))
+    assert proposal.repro_candidate == "python -m pytest tests/test_mymod.py -q"
+    assert proposal.verify_candidate == "python -m pytest tests/test_mymod.py -q"
+    _assert_caps(proposal)
+
+
+def test_multi_file_marker_without_match_falls_back_to_suite(tmp_path: Path) -> None:
+    repo = _make_repo(tmp_path, "nomatch", {
+        "odd.py": "VALUE = 1  # TODO fix\n",
+        "tests/test_alpha.py": "def test_placeholder():\n    assert True\n",
+        "tests/test_beta.py": "def test_placeholder():\n    assert True\n",
+    })
+    proposal = discover_local_project(str(repo), str(tmp_path))
+    assert proposal.repro_candidate == "python -m pytest -q"
+    assert proposal.verify_candidate == "python -m pytest -q"
+    _assert_caps(proposal)
+
+
+def test_multi_file_no_markers_keeps_suite(tmp_path: Path) -> None:
+    repo = _make_repo(tmp_path, "plain", {
+        "app.py": "VALUE = 1\n",
+        "tests/test_one.py": "def test_placeholder():\n    assert True\n",
+        "tests/test_two.py": "def test_placeholder():\n    assert True\n",
+    })
+    proposal = discover_local_project(str(repo), str(tmp_path))
+    assert proposal.repro_candidate == "python -m pytest -q"
+    assert proposal.verify_candidate == "python -m pytest -q"
+    _assert_caps(proposal)
